@@ -1,0 +1,206 @@
+# 相机
+
+LeRobot 提供多种视频捕获选项，包括手机相机、笔记本电脑内置相机、外部网络摄像头和 Intel RealSense 相机。为了高效地记录来自大多数相机的帧，您可以使用 `OpenCVCamera` 或 `RealSenseCamera` 类。有关 `OpenCVCamera` 类的其他兼容性详细信息，请参阅 [Video I/O with OpenCV Overview](https://docs.opencv.org/4.x/d0/da7/videoio_overview.html)。
+
+### 查找您的相机
+
+要实例化相机，您需要一个相机标识符。如果重启计算机或重新插拔相机，此标识符可能会更改，这种行为主要取决于您的操作系统。
+
+要查找连接到系统的相机索引，请运行以下脚本：
+
+```bash
+lerobot-find-cameras opencv # 或 realsense 用于 Intel Realsense 相机
+```
+
+如果您连接了两个相机，输出将如下所示：
+
+```
+--- Detected Cameras ---
+Camera #0:
+  Name: OpenCV Camera @ 0
+  Type: OpenCV
+  Id: 0
+  Backend api: AVFOUNDATION
+  Default stream profile:
+    Format: 16.0
+    Width: 1920
+    Height: 1080
+    Fps: 15.0
+--------------------
+(more cameras ...)
+```
+
+> [!WARNING]
+> 在 `macOS` 中使用 Intel RealSense 相机时，您可能会遇到此[错误](https://github.com/IntelRealSense/librealsense/issues/12307)：`Error finding RealSense cameras: failed to set power state`，可以通过使用 `sudo` 权限运行相同的命令来解决。请注意，在 `macOS` 中使用 RealSense 相机不稳定。
+
+## 使用相机
+
+以下是两个示例，演示如何使用 API。
+
+- **异步帧捕获**使用基于 OpenCV 的相机
+- **彩色和深度捕获**使用 Intel RealSense 相机
+
+<hfoptions id="shell_restart">
+<hfoption id="Open CV Camera">
+
+<!-- prettier-ignore-start -->
+```python
+from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
+from lerobot.cameras.opencv.camera_opencv import OpenCVCamera
+from lerobot.cameras.configs import ColorMode, Cv2Rotation
+
+# 使用所需的 FPS、分辨率、颜色模式和旋转构造 `OpenCVCameraConfig`
+config = OpenCVCameraConfig(
+    index_or_path=0,
+    fps=15,
+    width=1920,
+    height=1080,
+    color_mode=ColorMode.RGB,
+    rotation=Cv2Rotation.NO_ROTATION
+)
+
+# 实例化并连接 `OpenCVCamera`，执行预热读取（默认）
+camera = OpenCVCamera(config)
+camera.connect()
+
+# 通过 `async_read(timeout_ms)` 在循环中异步读取帧
+try:
+    for i in range(10):
+        frame = camera.async_read(timeout_ms=200)
+        print(f"Async frame {i} shape:", frame.shape)
+finally:
+    camera.disconnect()
+```
+<!-- prettier-ignore-end -->
+
+</hfoption>
+<hfoption id="Intel Realsense Camera">
+
+<!-- prettier-ignore-start -->
+```python
+from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
+from lerobot.cameras.realsense.camera_realsense import RealSenseCamera
+from lerobot.cameras.configs import ColorMode, Cv2Rotation
+
+# 创建 `RealSenseCameraConfig`，指定相机的序列号并启用深度
+config = RealSenseCameraConfig(
+    serial_number_or_name="233522074606",
+    fps=15,
+    width=640,
+    height=480,
+    color_mode=ColorMode.RGB,
+    use_depth=True,
+    rotation=Cv2Rotation.NO_ROTATION
+)
+
+# 使用预热读取（默认）实例化并连接 `RealSenseCamera`
+camera = RealSenseCamera(config)
+camera.connect()
+
+# 通过 `read()` 捕获彩色帧，通过 `read_depth()` 捕获深度图
+try:
+    color_frame = camera.read()
+    depth_map = camera.read_depth()
+    print("Color frame shape:", color_frame.shape)
+    print("Depth map shape:", depth_map.shape)
+finally:
+    camera.disconnect()
+```
+<!-- prettier-ignore-end -->
+
+</hfoption>
+</hfoptions>
+
+## 使用您的手机
+
+<hfoptions id="use phone">
+<hfoption id="Mac">
+
+要在 macOS 上将 iPhone 用作相机，请启用连续互通相机功能：
+
+- 确保您的 Mac 运行 macOS 13 或更高版本，并且您的 iPhone 使用 iOS 16 或更高版本。
+- 使用相同的 Apple ID 登录两台设备。
+- 使用 USB 线缆连接设备，或打开 Wi-Fi 和蓝牙进行无线连接。
+
+有关更多详细信息，请访问 [Apple support](https://support.apple.com/en-gb/guide/mac-help/mchl77879b8a/mac)。
+
+在下一节运行相机设置脚本时，您的 iPhone 应该会自动被检测到。
+
+</hfoption>
+<hfoption id="Linux">
+
+如果您想在 Linux 上将手机用作相机，请按照以下步骤设置虚拟相机
+
+1. _安装 `v4l2loopback-dkms` 和 `v4l-utils`_。这些包是创建虚拟相机设备（`v4l2loopback`）和使用 `v4l-utils` 中的 `v4l2-ctl` 实用程序验证其设置所必需的。使用以下命令安装它们：
+
+<!-- prettier-ignore-start -->
+```python
+sudo apt install v4l2loopback-dkms v4l-utils
+```
+<!-- prettier-ignore-end -->
+
+2. _在手机上安装 [DroidCam](https://droidcam.app)_。此应用程序适用于 iOS 和 Android。
+3. _安装 [OBS Studio](https://obsproject.com)_。此软件将帮助您管理相机馈送。使用 [Flatpak](https://flatpak.org) 安装：
+
+<!-- prettier-ignore-start -->
+```python
+flatpak install flathub com.obsproject.Studio
+```
+<!-- prettier-ignore-end -->
+
+4. _安装 DroidCam OBS 插件_。此插件将 DroidCam 与 OBS Studio 集成。使用以下命令安装：
+
+<!-- prettier-ignore-start -->
+```python
+flatpak install flathub com.obsproject.Studio.Plugin.DroidCam
+```
+<!-- prettier-ignore-end -->
+
+5. _启动 OBS Studio_。使用以下命令启动：
+
+<!-- prettier-ignore-start -->
+```python
+flatpak run com.obsproject.Studio
+```
+<!-- prettier-ignore-end -->
+
+6. _将手机添加为源_。按照[此处](https://droidcam.app/obs/usage)的说明操作。确保将分辨率设置为 `640x480`。
+7. _调整分辨率设置_。在 OBS Studio 中，转到 `File > Settings > Video`。通过手动输入将 `Base(Canvas) Resolution` 和 `Output(Scaled) Resolution` 更改为 `640x480`。
+8. _启动虚拟相机_。在 OBS Studio 中，按照[此处](https://obsproject.com/kb/virtual-camera-guide)的说明操作。
+9. _验证虚拟相机设置_。使用 `v4l2-ctl` 列出设备：
+
+<!-- prettier-ignore-start -->
+```python
+v4l2-ctl --list-devices
+```
+<!-- prettier-ignore-end -->
+
+您应该看到如下条目：
+
+```
+VirtualCam (platform:v4l2loopback-000):
+/dev/video1
+```
+
+10. _检查相机分辨率_。使用 `v4l2-ctl` 确保虚拟相机输出分辨率为 `640x480`。将 `/dev/video1` 更改为来自 `v4l2-ctl --list-devices` 输出的虚拟相机端口。
+
+<!-- prettier-ignore-start -->
+```python
+v4l2-ctl -d /dev/video1 --get-fmt-video
+```
+<!-- prettier-ignore-end -->
+
+您应该看到如下条目：
+
+```
+>>> Format Video Capture:
+>>>	Width/Height      : 640/480
+>>>	Pixel Format      : 'YUYV' (YUYV 4:2:2)
+```
+
+故障排除：如果分辨率不正确，您将不得不删除虚拟相机端口并重试，因为它无法更改。
+
+如果一切设置正确，您可以继续本教程的其余部分。
+
+</hfoption>
+</hfoptions>

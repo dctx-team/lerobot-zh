@@ -1,0 +1,273 @@
+# 实现自定义机器人处理器
+
+在本教程中，您将学习如何实现自己的机器人处理器（Robot Processor）。
+本教程首先探讨自定义处理器的需求，然后以 `NormalizerProcessorStep` 为实例详细说明如何实现、配置和序列化处理器。最后，列出 LeRobot 自带的所有辅助处理器。
+
+## 为什么需要自定义处理器？
+
+在大多数情况下，当从传感器读取原始数据或当模型输出动作时，您需要处理这些数据以使其与目标系统兼容。例如，一个常见的需求是归一化数据范围，使其适合神经网络。
+
+LeRobot 的 `NormalizerProcessorStep` 处理这一关键任务：
+
+```python
+# 输入：原始关节位置，范围为 [0, 180] 度
+raw_action = torch.tensor([90.0, 45.0, 135.0])
+
+# 处理后：归一化到 [-1, 1] 范围，用于模型训练
+normalizer = NormalizerProcessorStep(features=features, norm_map=norm_map, stats=dataset_stats)
+normalized_result = normalizer(transition)
+# ...
+```
+
+其他常见的处理需求包括：
+
+- **设备放置**：在 CPU/GPU 之间移动张量并转换数据类型
+- **格式转换**：在不同数据结构之间转换
+- **批处理**：添加/删除批处理维度以实现模型兼容性
+- **安全约束**：对机器人命令应用限制
+
+```python
+# 组合多个处理器的管道示例
+pipeline = PolicyProcessorPipeline([
+    RenameObservationsProcessorStep(rename_map={}),
+    AddBatchDimensionProcessorStep(),
+    NormalizerProcessorStep(features=features, stats=stats),
+    DeviceProcessorStep(device="cuda"),
+    # ...
+])
+```
+
+LeRobot 提供了一种管道机制来实现输入数据和输出动作的处理步骤序列，使得以正确的顺序组合这些转换以获得最佳性能变得容易。
+
+## 如何实现自己的处理器？
+
+我们将使用 `NormalizerProcessorStep` 作为主要示例，因为它展示了基本的处理器模式，包括状态管理、配置序列化和张量处理，这些是您通常需要的。
+
+准备您问题所需的处理步骤序列。处理器步骤是一个实现以下方法的类：
+
+- `__call__`：实现输入转换（transition）的处理步骤。
+- `get_config`：获取处理器步骤的配置。
+- `state_dict`：获取处理器步骤的状态。
+- `load_state_dict`：加载处理器步骤的状态。
+- `reset`：重置处理器步骤的状态。
+- `feature_contract`：显示处理器步骤期间对特征空间的修改。
+
+### 实现 `__call__` 方法
+
+`__call__` 方法是处理器步骤的核心。它接受一个 `EnvTransition` 并返回一个修改后的 `EnvTransition`。以下是 `NormalizerProcessorStep` 的工作方式：
+
+```python
+@dataclass
+@ProcessorStepRegistry.register("normalizer_processor")
+class NormalizerProcessorStep(ProcessorStep):
+    """使用数据集统计信息归一化观测/动作。"""
+
+    features: dict[str, PolicyFeature]
+    norm_map: dict[FeatureType, NormalizationMode]
+    stats: dict[str, dict[str, Any]] | None = None
+    eps: float = 1e-8
+    _tensor_stats: dict = field(default_factory=dict, init=False, repr=False)
+
+    def __post_init__(self):
+        """将统计信息转换为张量以实现高效计算。"""
+        self.stats = self.stats or {}
+        self._tensor_stats = to_tensor(self.stats, device=self.device, dtype=torch.float32)
+
+    def __call__(self, transition: EnvTransition) -> EnvTransition:
+        new_transition = transition.copy()
+        # 归一化观测
+        # ...
+        # 归一化动作
+        # ...
+        return new_transition
+
+```
+
+有关完整详细信息，请参阅 `src/lerobot/processor/normalize_processor.py` 中的完整实现。
+
+**关键原则：**
+
+- **始终使用 `transition.copy()`** 以避免副作用
+- **一致地处理观测和动作**
+- **将配置与状态分离**：`get_config()` 返回 JSON 可序列化的参数，`state_dict()` 返回张量
+- **在 `__post_init__()` 中将统计信息转换为张量** 以实现高效计算
+
+### 配置和状态管理
+
+处理器通过三种方法支持序列化，这些方法将配置与张量状态分离。`NormalizerProcessorStep` 完美地展示了这一点 - 它在其状态中携带数据集统计信息（张量），并在其配置中携带超参数：
+
+```python
+# 继续 NormalizerProcessorStep 示例...
+
+def get_config(self) -> dict[str, Any]:
+    """JSON 可序列化的配置（无张量）。"""
+    return {
+        "eps": self.eps,
+        "features": {k: {"type": v.type.value, "shape": v.shape} for k, v in self.features.items()},
+        "norm_map": {ft.value: nm.value for ft, nm in self.norm_map.items()},
+        # ...
+    }
+
+def state_dict(self) -> dict[str, torch.Tensor]:
+    """仅张量状态（例如，数据集统计信息）。"""
+    flat: dict[str, torch.Tensor] = {}
+    for key, sub in self._tensor_stats.items():
+        for stat_name, tensor in sub.items():
+            flat[f"{key}.{stat_name}"] = tensor.cpu()  # 始终保存到 CPU
+    return flat
+
+def load_state_dict(self, state: dict[str, torch.Tensor]) -> None:
+    """在运行时恢复张量状态。"""
+    self._tensor_stats.clear()
+    for flat_key, tensor in state.items():
+        key, stat_name = flat_key.rsplit(".", 1)
+        # 加载到处理器配置的设备
+        self._tensor_stats.setdefault(key, {})[stat_name] = tensor.to(
+            dtype=torch.float32, device=self.device
+        )
+        # ...
+```
+
+**用法：**
+
+```python
+# 保存（例如，在策略内部）
+config = normalizer.get_config()
+tensors = normalizer.state_dict()
+
+# 恢复（例如，加载预训练策略）
+new_normalizer = NormalizerProcessorStep(**config)
+new_normalizer.load_state_dict(tensors)
+# 现在 new_normalizer 具有相同的统计信息和配置
+```
+
+### 转换特征
+
+`transform_features` 方法定义处理器如何转换特征名称和形状。这对于策略配置和调试至关重要。
+
+对于 `NormalizerProcessorStep`，特征通常保持不变，因为归一化不会改变键或形状：
+
+```python
+def transform_features(self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
+    """归一化保留所有特征定义。"""
+    return features  # 特征结构无变化
+    # ...
+```
+
+当您的处理器重命名或重塑数据时，实现此方法以反映下游组件的映射。例如，一个简单的重命名处理器：
+
+```python
+def transform_features(self, features: dict[str, PolicyFeature]) -> dict[str, PolicyFeature]:
+    # 简单重命名
+    if "pixels" in features:
+        features["observation.image"] = features.pop("pixels")
+
+    # 基于模式的重命名
+    for key in list(features.keys()):
+        if key.startswith("env_state."):
+            suffix = key[len("env_state."):]
+            features[f"observation.{suffix}"] = features.pop(key)
+            # ...
+
+    return features
+```
+
+**关键原则：**
+
+- 使用 `features.pop(old_key)` 删除并获取旧特征
+- 使用 `features[new_key] = old_feature` 添加重命名的特征
+- 始终返回修改后的特征字典
+- 在文档字符串中清晰记录转换
+
+### 使用覆盖（overrides）
+
+您可以在加载时使用 `overrides` 覆盖步骤参数。这对于不可序列化的对象或特定站点的设置很方便。它在策略工厂和 `DataProcessorPipeline.from_pretrained(...)` 中都有效。
+
+**基础模型适配**：当使用基础预训练策略时，这特别有用，因为您很少能访问原始训练统计信息。您可以注入自己的数据集统计信息，以使归一化器适应您特定的机器人或环境数据。
+
+示例：在机器人上进行策略评估期间，覆盖设备和重命名映射。
+使用此方法在仅支持 CPU 的机器人上运行在 CUDA 上训练的策略，或者当机器人使用与数据集不同的名称时重新映射相机键。
+
+直接使用 `from_pretrained`：
+
+```python
+from lerobot.processor import RobotProcessorPipeline
+
+# 加载在各种机器人数据上训练的基础策略
+# 但将归一化适配到您特定的机器人/环境
+new_stats = LeRobotDataset(repo_id="username/my-dataset").meta.stats
+processor = RobotProcessorPipeline.from_pretrained(
+    "huggingface/foundational-robot-policy",  # 预训练基础模型
+    overrides={
+        "normalizer_processor": {"stats": new_stats},     # 注入您机器人的统计信息
+        "device_processor": {"device": "cuda:0"},         # 已注册步骤的注册表名称
+        "rename_processor": {"rename_map": robot_key_map}, # 映射您机器人的观测键
+        # ...
+    },
+)
+```
+
+## 最佳实践
+
+基于对所有 LeRobot 处理器实现的分析，以下是关键模式和实践：
+
+### 1. **安全的数据处理**
+
+始终创建输入数据的副本以避免意外的副作用。使用 `transition.copy()` 和 `observation.copy()` 而不是就地修改数据。这可以防止您的处理器意外影响管道中的其他组件。
+
+在处理之前检查所需数据，并优雅地处理缺失数据。如果您的处理器期望某些键（如用于图像处理的 `"pixels"`），请首先验证它们的存在。对于可选数据，使用安全访问模式，如 `transition.get()`，并适当处理 `None` 值。
+
+当数据验证失败时，提供清晰、可操作的错误消息，帮助用户了解出了什么问题以及如何修复它。
+
+### 2. **选择适当的基类**
+
+LeRobot 提供了专门的基类，可减少样板代码并确保一致性。当您只需要修改观测时，使用 `ObservationProcessorStep`；对于仅动作处理，使用 `ActionProcessorStep`；专门针对基于字典的机器人动作，使用 `RobotActionProcessorStep`。
+
+只有当您需要完全控制整个转换或同时处理多个转换组件时，才直接从 `ProcessorStep` 继承。专门的基类会为您处理转换管理并提供类型安全。
+
+### 3. **注册和命名**
+
+使用 `@ProcessorStepRegistry.register()` 以描述性的、带命名空间的名称注册您的处理器。使用组织前缀，如 `"robotics_lab/safety_clipper"` 或 `"acme_corp/vision_enhancer"`，以避免命名冲突。避免使用 `"processor"` 或 `"step"` 等通用名称，这些名称可能与其他实现冲突。
+
+良好的注册使您的处理器可被发现，并在保存和加载管道时实现干净的序列化/反序列化。
+
+### 4. **状态管理模式**
+
+区分配置参数（JSON 可序列化的值）和内部状态（张量、缓冲区）。对于不应出现在构造函数或字符串表示中的内部状态，使用带有 `init=False, repr=False` 的数据类字段。
+
+实现 `reset()` 方法以清除回合之间的内部状态。这对于随时间累积数据的有状态处理器（如移动平均或时间滤波器）至关重要。
+
+请记住，`get_config()` 应该只返回 JSON 可序列化的配置，而 `state_dict()` 单独处理张量状态。
+
+### 5. **输入验证和错误处理**
+
+在处理之前验证输入类型和形状。检查张量属性，如 `dtype` 和维度，以确保与您的算法兼容。对于机器人动作，验证所需的姿态组件或关节值是否存在并在预期范围内。
+
+对不需要处理的边缘情况使用提前返回。提供清晰、描述性的错误消息，包括预期与实际的数据类型或形状。这使用户的调试变得更加容易。
+
+### 6. **设备和数据类型意识**
+
+设计您的处理器以自动适应输入张量的设备和数据类型。内部张量（如归一化统计信息）应与输入张量的设备和数据类型匹配，以确保与多 GPU 训练、混合精度和分布式设置的兼容性。
+
+实现一个 `to()` 方法，将处理器的内部状态移动到指定的设备。在运行时检查设备/数据类型兼容性，并在需要时自动迁移内部状态。此模式使得在不同硬件配置下无需手动干预即可无缝操作。
+
+## 结论
+
+您现在拥有在 LeRobot 中实现自定义处理器的所有工具！关键步骤是：
+
+1. **定义您的处理器** 作为具有所需方法的数据类（`__call__`、`get_config`、`state_dict`、`load_state_dict`、`reset`、`transform_features`）
+2. **注册它** 使用 `@ProcessorStepRegistry.register("name")` 以实现可发现性
+3. **将其集成** 到 `DataProcessorPipeline` 中与其他处理步骤一起
+4. **使用基类** 如 `ObservationProcessorStep`（如果可能）以减少样板代码
+5. **实现设备/数据类型意识** 以支持多 GPU 和混合精度设置
+
+处理器系统被设计为模块化和可组合的，允许您从简单、集中的组件构建复杂的数据处理管道。无论您是为训练预处理传感器数据，还是为机器人执行后处理模型输出，自定义处理器都为您提供了处理机器人应用程序所需的任何数据转换的灵活性。
+
+健壮处理器的关键原则：
+
+- **设备/数据类型适配**：内部张量应与输入张量匹配
+- **清晰的错误消息**：帮助用户了解出了什么问题
+- **基类使用**：利用专门的基类减少样板代码
+- **特征契约**：使用 `transform_features()` 声明数据结构变化
+
+从简单开始，彻底测试，并确保您的处理器在不同的硬件配置下无缝工作！

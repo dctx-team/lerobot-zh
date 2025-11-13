@@ -1,0 +1,154 @@
+# 在仿真中训练强化学习
+
+本指南解释了如何使用 `gym_hil` 仿真环境作为真实机器人的替代方案，在 LeRobot 框架中进行人机协同（Human-In-the-Loop, HIL）强化学习。
+
+`gym_hil` 是一个提供与 Gymnasium 兼容的仿真环境包，专门为人机协同强化学习设计。这些环境允许您：
+
+- 在仿真中训练策略，在真实机器人上训练之前测试强化学习堆栈
+
+- 使用外部设备（如游戏手柄或键盘）在仿真中收集演示数据
+- 在策略学习过程中进行人工干预
+
+目前，主要环境是基于 MuJoCo 的 Franka Panda 机器人仿真，包含抓取立方体等任务。
+
+## 安装
+
+首先，在 LeRobot 环境中安装 `gym_hil` 包：
+
+```bash
+pip install -e ".[hilserl]"
+```
+
+## 需要准备什么？
+
+- 用于控制机器人的游戏手柄或键盘
+- 英伟达（Nvidia）GPU
+
+## 配置
+
+要在 LeRobot 中使用 `gym_hil`，您需要创建一个配置文件。[这里](https://huggingface.co/datasets/lerobot/config_examples/resolve/main/rl/gym_hil/env_config.json)提供了一个示例。主要配置部分包括：
+
+### 环境类型和任务
+
+```json
+{
+  "env": {
+    "type": "gym_manipulator",
+    "name": "gym_hil",
+    "task": "PandaPickCubeGamepad-v0",
+    "fps": 10
+  },
+  "device": "cuda"
+}
+```
+
+可用任务：
+
+- `PandaPickCubeBase-v0`：基础环境
+- `PandaPickCubeGamepad-v0`：带游戏手柄控制
+- `PandaPickCubeKeyboard-v0`：带键盘控制
+
+### 处理器配置
+
+```json
+{
+  "env": {
+    "processor": {
+      "control_mode": "gamepad",
+      "gripper": {
+        "use_gripper": true,
+        "gripper_penalty": -0.02
+      },
+      "reset": {
+        "control_time_s": 15.0,
+        "fixed_reset_joint_positions": [
+          0.0, 0.195, 0.0, -2.43, 0.0, 2.62, 0.785
+        ]
+      },
+      "inverse_kinematics": {
+        "end_effector_step_sizes": {
+          "x": 0.025,
+          "y": 0.025,
+          "z": 0.025
+        }
+      }
+    }
+  }
+}
+```
+
+重要参数：
+
+- `gripper.gripper_penalty`：过度夹爪运动的惩罚值
+- `gripper.use_gripper`：是否启用夹爪控制
+- `inverse_kinematics.end_effector_step_sizes`：末端执行器在 x、y、z 轴上的步长大小
+- `control_mode`：设置为 `"gamepad"` 以使用游戏手柄控制器
+
+## 使用 LeRobot 的 HIL RL 运行
+
+### 基本使用
+
+要运行环境，将模式设置为 null：
+
+```bash
+python -m lerobot.rl.gym_manipulator --config_path path/to/gym_hil_env.json
+```
+
+### 记录数据集
+
+要收集数据集，将模式设置为 `record`，同时定义 repo_id 和要记录的回合数量：
+
+```json
+{
+  "env": {
+    "type": "gym_manipulator",
+    "name": "gym_hil",
+    "task": "PandaPickCubeGamepad-v0"
+  },
+  "dataset": {
+    "repo_id": "username/sim_dataset",
+    "root": null,
+    "task": "pick_cube",
+    "num_episodes_to_record": 10,
+    "replay_episode": null,
+    "push_to_hub": true
+  },
+  "mode": "record"
+}
+```
+
+```bash
+python -m lerobot.rl.gym_manipulator --config_path path/to/gym_hil_env.json
+```
+
+### 训练策略
+
+要训练策略，查看[这里](https://huggingface.co/datasets/lerobot/config_examples/resolve/main/rl/gym_hil/train_config.json)提供的配置示例，然后运行 actor 和 learner 服务器：
+
+```bash
+python -m lerobot.rl.actor --config_path path/to/train_gym_hil_env.json
+```
+
+在另一个终端中，运行 learner 服务器：
+
+```bash
+python -m lerobot.rl.learner --config_path path/to/train_gym_hil_env.json
+```
+
+仿真环境提供了一种安全且可重复的方式来开发和测试您的人机协同强化学习组件，然后再部署到真实机器人上。
+
+恭喜 🎉，您已完成本教程！
+
+> [!TIP]
+> 如果您有任何问题或需要帮助，请在 [Discord](https://discord.com/invite/s3KuuzsPFb) 上联系我们。
+
+论文引用：
+
+```
+@article{luo2024precise,
+  title={Precise and Dexterous Robotic Manipulation via Human-in-the-Loop Reinforcement Learning},
+  author={Luo, Jianlan and Xu, Charles and Wu, Jeffrey and Levine, Sergey},
+  journal={arXiv preprint arXiv:2410.21845},
+  year={2024}
+}
+```

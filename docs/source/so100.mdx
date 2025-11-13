@@ -1,0 +1,160 @@
+# SO-100
+
+在下面的步骤中,我们将解释如何组装 SO-100 机器人。
+
+## 采购零件
+
+请遵循这个 [README](https://github.com/TheRobotStudio/SO-ARM100/blob/main/SO100.md)。它包含物料清单和零件采购链接,以及 3D 打印零件的说明。如果这是您第一次打印或者您没有 3D 打印机,文档中也提供了相关建议。
+
+## 安装 LeRobot 🤗
+
+要安装 LeRobot,请遵循我们的[安装指南](./installation)
+
+除了这些说明外,您还需要安装 Feetech SDK:
+
+```bash
+pip install -e ".[feetech]"
+```
+
+## 配置电机
+
+**注意:**
+与 SO-101 不同,一旦机械臂组装完成,电机连接器就不容易访问,因此配置步骤必须事先完成。
+
+### 1. 查找与每个机械臂关联的 USB 端口
+
+要查找每个总线舵机适配器的端口,请运行此脚本:
+
+```bash
+lerobot-find-port
+```
+
+<hfoptions id="example">
+<hfoption id="Mac">
+
+示例输出:
+
+```
+Finding all available ports for the MotorBus.
+['/dev/tty.usbmodem575E0032081', '/dev/tty.usbmodem575E0031751']
+Remove the USB cable from your MotorsBus and press Enter when done.
+
+[...断开相应的主从机械臂并按 Enter...]
+
+The port of this MotorsBus is /dev/tty.usbmodem575E0032081
+Reconnect the USB cable.
+```
+
+其中找到的端口是:`/dev/tty.usbmodem575E0032081`,对应于您的主机械臂或从机械臂。
+
+</hfoption>
+<hfoption id="Linux">
+
+在 Linux 上,您可能需要通过运行以下命令来授予 USB 端口的访问权限:
+
+```bash
+sudo chmod 666 /dev/ttyACM0
+sudo chmod 666 /dev/ttyACM1
+```
+
+示例输出:
+
+```
+Finding all available ports for the MotorBus.
+['/dev/ttyACM0', '/dev/ttyACM1']
+Remove the usb cable from your MotorsBus and press Enter when done.
+
+[...断开相应的主从机械臂并按 Enter...]
+
+The port of this MotorsBus is /dev/ttyACM1
+Reconnect the USB cable.
+```
+
+其中找到的端口是:`/dev/ttyACM1`,对应于您的主机械臂或从机械臂。
+
+</hfoption>
+</hfoptions>
+
+### 2. 设置电机 ID 和波特率
+
+总线上的每个电机都通过唯一的 ID 来标识。当电机是全新的时候,通常带有默认 ID `1`。为了使电机和控制器之间的通信正常工作,我们首先需要为每个电机设置一个唯一的、不同的 ID。此外,总线上数据传输的速度由波特率(baudrate)决定。为了相互通信,控制器和所有电机都需要配置相同的波特率。
+
+为此,我们首先需要将控制器单独连接到每个电机以设置这些参数。由于我们将把这些参数写入电机内部存储器(EEPROM)的非易失性部分,因此我们只需要执行一次此操作。
+
+如果您正在重新使用来自另一个机器人的电机,您可能还需要执行此步骤,因为 ID 和波特率可能不匹配。
+
+#### 从机械臂
+
+将 USB 电缆从计算机连接到从机械臂的控制板,并连接电源。然后,运行以下命令或使用上一步获得的端口运行 API 示例。您还需要使用 `id` 参数为您的主机械臂命名。
+
+有关如何设置电机 ID 的可视化参考,请参阅[此视频](https://huggingface.co/docs/lerobot/en/so101#setup-motors-video),其中我们遵循 SO101 机械臂的流程。
+
+<hfoptions id="setup_motors">
+<hfoption id="Command">
+
+```bash
+lerobot-setup-motors     --robot.type=so100_follower     --robot.port=/dev/tty.usbmodem585A0076841  # <- 在此处粘贴上一步找到的端口
+```
+
+</hfoption>
+<hfoption id="API example">
+
+<!-- prettier-ignore-start -->
+```python
+from lerobot.robots.so100_follower import SO100Follower, SO100FollowerConfig
+
+config = SO100FollowerConfig(
+    port="/dev/tty.usbmodem585A0076841",
+    id="my_awesome_follower_arm",
+)
+follower = SO100Follower(config)
+follower.setup_motors()
+```
+<!-- prettier-ignore-end -->
+
+</hfoption>
+</hfoptions>
+
+您应该看到以下指令
+
+```
+Connect the controller board to the 'gripper' motor only and press enter.
+```
+
+按照指示,插入夹爪的电机。确保它是连接到控制板的唯一电机,并且电机本身还没有以菊花链方式连接到任何其他电机。当您按下 `[Enter]` 时,脚本将自动为该电机设置 ID 和波特率。
+
+<details>
+<summary>故障排除</summary>
+
+如果此时出现错误,请检查您的电缆并确保它们正确插入:
+
+<ul>
+  <li>电源</li>
+  <li>计算机和控制板之间的 USB 电缆</li>
+  <li>从控制板到电机的 3 针电缆</li>
+</ul>
+
+如果您使用的是 Waveshare 控制板,请确保两个跳线设置在 `B` 通道(USB)上。
+
+</details>
+
+然后您应该看到以下消息:
+
+```
+'gripper' motor id set to 6
+```
+
+接着是下一条指令:
+
+```
+Connect the controller board to the 'wrist_roll' motor only and press enter.
+```
+
+您可以从控制板上断开 3 针电缆,但可以将其保持连接到另一端的夹爪电机上,因为它已经在正确的位置。现在,将另一根 3 针电缆插入腕部滚转电机,并将其连接到控制板。与之前的电机一样,确保它是连接到控制板的唯一电机,并且电机本身没有连接到任何其他电机。
+
+按照指示对每个电机重复此操作。
+
+> [!TIP]
+> 在按 Enter 之前,检查每一步的接线。例如,在您操作控制板时,电源电缆可能会断开连接。
+
+完成后,脚本将简单地结束,此时电机就可以使用了。现在您可以将 3 针电缆从每个电机连接到下一个电机,并将第一个电机(ID=1 的"肩部旋转"电机)的电缆连接到控制板,然后可以将控制板安装到机械臂的基座上。

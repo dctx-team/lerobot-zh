@@ -1,0 +1,922 @@
+# HIL-SERL 真实机器人训练工作流程指南
+
+在本教程中，您将完整体验使用 LeRobot 的人机交互回路样本高效强化学习（Human-in-the-Loop Sample-Efficient Reinforcement Learning，HIL-SERL）工作流程。您将掌握在短短几个小时内使用强化学习（RL）在真实机器人上训练策略的方法。
+
+HIL-SERL 是一种样本高效的强化学习算法，结合了人类演示、在线学习和人类干预。该方法从少量人类演示开始，使用它们训练奖励分类器，然后采用演员-学习者（actor-learner）架构，在此期间人类可以在策略执行期间进行干预，以引导探索并纠正不安全的行为。在本教程中，您将使用游戏手柄在学习过程中提供干预并控制机器人。
+
+它结合了三个关键要素：
+
+1. **离线演示和奖励分类器：**少量人类遥操作episodes加上基于视觉的成功检测器，为策略提供了一个良好的起点。
+
+2. **在机器人上的演员/学习者循环与人类干预：**分布式软演员-评论家（Soft Actor Critic，SAC）学习器更新策略，而演员在物理机器人上进行探索；人类可以随时介入以纠正危险或无效的行为。
+
+3. **安全和效率工具：**关节/末端执行器（end-effector，EE）边界、感兴趣区域（Region of Interest，ROI）裁剪预处理和 WandB 监控保持数据有用且硬件安全。
+
+这些元素共同使 HIL-SERL 达到接近完美的任务成功率和比纯模仿学习基线更快的循环时间。
+
+<p align="center">
+  <img
+    src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/hilserl-main-figure.png"
+    alt="HIL-SERL workflow"
+    title="HIL-SERL workflow"
+    width="100%"
+  ></img>
+</p>
+
+<p align="center">
+  <i>HIL-SERL 工作流程，Luo et al. 2024</i>
+</p>
+
+本指南提供了使用 LeRobot 的 HilSerl 实现在真实机器人上训练机器人策略的分步说明。
+
+## 我需要什么？
+
+- 游戏手柄（推荐）或键盘来控制机器人
+- Nvidia GPU
+- 一个带有从动臂和主动臂的真实机器人（如果您使用键盘或游戏手柄则可选）
+- 用于运动学包的机器人 URDF 文件（检查 `lerobot/model/kinematics.py`）
+
+## 我可以训练什么类型的任务？
+
+可以使用 HIL-SERL 训练各种操作任务。一些建议：
+
+- 从简单任务开始，了解系统的工作原理。
+  - 将立方体推到目标区域
+  - 用夹爪拾取并提起立方体
+- 避免极长视野的任务。专注于可以在 5-10 秒内完成的任务。
+- 一旦您对系统的工作原理有了很好的了解，就可以尝试更复杂的任务和更长的视野。
+  - 拾取并放置立方体
+  - 双臂任务，用两只手臂拾取物体
+  - 交接任务，将物体从一只手臂转移到另一只手臂
+  - 尽情发挥！
+
+## 安装 LeRobot 与 HIL-SERL
+
+要安装带有 HIL-SERL 的 LeRobot，您需要安装 `hilserl` 额外包。
+
+```bash
+pip install -e ".[hilserl]"
+```
+
+## 真实机器人训练工作流程
+
+### 理解配置
+
+训练过程始于为 HILSerl 环境进行适当的配置。主配置类是 `lerobot/rl/gym_manipulator.py` 中的 `GymManipulatorConfig`，其中包含嵌套的 `HILSerlRobotEnvConfig` 和 `DatasetConfig`。配置被组织成重点明确的嵌套子配置：
+
+<!-- prettier-ignore-start -->
+```python
+class GymManipulatorConfig:
+    env: HILSerlRobotEnvConfig    # 环境配置（嵌套）
+    dataset: DatasetConfig    # 数据集记录/重放配置（嵌套）
+    mode: str | None = None    # "record"、"replay" 或 None（用于训练）
+    device: str = "cpu"    # 计算设备
+
+class HILSerlRobotEnvConfig(EnvConfig):
+    robot: RobotConfig | None = None    # 主机器人代理（在 `lerobot/robots` 中定义）
+    teleop: TeleoperatorConfig | None = None    # 遥操作器代理，例如游戏手柄或主臂
+    processor: HILSerlProcessorConfig    # 处理管道配置（嵌套）
+    name: str = "real_robot"    # 环境名称
+    task: str | None = None    # 任务标识符
+    fps: int = 10    # 控制频率
+
+# 嵌套的处理器配置
+class HILSerlProcessorConfig:
+    control_mode: str = "gamepad"    # 控制模式
+    observation: ObservationConfig | None = None    # 观察处理设置
+    image_preprocessing: ImagePreprocessingConfig | None = None    # 图像裁剪/调整大小设置
+    gripper: GripperConfig | None = None    # 夹爪控制和惩罚设置
+    reset: ResetConfig | None = None    # 环境重置和时间设置
+    inverse_kinematics: InverseKinematicsConfig | None = None    # 逆运动学处理设置
+    reward_classifier: RewardClassifierConfig | None = None    # 奖励分类器设置
+    max_gripper_pos: float | None = 100.0    # 最大夹爪位置
+
+# 子配置类
+class ObservationConfig:
+    add_joint_velocity_to_observation: bool = False    # 将关节速度添加到状态
+    add_current_to_observation: bool = False    # 将电机电流添加到状态
+    display_cameras: bool = False    # 在执行期间显示相机图像
+
+class ImagePreprocessingConfig:
+    crop_params_dict: dict[str, tuple[int, int, int, int]] | None = None    # 图像裁剪参数
+    resize_size: tuple[int, int] | None = None    # 目标图像大小
+
+class GripperConfig:
+    use_gripper: bool = True    # 启用夹爪控制
+    gripper_penalty: float = 0.0    # 不适当使用夹爪的惩罚
+
+class ResetConfig:
+    fixed_reset_joint_positions: Any | None = None    # 重置的关节位置
+    reset_time_s: float = 5.0    # 重置期间等待的时间
+    control_time_s: float = 20.0    # 最大 episode 持续时间
+    terminate_on_success: bool = True    # 是否在成功检测时终止 episodes
+
+class InverseKinematicsConfig:
+    urdf_path: str | None = None    # 机器人 URDF 文件路径
+    target_frame_name: str | None = None    # 末端执行器框架名称
+    end_effector_bounds: dict[str, list[float]] | None = None    # EE 工作空间边界
+    end_effector_step_sizes: dict[str, float] | None = None    # EE 每个轴的步长
+
+class RewardClassifierConfig:
+    pretrained_path: str | None = None    # 预训练奖励分类器路径
+    success_threshold: float = 0.5    # 成功检测阈值
+    success_reward: float = 1.0    # 成功 episodes 的奖励值
+
+# 数据集配置
+class DatasetConfig:
+    repo_id: str    # LeRobot 数据集仓库 ID
+    task: str    # 任务标识符
+    root: str | None = None    # 本地数据集根目录
+    num_episodes_to_record: int = 5    # 记录的 episodes 数量
+    replay_episode: int | None = None    # 重放的 episode 索引
+    push_to_hub: bool = False    # 是否将数据集推送到 Hub
+```
+<!-- prettier-ignore-end -->
+
+### 处理器管道架构
+
+HIL-SERL 使用模块化处理器管道架构，通过一系列可组合步骤处理机器人观察和动作。该管道分为两个主要组件：
+
+#### 环境处理器管道
+
+环境处理器（`env_processor`）处理传入的观察和环境状态：
+
+1. **VanillaObservationProcessorStep**：将原始机器人观察转换为标准格式
+2. **JointVelocityProcessorStep**（可选）：将关节速度信息添加到观察中
+3. **MotorCurrentProcessorStep**（可选）：将电机电流读数添加到观察中
+4. **ForwardKinematicsJointsToEE**（可选）：从关节位置计算末端执行器姿态
+5. **ImageCropResizeProcessorStep**（可选）：裁剪和调整相机图像大小
+6. **TimeLimitProcessorStep**（可选）：强制执行 episode 时间限制
+7. **GripperPenaltyProcessorStep**（可选）：对不适当使用夹爪应用惩罚
+8. **RewardClassifierProcessorStep**（可选）：使用视觉模型进行自动奖励检测
+9. **AddBatchDimensionProcessorStep**：将数据转换为批处理格式以进行神经网络处理
+10. **DeviceProcessorStep**：将数据移动到指定的计算设备（CPU/GPU）
+
+#### 动作处理器管道
+
+动作处理器（`action_processor`）处理输出动作和人类干预：
+
+1. **AddTeleopActionAsComplimentaryDataStep**：捕获遥操作器动作以进行日志记录
+2. **AddTeleopEventsAsInfoStep**：记录干预事件和 episode 控制信号
+3. **InterventionActionProcessorStep**：处理人类干预和 episode 终止
+4. **逆运动学管道**（启用时）：
+   - **MapDeltaActionToRobotActionStep**：将增量动作转换为机器人动作格式
+   - **EEReferenceAndDelta**：计算末端执行器参考和增量运动
+   - **EEBoundsAndSafety**：强制执行工作空间安全边界
+   - **InverseKinematicsEEToJoints**：将末端执行器动作转换为关节目标
+   - **GripperVelocityToJoint**：处理夹爪控制命令
+
+#### 配置示例
+
+**基本观察处理**：
+
+```json
+{
+  "env": {
+    "processor": {
+      "observation": {
+        "add_joint_velocity_to_observation": true,
+        "add_current_to_observation": false,
+        "display_cameras": false
+      }
+    }
+  }
+}
+```
+
+**图像处理**：
+
+```json
+{
+  "env": {
+    "processor": {
+      "image_preprocessing": {
+        "crop_params_dict": {
+          "observation.images.front": [180, 250, 120, 150],
+          "observation.images.side": [180, 207, 180, 200]
+        },
+        "resize_size": [128, 128]
+      }
+    }
+  }
+}
+```
+
+**逆运动学设置**：
+
+```json
+{
+  "env": {
+    "processor": {
+      "inverse_kinematics": {
+        "urdf_path": "path/to/robot.urdf",
+        "target_frame_name": "end_effector",
+        "end_effector_bounds": {
+          "min": [0.16, -0.08, 0.03],
+          "max": [0.24, 0.2, 0.1]
+        },
+        "end_effector_step_sizes": {
+          "x": 0.02,
+          "y": 0.02,
+          "z": 0.02
+        }
+      }
+    }
+  }
+}
+```
+
+### 高级观察处理
+
+HIL-SERL 框架支持可以改善策略学习的额外观察处理功能：
+
+#### 关节速度处理
+
+启用关节速度估计以向策略提供运动信息：
+
+```json
+{
+  "env": {
+    "processor": {
+      "observation": {
+        "add_joint_velocity_to_observation": true
+      }
+    }
+  }
+}
+```
+
+此处理器：
+
+- 使用连续关节位置读数之间的有限差分估计关节速度
+- 将速度信息添加到观察状态向量
+- 对需要运动感知的动态任务的策略有用
+
+#### 电机电流处理
+
+监控电机电流以检测接触力和负载条件：
+
+```json
+{
+  "env": {
+    "processor": {
+      "observation": {
+        "add_current_to_observation": true
+      }
+    }
+  }
+}
+```
+
+此处理器：
+
+- 从机器人的控制系统读取电机电流值
+- 将电流测量添加到观察状态向量
+- 帮助检测接触事件、物体重量和机械阻力
+- 对接触丰富的操作任务有用
+
+#### 组合观察处理
+
+您可以同时启用多个观察处理功能：
+
+```json
+{
+  "env": {
+    "processor": {
+      "observation": {
+        "add_joint_velocity_to_observation": true,
+        "add_current_to_observation": true,
+        "display_cameras": false
+      }
+    }
+  }
+}
+```
+
+**注意**：启用额外的观察功能会增加状态空间维度，这可能需要调整您的策略网络架构，并可能需要收集更多训练数据。
+
+### 查找机器人工作空间边界
+
+在收集演示之前，您需要确定机器人的适当操作边界。
+
+这以两种方式帮助简化在真实机器人上学习的问题：1）通过将机器人的操作空间限制在解决任务并避免不必要或不安全探索的特定区域，以及2）通过允许在末端执行器空间而不是关节空间中进行训练。根据经验，在关节空间中进行操作的强化学习通常是一个更困难的问题——一些任务在关节空间中几乎不可能学习，但当动作空间转换为末端执行器坐标时就变得可学习。
+
+**使用 lerobot-find-joint-limits**
+
+此脚本帮助您找到机器人末端执行器的安全操作边界。鉴于您有从动臂和主动臂，您可以使用脚本查找将在训练期间应用的从动臂的边界。
+限制动作空间将减少代理的冗余探索并保证安全。
+
+```bash
+lerobot-find-joint-limits \
+  --robot.type=so100_follower \
+  --robot.port=/dev/tty.usbmodem58760431541 \
+  --robot.id=black \
+  --teleop.type=so100_leader \
+  --teleop.port=/dev/tty.usbmodem58760431551 \
+  --teleop.id=blue
+```
+
+**工作流程**
+
+1. 运行脚本并移动机器人穿过解决任务的空间
+2. 脚本将记录最小和最大末端执行器位置以及关节角度，并将它们打印到控制台，例如：
+   ```
+   Max ee position [0.2417 0.2012 0.1027]
+   Min ee position [0.1663 -0.0823 0.0336]
+   Max joint positions [-20.0, -20.0, -20.0, -20.0, -20.0, -20.0]
+   Min joint positions [50.0, 50.0, 50.0, 50.0, 50.0, 50.0]
+   ```
+3. 在遥操作设备配置（TeleoperatorConfig）中的 `end_effector_bounds` 字段下使用这些值
+
+**示例配置**
+
+```json
+"end_effector_bounds": {
+    "max": [0.24, 0.20, 0.10],
+    "min": [0.16, -0.08, 0.03]
+}
+```
+
+### 收集演示
+
+定义边界后，您可以安全地收集训练演示。使用离线策略算法进行 RL 训练允许我们使用离线收集的数据集来提高学习过程的效率。
+
+**设置记录模式**
+
+创建用于记录演示的配置文件（或编辑现有文件，例如 [env_config.json](https://huggingface.co/datasets/lerobot/config_examples/resolve/main/rl/env_config.json)）：
+
+1. 在根级别将 `mode` 设置为 `"record"`
+2. 在 `dataset` 部分指定唯一的 `repo_id`（例如，"username/task_name"）
+3. 在 `dataset` 部分将 `num_episodes_to_record` 设置为您要收集的演示数量
+4. 最初将 `env.processor.image_preprocessing.crop_params_dict` 设置为 `{}`（我们稍后会确定裁剪）
+5. 在 `env` 部分配置 `env.robot`、`env.teleop` 和其他硬件设置
+
+示例配置部分：
+
+```json
+{
+  "env": {
+    "type": "gym_manipulator",
+    "name": "real_robot",
+    "fps": 10,
+    "processor": {
+      "control_mode": "gamepad",
+      "observation": {
+        "display_cameras": false
+      },
+      "image_preprocessing": {
+        "crop_params_dict": {},
+        "resize_size": [128, 128]
+      },
+      "gripper": {
+        "use_gripper": true,
+        "gripper_penalty": 0.0
+      },
+      "reset": {
+        "reset_time_s": 5.0,
+        "control_time_s": 20.0
+      }
+    },
+    "robot": {
+      // ... 机器人配置 ...
+    },
+    "teleop": {
+      // ... 遥操作器配置 ...
+    }
+  },
+  "dataset": {
+    "repo_id": "username/pick_lift_cube",
+    "root": null,
+    "task": "pick_and_lift",
+    "num_episodes_to_record": 15,
+    "replay_episode": 0,
+    "push_to_hub": true
+  },
+  "mode": "record",
+  "device": "cpu"
+}
+```
+
+### 使用遥操作设备
+
+除了您的机器人外，您还需要一个遥操作设备来控制它，以收集任务数据集并在在线训练期间执行干预。
+我们支持使用游戏手柄、键盘或机器人的主臂。
+
+HIL-Serl 在机器人的末端执行器空间中学习动作。因此，遥操作将控制末端执行器的 x、y、z 位移。
+
+为此，我们需要定义一个机器人版本，该版本在末端执行器空间中执行动作。检查机器人类 `SO100FollowerEndEffector` 及其配置 `SO100FollowerEndEffectorConfig`，了解与末端执行器空间相关的默认参数。
+
+<!-- prettier-ignore-start -->
+```python
+class SO100FollowerEndEffectorConfig(SO100FollowerConfig):
+    """SO100FollowerEndEffector 机器人的配置。"""
+
+    # 末端执行器位置的默认边界（以米为单位）
+    end_effector_bounds: dict[str, list[float]] = field( # x、y、z 方向上末端执行器的边界
+        default_factory=lambda: {
+            "min": [-1.0, -1.0, -1.0],  # 最小 x、y、z
+            "max": [1.0, 1.0, 1.0],  # 最大 x、y、z
+        }
+    )
+
+    max_gripper_pos: float = 50 # 夹爪将打开的最大夹爪位置
+
+    end_effector_step_sizes: dict[str, float] = field( # x、y、z 方向上末端执行器的最大步长
+        default_factory=lambda: {
+            "x": 0.02,
+            "y": 0.02,
+            "z": 0.02,
+        }
+    )
+```
+<!-- prettier-ignore-end -->
+
+`Teleoperator` 定义了遥操作设备。您可以在 `lerobot/teleoperators` 中查看可用遥操作器的列表。
+
+**设置游戏手柄**
+
+游戏手柄提供了一种非常方便的方式来控制机器人和 episode 状态。
+
+要设置游戏手柄，您需要将 `control_mode` 设置为 `"gamepad"` 并在配置文件中定义 `teleop` 部分。
+
+```json
+{
+  "env": {
+    "teleop": {
+      "type": "gamepad",
+      "use_gripper": true
+    },
+    "processor": {
+      "control_mode": "gamepad",
+      "gripper": {
+        "use_gripper": true
+      }
+    }
+  }
+}
+```
+
+<p align="center">
+  <img
+    src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/gamepad_guide.jpg?raw=true"
+    alt="Figure shows the control mappings on a Logitech gamepad."
+    title="Gamepad Control Mapping"
+    width="100%"
+  ></img>
+</p>
+<p align="center">
+  <i>用于机器人控制和 episode 管理的游戏手柄按钮映射</i>
+</p>
+
+**设置 SO101 主臂**
+
+SO101 主臂具有减速齿轮，允许它在探索期间移动和跟踪从动臂。因此，接管比无齿轮的 SO100 更平滑。
+
+要设置 SO101 主臂，您需要将 `control_mode` 设置为 `"leader"` 并在配置文件中定义 `teleop` 部分。
+
+```json
+{
+  "env": {
+    "teleop": {
+      "type": "so101_leader",
+      "port": "/dev/tty.usbmodem585A0077921",
+      "use_degrees": true
+    },
+    "processor": {
+      "control_mode": "leader",
+      "gripper": {
+        "use_gripper": true
+      }
+    }
+  }
+}
+```
+
+为了标注 episode 的成功/失败，**您需要**使用键盘按 `s` 表示成功，按 `esc` 表示失败。
+在在线训练期间，按 `space` 接管策略，再次按 `space` 将控制权交还给策略。
+
+<details>
+<summary><strong>视频：SO101 主臂遥操作</strong></summary>
+
+<div class="video-container">
+  <video controls width="600">
+    <source
+      src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/so101_leader_tutorial.mp4"
+      type="video/mp4"
+    />
+  </video>
+</div>
+
+<p align="center"><i>SO101 主臂遥操作示例，主臂跟踪从动臂，按 `space` 进行干预</i></p>
+</details>
+
+**记录演示**
+
+启动记录过程，配置文件示例可以在[这里](https://huggingface.co/datasets/aractingi/lerobot-example-config-files/blob/main/env_config_so100.json)找到：
+
+```bash
+python -m lerobot.rl.gym_manipulator --config_path src/lerobot/configs/env_config_so100.json
+```
+
+记录期间：
+
+1. 机器人将重置到配置文件 `env.processor.reset.fixed_reset_joint_positions` 中定义的初始位置
+2. 成功完成任务
+3. 当您按下"成功"按钮时，episode 结束，奖励为 1
+4. 如果达到时间限制或按下失败按钮，episode 结束，奖励为 0
+5. 您可以通过按"重新记录"按钮重新记录 episode
+6. 该过程自动继续到下一个 episode
+7. 记录所有 episodes 后，数据集会被推送到 Hugging Face Hub（可选）并保存在本地
+
+### 处理数据集
+
+收集演示后，处理它们以确定最佳相机裁剪。
+强化学习对背景干扰很敏感，因此将图像裁剪到相关工作空间区域很重要。
+
+视觉 RL 算法直接从像素输入学习，使其容易受到无关视觉信息的影响。背景元素（如变化的光照、阴影、移动的人或工作空间外的物体）可能会混淆学习过程。良好的 ROI 选择应该：
+
+- 仅包含发生任务的基本工作空间
+- 捕获机器人的末端执行器和任务中涉及的所有物体
+- 排除不必要的背景元素和干扰
+
+注意：如果您已经知道裁剪参数，可以跳过此步骤，只需在记录期间在配置文件中设置 `crop_params_dict`。
+
+**确定裁剪参数**
+
+使用 `crop_dataset_roi.py` 脚本交互式选择相机图像中的感兴趣区域：
+
+```bash
+python -m lerobot.rl.crop_dataset_roi --repo-id username/pick_lift_cube
+```
+
+1. 对于每个相机视图，脚本将显示第一帧
+2. 在相关工作空间区域周围绘制矩形
+3. 按 'c' 确认选择
+4. 对所有相机视图重复
+5. 脚本输出裁剪参数并创建新的裁剪数据集
+
+示例输出：
+
+```
+Selected Rectangular Regions of Interest (top, left, height, width):
+observation.images.side: [180, 207, 180, 200]
+observation.images.front: [180, 250, 120, 150]
+```
+
+<p align="center">
+  <img
+    src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/crop_dataset.gif"
+    width="600"
+  />
+</p>
+
+<p align="center">
+  <i>用于选择感兴趣区域的交互式裁剪工具</i>
+</p>
+
+**更新配置**
+
+将这些裁剪参数添加到您的训练配置中：
+
+```json
+{
+  "env": {
+    "processor": {
+      "image_preprocessing": {
+        "crop_params_dict": {
+          "observation.images.side": [180, 207, 180, 200],
+          "observation.images.front": [180, 250, 120, 150]
+        },
+        "resize_size": [128, 128]
+      }
+    }
+  }
+}
+```
+
+**推荐的图像分辨率**
+
+大多数基于视觉的策略已在 **128×128**（默认）或 **64×64** 像素的方形输入上得到验证。因此，我们建议将 resize_size 参数设置为 [128, 128]——或者如果您需要节省 GPU 内存和带宽，可以使用 [64, 64]。其他分辨率也可能可行，但尚未经过广泛测试。
+
+### 训练奖励分类器
+
+奖励分类器在 HIL-SERL 工作流程中发挥着重要作用，通过自动分配奖励和自动检测 episode 成功来完成。无需为每个时间步手动定义奖励函数或依赖人类反馈，奖励分类器学习从视觉观察中预测成功/失败。这使 RL 算法能够通过基于机器人的相机输入提供一致且自动化的奖励信号来高效学习。
+
+本指南解释了如何为 LeRobot 的人机交互回路强化学习实现训练奖励分类器。奖励分类器学习在给定状态下预测奖励值，可以在 RL 设置中用于训练策略。
+
+**注意**：训练奖励分类器是可选的。您可以通过使用游戏手柄或键盘设备手动标注成功来开始第一轮 RL 实验。
+
+`modeling_classifier.py` 中的奖励分类器实现使用预训练的视觉模型来处理图像。它可以输出单个值用于二元奖励以预测成功/失败情况，或输出多个值用于多类设置。
+
+**为奖励分类器收集数据集**
+
+在训练之前，您需要收集带有标记示例的数据集。`gym_manipulator.py` 中的 `record_dataset` 函数使收集观察、动作和奖励数据集的过程成为可能。
+
+要收集数据集，您需要根据 HILSerlRobotEnvConfig 修改环境配置中的一些参数。
+
+```bash
+python -m lerobot.rl.gym_manipulator --config_path src/lerobot/configs/reward_classifier_train_config.json
+```
+
+**数据收集的关键参数**
+
+- **mode**：将其设置为 `"record"` 以收集数据集（在根级别）
+- **dataset.repo_id**：`"hf_username/dataset_name"`，hub 上的数据集和仓库名称
+- **dataset.num_episodes_to_record**：要记录的 episodes 数量
+- **env.processor.reset.terminate_on_success**：当检测到成功时是否自动终止 episodes（默认：`true`）
+- **env.fps**：记录的每秒帧数
+- **dataset.push_to_hub**：是否将数据集推送到 hub
+
+`env.processor.reset.terminate_on_success` 参数允许您控制 episode 终止行为。当设置为 `false` 时，即使在检测到成功后，episodes 也会继续，允许您收集更多带有 reward=1 标签的正面示例。这对于训练奖励分类器至关重要，因为它在数据集中提供了更多成功状态示例。当设置为 `true`（默认）时，episodes 在成功检测后立即终止。
+
+**重要提示**：对于奖励分类器训练，将 `terminate_on_success: false` 设置为收集足够的正面示例。对于常规 HIL-SERL 训练，保持为 `true` 以在成功完成任务时启用自动 episode 终止。
+
+数据收集的示例配置部分：
+
+```json
+{
+  "env": {
+    "type": "gym_manipulator",
+    "name": "real_robot",
+    "fps": 10,
+    "processor": {
+      "reset": {
+        "reset_time_s": 5.0,
+        "control_time_s": 20.0,
+        "terminate_on_success": false
+      },
+      "gripper": {
+        "use_gripper": true
+      }
+    },
+    "robot": {
+      // ... 机器人配置 ...
+    },
+    "teleop": {
+      // ... 遥操作器配置 ...
+    }
+  },
+  "dataset": {
+    "repo_id": "hf_username/dataset_name",
+    "dataset_root": "data/your_dataset",
+    "task": "reward_classifier_task",
+    "num_episodes_to_record": 20,
+    "replay_episode": null,
+    "push_to_hub": true
+  },
+  "mode": "record",
+  "device": "cpu"
+}
+```
+
+**奖励分类器配置**
+
+奖励分类器使用 `configuration_classifier.py` 进行配置。以下是关键参数：
+
+- **model_name**：基础模型架构（例如，我们主要使用 `"helper2424/resnet10"`）
+- **model_type**：`"cnn"` 或 `"transformer"`
+- **num_cameras**：相机输入数量
+- **num_classes**：输出类别数量（二元成功/失败通常为 2）
+- **hidden_dim**：隐藏表示的大小
+- **dropout_rate**：正则化参数
+- **learning_rate**：优化器的学习率
+
+训练[奖励分类器](https://huggingface.co/datasets/aractingi/lerobot-example-config-files/blob/main/reward_classifier_train_config.json)的示例配置：
+
+```json
+{
+  "policy": {
+    "type": "reward_classifier",
+    "model_name": "helper2424/resnet10",
+    "model_type": "cnn",
+    "num_cameras": 2,
+    "num_classes": 2,
+    "hidden_dim": 256,
+    "dropout_rate": 0.1,
+    "learning_rate": 1e-4,
+    "device": "cuda",
+    "use_amp": true,
+    "input_features": {
+      "observation.images.front": {
+        "type": "VISUAL",
+        "shape": [3, 128, 128]
+      },
+      "observation.images.side": {
+        "type": "VISUAL",
+        "shape": [3, 128, 128]
+      }
+    }
+  }
+}
+```
+
+**训练分类器**
+
+要训练分类器，请使用 `train.py` 脚本和您的配置：
+
+```bash
+lerobot-train --config_path path/to/reward_classifier_train_config.json
+```
+
+**部署和测试模型**
+
+要使用训练好的奖励分类器，请配置 `HILSerlRobotEnvConfig` 以使用您的模型：
+
+<!-- prettier-ignore-start -->
+```python
+config = GymManipulatorConfig(
+    env=HILSerlRobotEnvConfig(
+        processor=HILSerlProcessorConfig(
+            reward_classifier=RewardClassifierConfig(
+                pretrained_path="path_to_your_pretrained_trained_model"
+            )
+        ),
+        # 其他环境参数
+    ),
+    dataset=DatasetConfig(...),
+    mode=None  # 用于训练
+)
+```
+<!-- prettier-ignore-end -->
+
+或在 json 配置文件中设置参数。
+
+```json
+{
+  "env": {
+    "processor": {
+      "reward_classifier": {
+        "pretrained_path": "path_to_your_pretrained_model",
+        "success_threshold": 0.7,
+        "success_reward": 1.0
+      },
+      "reset": {
+        "terminate_on_success": true
+      }
+    }
+  }
+}
+```
+
+运行 `gym_manipulator.py` 测试模型。
+
+```bash
+python -m lerobot.rl.gym_manipulator --config_path path/to/env_config.json
+```
+
+奖励分类器将根据机器人相机的视觉输入自动提供奖励。
+
+**训练奖励分类器的示例工作流程**
+
+1. **创建配置文件**：
+   为奖励分类器和环境创建必要的 json 配置文件。查看[这里](https://huggingface.co/datasets/lerobot/config_examples/resolve/main/reward_classifier/config.json)的示例。
+
+2. **收集数据集**：
+
+   ```bash
+   python -m lerobot.rl.gym_manipulator --config_path src/lerobot/configs/env_config.json
+   ```
+
+3. **训练分类器**：
+
+   ```bash
+   lerobot-train --config_path src/lerobot/configs/reward_classifier_train_config.json
+   ```
+
+4. **测试分类器**：
+   ```bash
+   python -m lerobot.rl.gym_manipulator --config_path src/lerobot/configs/env_config.json
+   ```
+
+### 使用演员-学习者进行训练
+
+LeRobot 系统使用分布式演员-学习者架构进行训练。这种架构将机器人交互与学习过程解耦，允许它们并发运行而不会相互阻塞。演员服务器处理机器人观察和动作，将交互数据发送到学习器服务器。学习器服务器执行梯度下降并定期更新演员的策略权重。您需要启动两个进程：一个学习器和一个演员。
+
+**配置设置**
+
+创建训练配置文件（示例可在[这里](https://huggingface.co/datasets/lerobot/config_examples/resolve/main/rl/train_config.json)获得）。训练配置基于 `lerobot/configs/train.py` 中的主 `TrainRLServerPipelineConfig` 类。
+
+1. 配置策略设置（`type="sac"`、`device` 等）
+2. 将 `dataset` 设置为您的裁剪数据集
+3. 使用裁剪参数配置环境设置
+4. 检查 [configuration_sac.py](https://github.com/huggingface/lerobot/blob/main/src/lerobot/policies/sac/configuration_sac.py#L79) 中与 SAC 相关的其他参数。
+5. 验证 `policy` 配置是否正确，具有适合您任务的正确 `input_features` 和 `output_features`。
+
+**启动学习器**
+
+首先，启动学习器服务器进程：
+
+```bash
+python -m lerobot.rl.learner --config_path src/lerobot/configs/train_config_hilserl_so100.json
+```
+
+学习器：
+
+- 初始化策略网络
+- 准备重放缓冲区
+- 打开 `gRPC` 服务器与演员通信
+- 处理转换并更新策略
+
+**启动演员**
+
+在单独的终端中，使用相同的配置启动演员进程：
+
+```bash
+python -m lerobot.rl.actor --config_path src/lerobot/configs/train_config_hilserl_so100.json
+```
+
+演员：
+
+- 通过 `gRPC` 连接到学习器
+- 初始化环境
+- 执行策略的rollout以收集经验
+- 将转换发送到学习器
+- 接收更新的策略参数
+
+**训练流程**
+
+训练自动进行：
+
+1. 演员在环境中执行策略
+2. 收集转换并发送到学习器
+3. 学习器根据这些转换更新策略
+4. 更新的策略参数发送回演员
+5. 该过程继续，直到达到指定的步数限制
+
+**人机交互回路**
+
+- 高效学习的关键是进行人类干预，以提供纠正反馈并完成任务以帮助策略学习和探索。
+- 要执行人类干预，您可以按游戏手柄上的右上触发按钮（或键盘上的 `space` 键）。这将暂停策略动作并允许您接管。
+- 成功的实验是一个开始时人类必须干预，但随着策略改进而减少干预量的实验。您可以在 `wandb` 仪表板中监控干预率。
+
+<p align="center">
+  <img
+    src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/hil_effect.png?raw=true"
+    alt="Figure shows the control mappings on a Logitech gamepad."
+    title="Gamepad Control Mapping"
+    width="100%"
+  ></img>
+</p>
+
+<p align="center">
+  <i>
+    显示人类干预如何随时间帮助指导策略学习的示例
+  </i>
+</p>
+
+- 该图显示了交互步骤上的 episode 奖励图。该图显示了人类干预对策略学习的影响。
+- 橙色曲线是没有任何人类干预的实验。而粉红色和蓝色曲线是有人类干预的实验。
+- 我们可以观察到，当存在人类干预时，策略开始获得最大奖励的步数减少了四分之一。
+
+**监控和调试**
+
+如果您在配置中将 `wandb.enable` 设置为 `true`，您可以通过 [Weights & Biases](https://wandb.ai/site/) 仪表板实时监控训练进度。
+
+### 人类干预指南
+
+学习过程对干预策略非常敏感。需要几次运行才能了解如何有效干预。一些提示和建议：
+
+- 在训练开始时允许策略探索几个 episodes。
+- 避免长时间干预。尝试在机器人偏离轨道时进行干预以纠正其行为。
+- 一旦策略开始实现任务，即使不完美，您可以将干预限制为简单的快速动作，例如简单的抓取命令。
+
+理想的行为是您的干预率在训练期间应该逐渐下降，如下图所示。
+
+<p align="center">
+  <img
+    src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/intervention_rate_tutorial_rl.png?raw=true"
+    alt="Intervention rate"
+    title="Intervention rate during training"
+    width="100%"
+  ></img>
+</p>
+
+<p align="center">
+  <i>
+    在拾取和提起立方体任务的训练运行期间的干预率图
+  </i>
+</p>
+
+### 要调整的关键超参数
+
+一些配置值对训练稳定性和速度有着不成比例的影响：
+
+- **`temperature_init`**（`policy.temperature_init`）——SAC 中的初始熵温度。较高的值鼓励更多探索；较低的值使策略在早期更具确定性。一个好的起点是 `1e-2`。我们观察到将其设置得太高会使人类干预无效并减慢学习速度。
+- **`policy_parameters_push_frequency`**（`policy.actor_learner_config.policy_parameters_push_frequency`）——从学习器向演员推送权重之间的间隔（以_秒_为单位）。默认值为 `4 秒`。减少到 **1-2 秒** 以提供更新的权重（代价是更多的网络流量）；仅在连接速度慢时增加，因为这会降低样本效率。
+- **`storage_device`**（`policy.storage_device`）——学习器保存策略参数的设备。如果您有空闲的 GPU 内存，请将此设置为 `"cuda"`（而不是默认的 `"cpu"`）。将权重保持在 GPU 上可以消除 CPU→GPU 传输开销，并可以显著增加每秒学习器更新的数量。
+
+恭喜，您已完成本教程！
+
+> [!TIP]
+> 如果您有任何问题或需要帮助，请在 [Discord](https://discord.com/invite/s3KuuzsPFb) 上联系我们。
+
+论文引用：
+
+```
+@article{luo2024precise,
+  title={Precise and Dexterous Robotic Manipulation via Human-in-the-Loop Reinforcement Learning},
+  author={Luo, Jianlan and Xu, Charles and Wu, Jeffrey and Levine, Sergey},
+  journal={arXiv preprint arXiv:2410.21845},
+  year={2024}
+}
+```

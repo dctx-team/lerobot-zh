@@ -1,0 +1,127 @@
+# 安装
+
+## 安装 [`miniforge`](https://conda-forge.org/download/)
+
+```bash
+wget "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh"
+bash Miniforge3-$(uname)-$(uname -m).sh
+```
+
+## 环境设置
+
+使用 conda 创建一个 Python 3.10 的虚拟环境：
+
+```bash
+conda create -y -n lerobot python=3.10
+```
+
+然后激活你的 conda 环境，每次打开 shell 使用 lerobot 时都需要执行此操作：
+
+```bash
+conda activate lerobot
+```
+
+当使用 `conda` 时，在你的环境中安装 `ffmpeg`：
+
+```bash
+conda install ffmpeg -c conda-forge
+```
+
+> [!TIP]
+> 这通常会为你的平台安装使用 `libsvtav1` 编码器编译的 `ffmpeg 7.X`。如果不支持 `libsvtav1`（使用 `ffmpeg -encoders` 检查支持的编码器），你可以：
+>
+> - _[在任何平台上]_ 使用以下命令显式安装 `ffmpeg 7.X`：
+>
+> ```bash
+> conda install ffmpeg=7.1.1 -c conda-forge
+> ```
+>
+> - _[仅限 Linux]_ 如果你想使用自己的 ffmpeg：安装 [ffmpeg 构建依赖项](https://trac.ffmpeg.org/wiki/CompilationGuide/Ubuntu#GettheDependencies) 并 [使用 libsvtav1 从源代码编译 ffmpeg](https://trac.ffmpeg.org/wiki/CompilationGuide/Ubuntu#libsvtav1)，并确保使用 `which ffmpeg` 来确认使用与你的安装对应的 ffmpeg 二进制文件。
+
+## 安装 LeRobot 🤗
+
+### 从源代码安装
+
+首先，克隆仓库并导航到目录：
+
+```bash
+git clone https://github.com/huggingface/lerobot.git
+cd lerobot
+```
+
+然后，以可编辑模式安装库。如果你计划为代码做出贡献，这会很有用。
+
+```bash
+pip install -e .
+```
+
+### 从 PyPI 安装
+
+**核心库：**
+使用以下命令安装基础包：
+
+```bash
+pip install lerobot
+```
+
+_这只会安装默认依赖项。_
+
+**额外功能：**
+要安装额外的功能，使用以下命令之一：
+
+```bash
+pip install 'lerobot[all]'          # 所有可用功能
+pip install 'lerobot[aloha,pusht]'  # 特定功能（Aloha 和 Pusht）
+pip install 'lerobot[feetech]'      # Feetech 电机支持
+```
+
+_将 `[...]` 替换为你需要的功能。_
+
+**可用标签：**
+要查看可选依赖项的完整列表，请访问：
+https://pypi.org/project/lerobot/
+
+> [!NOTE]
+> 对于 lerobot 0.4.0，如果你想安装 pi，你需要执行：`pip install "lerobot[pi]@git+https://github.com/huggingface/lerobot.git"`
+
+### 故障排除
+
+如果遇到构建错误，你可能需要安装额外的依赖项：`cmake`、`build-essential` 和 `ffmpeg libs`。
+要在 Linux 上安装这些依赖项，请运行：
+
+```bash
+sudo apt-get install cmake build-essential python-dev pkg-config libavformat-dev libavcodec-dev libavdevice-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev pkg-config
+```
+
+对于其他系统，请参阅：[编译 PyAV](https://pyav.org/docs/develop/overview/installation.html#bring-your-own-ffmpeg)
+
+## 可选依赖项
+
+LeRobot 为特定功能提供了可选的额外组件。可以组合多个额外组件（例如，`.[aloha,feetech]`）。有关所有可用的额外组件，请参考 `pyproject.toml`。
+
+### 模拟环境
+
+安装环境包：`aloha`（[gym-aloha](https://github.com/huggingface/gym-aloha)）或 `pusht`（[gym-pusht](https://github.com/huggingface/gym-pusht)）
+示例：
+
+```bash
+pip install -e ".[aloha]" # 或者 "[pusht]" 等
+```
+
+### 电机控制
+
+对于 Koch v1.1，安装 Dynamixel SDK；对于 SO100/SO101/Moss，安装 Feetech SDK。
+
+```bash
+pip install -e ".[feetech]" # 或者 "[dynamixel]" 等
+```
+
+### 实验追踪
+
+要使用 [Weights and Biases](https://docs.wandb.ai/quickstart) 进行实验追踪，请使用以下命令登录：
+
+```bash
+wandb login
+```
+
+如果你的机器人还没有准备好，你现在可以组装它，在左侧查找你的机器人类型。然后按照下面的链接使用 Lerobot 操作你的机器人。

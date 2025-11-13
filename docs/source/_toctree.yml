@@ -1,0 +1,90 @@
+- sections:
+  - local: index
+    title: LeRobot
+  - local: installation
+    title: 安装
+  title: 入门指南
+- sections:
+  - local: il_robots
+    title: 机器人模仿学习
+  - local: cameras
+    title: 相机
+  - local: integrate_hardware
+    title: 集成你的硬件
+  - local: hilserl
+    title: 使用强化学习训练机器人
+  - local: hilserl_sim
+    title: 仿真中的强化学习训练
+  - local: async
+    title: 使用异步推理
+  - local: multi_gpu_training
+    title: 多GPU训练
+  title: 教程
+- sections:
+  - local: lerobot-dataset-v3
+    title: 使用 LeRobotDataset
+  - local: porting_datasets_v3
+    title: 迁移大型数据集
+  - local: using_dataset_tools
+    title: 使用数据集工具
+  title: 数据集
+- sections:
+  - local: act
+    title: ACT
+  - local: smolvla
+    title: SmolVLA
+  - local: pi0
+    title: π₀
+  - local: pi05
+    title: π₀.₅
+  - local: groot
+    title: NVIDIA GR00T
+  title: 策略模型
+- sections:
+  - local: envhub
+    title: Hub环境
+  - local: il_sim
+    title: 仿真中的模仿学习
+  - local: libero
+    title: 使用 LIBERO
+  - local: metaworld
+    title: 使用 MetaWorld
+  title: 仿真环境
+- sections:
+  - local: introduction_processors
+    title: 机器人处理器简介
+  - local: debug_processor_pipeline
+    title: 调试处理器管道
+  - local: implement_your_own_processor
+    title: 实现自定义处理器
+  - local: processors_robots_teleop
+    title: 机器人和遥操作器的处理器
+  title: 机器人处理器
+- sections:
+  - local: so101
+    title: SO-101
+  - local: so100
+    title: SO-100
+  - local: koch
+    title: Koch v1.1
+  - local: lekiwi
+    title: LeKiwi
+  - local: hope_jr
+    title: Hope Jr
+  - local: reachy2
+    title: Reachy 2
+  title: 机器人平台
+- sections:
+  - local: phone_teleop
+    title: 手机
+  title: 遥操作器
+- sections:
+  - local: notebooks
+    title: Notebooks
+  - local: feetech
+    title: 更新 Feetech 固件
+  title: 资源
+- sections:
+  - local: backwardcomp
+    title: 向后兼容性
+  title: 关于

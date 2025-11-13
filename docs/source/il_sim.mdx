@@ -1,0 +1,220 @@
+# 仿真中的模仿学习
+
+本教程将解释如何训练神经网络在仿真环境中通过模仿学习控制机器人。
+
+**您将学习：**
+
+1. 如何使用 [gym-hil](https://github.com/huggingface/gym-hil) 在仿真中记录数据集并可视化数据集。
+2. 如何使用您的数据训练策略。
+3. 如何在仿真中评估您的策略并可视化结果。
+
+对于仿真环境，我们使用与人机协同（Human-In-the-Loop, HIL）强化学习算法相同的[仓库](https://github.com/huggingface/gym-hil)。
+该环境基于 [MuJoCo](https://mujoco.org)，允许您以 LeRobotDataset 格式记录数据集。
+使用 Logitech F710 等控制器进行远程操作最为方便，但如果您愿意接受挑战，也可以使用键盘。
+
+## 安装
+
+首先，在 LeRobot 环境中安装 `gym_hil` 包，进入您的 LeRobot 文件夹并运行此命令：
+
+```bash
+pip install -e ".[hilserl]"
+```
+
+## 远程操作并记录数据集
+
+要在 LeRobot 中使用 `gym_hil`，您需要使用配置文件。示例配置文件可以在[这里](https://huggingface.co/datasets/lerobot/config_examples/resolve/main/sim_il/env_config.json)找到。
+
+要进行远程操作并收集数据集，我们需要修改此配置文件。以下是模仿学习数据收集的示例配置：
+
+```json
+{
+  "env": {
+    "type": "gym_manipulator",
+    "name": "gym_hil",
+    "task": "PandaPickCubeGamepad-v0",
+    "fps": 10
+  },
+  "dataset": {
+    "repo_id": "your_username/il_gym",
+    "root": null,
+    "task": "pick_cube",
+    "num_episodes_to_record": 30,
+    "replay_episode": null,
+    "push_to_hub": true
+  },
+  "mode": "record",
+  "device": "cuda"
+}
+```
+
+关键配置要点：
+
+- 在 `dataset` 部分设置您的 `repo_id`：`"repo_id": "your_username/il_gym"`
+- 设置 `num_episodes_to_record: 30` 以收集 30 个演示回合
+- 确保 `mode` 设置为 `"record"`
+- 如果您没有 NVIDIA GPU，将 `"device": "cuda"` 更改为 `"mps"`（用于 macOS）或 `"cpu"`
+- 要使用键盘而不是游戏手柄，将 `"task"` 更改为 `"PandaPickCubeKeyboard-v0"`
+
+然后我们可以运行此命令开始：
+
+<hfoptions id="teleop_sim">
+<hfoption id="Linux">
+
+```bash
+python -m lerobot.rl.gym_manipulator --config_path path/to/env_config_gym_hil_il.json
+```
+
+</hfoption>
+<hfoption id="MacOS">
+
+```bash
+mjpython -m lerobot.rl.gym_manipulator --config_path path/to/env_config_gym_hil_il.json
+```
+
+</hfoption>
+</hfoptions>
+
+渲染后，您可以使用游戏手柄或键盘远程操作机器人，下面您可以找到游戏手柄/键盘控制说明。
+
+请注意，要远程操作机器人，您必须按住"人工接管暂停策略"按钮 `RB` 以启用控制！
+
+**游戏手柄控制**
+
+<p align="center">
+  <img
+    src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/gamepad_guide.jpg?raw=true"
+    alt="Figure shows the control mappings on a Logitech gamepad."
+    title="Gamepad Control Mapping"
+    width="100%"
+  ></img>
+</p>
+<p align="center">
+  <i>用于机器人控制和回合管理的游戏手柄按钮映射</i>
+</p>
+
+**键盘控制**
+
+对于键盘控制，使用 `空格键` 启用控制，并使用以下按键移动机器人：
+
+```bash
+  方向键：在 X-Y 平面移动
+  Shift 和 Shift_R：在 Z 轴移动
+  Right Ctrl 和 Left Ctrl：打开和关闭夹爪
+  ESC：退出
+```
+
+## 可视化数据集
+
+如果您将数据集上传到 Hub，可以通过复制粘贴您的 repo id [在线可视化您的数据集](https://huggingface.co/spaces/lerobot/visualize_dataset)。
+
+<p align="center">
+  <img
+    src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/dataset_visualizer_sim.png"
+    alt="Figure shows the dataset visualizer"
+    title="Dataset visualization"
+    width="100%"
+  ></img>
+</p>
+<p align="center">
+  <i>数据集可视化工具</i>
+</p>
+
+## 训练策略
+
+要训练策略来控制您的机器人，请使用 [`lerobot-train`](https://github.com/huggingface/lerobot/blob/main/src/lerobot/scripts/train.py) 脚本。需要一些参数。以下是示例命令：
+
+```bash
+lerobot-train \
+  --dataset.repo_id=${HF_USER}/il_gym \
+  --policy.type=act \
+  --output_dir=outputs/train/il_sim_test \
+  --job_name=il_sim_test \
+  --policy.device=cuda \
+  --wandb.enable=true
+```
+
+让我们解释一下这个命令：
+
+1. 我们通过 `--dataset.repo_id=${HF_USER}/il_gym` 提供了数据集作为参数。
+2. 我们通过 `policy.type=act` 提供了策略。这会从 [`configuration_act.py`](https://github.com/huggingface/lerobot/blob/main/src/lerobot/policies/act/configuration_act.py) 加载配置。重要的是，该策略将自动适应您机器人的电机状态数量、电机动作数量和相机数量（例如 `laptop` 和 `phone`），这些已保存在您的数据集中。
+3. 我们提供了 `policy.device=cuda`，因为我们在 Nvidia GPU 上训练，但您可以使用 `policy.device=mps` 在 Apple Silicon 上训练。
+4. 我们提供了 `wandb.enable=true` 以使用 [Weights and Biases](https://docs.wandb.ai/quickstart) 可视化训练图表。这是可选的，但如果您使用它，请确保通过运行 `wandb login` 登录。
+
+训练应该需要几个小时，100k 步（默认值）在 Nvidia A100 上需要大约 1 小时。您将在 `outputs/train/il_sim_test/checkpoints` 中找到检查点。
+
+#### 使用 Collab 训练
+
+如果您的本地计算机没有强大的 GPU，您可以按照 [ACT 训练笔记本](./notebooks#training-act) 使用 Google Collab 训练您的模型。
+
+#### 上传策略检查点
+
+训练完成后，使用以下命令上传最新的检查点：
+
+```bash
+huggingface-cli upload ${HF_USER}/il_sim_test \
+  outputs/train/il_sim_test/checkpoints/last/pretrained_model
+```
+
+您也可以上传中间检查点：
+
+```bash
+CKPT=010000
+huggingface-cli upload ${HF_USER}/il_sim_test${CKPT} \
+  outputs/train/il_sim_test/checkpoints/${CKPT}/pretrained_model
+```
+
+## 在仿真中评估您的策略
+
+要评估您的策略，我们必须使用配置文件。示例可以在[这里](https://huggingface.co/datasets/lerobot/config_examples/resolve/main/sim_il/eval_config.json)找到。
+
+以下是示例评估配置：
+
+```json
+{
+  "env": {
+    "type": "gym_manipulator",
+    "name": "gym_hil",
+    "task": "PandaPickCubeGamepad-v0",
+    "fps": 10
+  },
+  "dataset": {
+    "repo_id": "your_username/il_sim_dataset",
+    "dataset_root": null,
+    "task": "pick_cube"
+  },
+  "pretrained_policy_name_or_path": "your_username/il_sim_model",
+  "device": "cuda"
+}
+```
+
+确保替换：
+
+- `repo_id` 为您训练使用的数据集（例如 `your_username/il_sim_dataset`）
+- `pretrained_policy_name_or_path` 为您的模型 ID（例如 `your_username/il_sim_model`）
+
+然后您可以运行此命令来可视化您训练的策略
+
+<hfoptions id="eval_policy">
+<hfoption id="Linux">
+
+```bash
+python -m lerobot.rl.eval_policy --config_path=path/to/eval_config_gym_hil.json
+```
+
+</hfoption>
+<hfoption id="MacOS">
+
+```bash
+mjpython -m lerobot.rl.eval_policy --config_path=path/to/eval_config_gym_hil.json
+```
+
+</hfoption>
+</hfoptions>
+
+> [!WARNING]
+> 虽然在仿真中训练 ACT 的主要工作流程很简单，但在如何设置任务、定义环境的初始状态以及确定收集期间所需的数据类型以学习最有效的策略方面，还有很大的探索空间。如果您训练的策略表现不佳，请使用我们的可视化工具检查其训练所用数据集的质量，以及与 ACT 和仿真相关的动作值和各种超参数。
+
+恭喜 🎉，您已完成本教程。如果您想继续在仿真中使用 LeRobot，请遵循此[关于使用 HIL-SERL 进行仿真强化学习的教程](https://huggingface.co/docs/lerobot/hilserl_sim)
+
+> [!TIP]
+> 如果您有任何问题或需要帮助，请在 [Discord](https://discord.com/invite/s3KuuzsPFb) 上联系我们。
