@@ -1,0 +1,98 @@
+# LeRobot 训练的计算硬件指南
+
+LeRobot 策略训练的粗略规模估算：每个策略需要多少显存、训练时间如何，以及当本地硬件不足时在哪里运行。
+
+以下数字是**指示性的**——用于选择硬件的数量级数字，而非精确预测。吞吐量在很大程度上取决于数据集 I/O、图像分辨率、批次大小和 GPU 数量。
+
+## 按策略组划分的内存需求
+
+策略按主干网络大小聚类；下面的分组为每组提供单一的显存范围，而不是为每个策略重复数字。内存大致与批次大小成线性关系；AdamW（LeRobot 默认优化器）携带优化器状态，比单纯的前向+反向传播增加约 30-100%。
+
+| 组别       | 策略                                        | 峰值显存 (BS 8, AdamW) | 适合的入门级 GPU                  |
+| ---------- | ------------------------------------------- | ---------------------: | --------------------------------- |
+| 轻量级 BC  | `act`, `vqbet`, `tdmpc`                     |                 ~2–6GB | 笔记本 GPU (RTX 3060), L4, A10G   |
+| 扩散模型   | `diffusion`, `multi_task_dit`               |                ~8–14GB | RTX 4070+ / L4 / A10G             |
+| 小型 VLA   | `smolvla`                                   |               ~10–16GB | RTX 4080+ / L4 / A10G             |
+| 大型 VLA   | `pi0`, `pi0_fast`, `pi05`, `xvla`, `wall_x` |               ~24–40GB | A100 40 GB+ (24 GB 在 BS 1 时紧张) |
+| 多模态     | `groot`, `eo1`                              |               ~24–40GB | A100 40 GB+                       |
+| 强化学习   | `sac`                                       |            取决于配置  | 参见 [HIL-SERL 指南](./hilserl)   |
+
+内存受限？降低批次大小（约线性关系），使用梯度累积来恢复有效批次，或者对于 SmolVLA 保持 `freeze_vision_encoder=True`。
+
+## 训练时间
+
+机器人模仿学习通常在**数据集上的 5-10 个 epoch** 内收敛，而不是数十万个原始步骤。一旦知道 epoch 数量，实际时间本质上是：
+
+```text
+total_frames    = 所有回合的帧数总和      # 50 回合 × 30 fps × 30 秒 ≈ 45,000
+steps_per_epoch = ceil(total_frames / (num_gpus × batch_size))
+total_steps     = epochs × steps_per_epoch
+wall_clock      ≈ total_steps × per_step_time
+```
+
+每步时间取决于策略和 GPU。下表中的数字是参考值——选择最接近您设置的行，如果训练更长或更短，则与 `total_steps` 成线性比例。
+
+### 常见场景
+
+**在约 50 回合数据集（30 fps × 30 秒约 45k 帧）上训练 5 个 epoch** 的指示性实际时间，默认优化器（AdamW），640×480 图像：
+
+| 设置                                 | 策略           | 批次 | 实际时间   |
+| ------------------------------------ | -------------- | ---- | ---------: |
+| 单个 RTX 4090 / RTX 3090 (24 GB)     | `act`          | 8    |  ~30–60分钟 |
+| 单个 RTX 4090 / RTX 3090 (24 GB)     | `diffusion`    | 8    |      ~2–4小时 |
+| 单个 L4 / A10G (24 GB)               | `act`          | 8    |      ~1–2小时 |
+| 单个 L4 / A10G (24 GB)               | `smolvla`      | 4    |      ~3–6小时 |
+| 单个 A100 40 GB                      | `smolvla`      | 16   |      ~1–2小时 |
+| 单个 A100 40 GB                      | `pi0` / `pi05` | 4    |      ~4–8小时 |
+| 4× H100 80 GB 集群 (`accelerate`)    | `diffusion`    | 32   |  ~30–60分钟 |
+| 4× H100 80 GB 集群 (`accelerate`)    | `smolvla`      | 32   |      ~1–2小时 |
+| Apple Silicon M1/M2/M3 Max (MPS)     | `act`          | 4    |     ~6–14小时 |
+
+这些是数量级数字。实际运行会因图像分辨率、数据集 I/O、数据加载器线程和确切的 GPU 型号而偏差 ±50%。它们作为"这次运行需要一小时还是一天？"的直觉很有用，但不是 SLA。
+
+### 多 GPU 非常重要
+
+`accelerate launch --num_processes=N` 是缩短训练时间的最简单方法。每个优化器步骤在大致相同的实际时间内处理 `N × batch_size` 个样本，因此 4 个 GPU ≈ 4 倍加速（对于计算受限的运行）。完整设置请参见[多 GPU 训练](./multi_gpu_training)指南。
+
+在 4×H100 80 GB 集群上的参考数据点（`accelerate launch --num_processes=4`），5000 步，批次 32，AdamW，数据集 [`imstevenpmwork/super_poulain_draft`](https://huggingface.co/datasets/imstevenpmwork/super_poulain_draft)（约 50 回合，约 640×480 图像）：
+
+| 策略        | 实际时间   | `update_s` | `dataloading_s` | GPU 利用率 | 重要标志                                                                                                                       |
+| ----------- | ---------- | ---------: | --------------: | ---------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `diffusion` | 16分17秒   |      0.167 |           0.015 | ~90%       | 默认值（从头训练）                                                                                                             |
+| `smolvla`   | 27分49秒   |      0.312 |           0.011 | ~80%       | `--policy.path=lerobot/smolvla_base`, `freeze_vision_encoder=false`, `train_expert_only=false`                                 |
+| `pi05`      | 3小时41分  |      2.548 |           0.014 | ~95%       | `--policy.pretrained_path=lerobot/pi05_base`, `gradient_checkpointing=true`, `dtype=bfloat16`, 视觉编码器 + 专家训练           |
+
+`dataloading_s` 与 `update_s` 的比率是重要的诊断指标：当 `dataloading_s` 接近 `update_s` 时，增加更多 GPU 不再有帮助——您的数据加载器成为瓶颈，您应该在添加计算资源之前查看 `--num_workers`、图像分辨率和磁盘速度。
+
+### 调度和检查点
+
+如果缩短训练（例如在小数据集上 5k-10k 步），也要用 `--policy.scheduler_decay_steps≈--steps` 缩短学习率调度。否则学习率会保持在峰值附近而不会衰减。`--save_freq` 同理。
+
+## 在哪里运行
+
+显存是第一个筛选条件。在同一层级内，根据预算和可用性选择——`$`–`$$$$` 列是相对的；请查看您实际使用的提供商的当前定价。
+
+| 类别                       | 显存  | 层级   | 适合                                                        |
+| -------------------------- | ----- | ------ | ----------------------------------------------------------- |
+| RTX 3090 / 4090 (消费级)   | 24 GB | `$`    | 轻量级 BC、扩散模型、SmolVLA。批次 1 时 VLA 紧张。          |
+| L4 / A10G (云端)           | 24 GB | `$–$$` | 相同范围；在 Google Cloud、RunPod、AWS `g5/g6` 上常见。     |
+| A100 40 GB                 | 40 GB | `$$$`  | 任何策略在合理批次大小下。                                  |
+| A100 80 GB / H100 80 GB    | 80 GB | `$$$$` | 多 GPU 集群；VLA 的大批次。                                 |
+| **仅 CPU**                 | —     | —      | 不要训练。使用 Colab 或租用 GPU。                           |
+
+### Hugging Face Jobs
+
+[Hugging Face Jobs](https://huggingface.co/docs/hub/jobs) 允许您在托管的 HF 基础设施上运行训练，按秒计费。该仓库发布了一个即用型镜像：**`huggingface/lerobot-gpu:latest`**，**每晚 02:00 UTC 从 `main` 重建**（[`docker_publish.yml`](https://github.com/huggingface/lerobot/blob/main/.github/workflows/docker_publish.yml)）——因此它跟踪仓库的当前状态，而不是标记的发布版本。
+
+```bash
+hf jobs run --flavor a10g-large huggingface/lerobot-gpu:latest \
+  bash -c "nvidia-smi && lerobot-train \
+    --policy.type=act --dataset.repo_id=<USER>/<DATASET> \
+    --policy.repo_id=<USER>/act_<task> --batch_size=8 --steps=50000"
+```
+
+注意事项：
+
+- 开头的 `nvidia-smi` 是快速检查 CUDA 在容器内是否可见的健全性检查——如果 flavor 或驱动程序不匹配，可以快速失败。
+- 默认 Job 超时时间为 30 分钟；对于实际训练，传递 `--timeout 4h`（或更长）。
+- `--flavor` 映射到上表：`t4-small`/`t4-medium`（T4，仅 ACT）、`l4x1`/`l4x4`（L4 24 GB）、`a10g-small/large/largex2/largex4`（A10G 24 GB 扩展）、`a100-large`（A100）。当前完整目录 + 定价请参见 [https://huggingface.co/docs/hub/jobs](https://huggingface.co/docs/hub/jobs)。
