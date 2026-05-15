@@ -1,0 +1,218 @@
+# 摄像头
+
+LeRobot 提供多种视频捕获选项：
+
+| 类                | 支持的摄像头                        |
+| ----------------- | ----------------------------------- |
+| `OpenCVCamera`    | 手机、内置笔记本摄像头、USB 网络摄像头 |
+| `ZMQCamera`       | 网络连接的摄像头                    |
+| `RealSenseCamera` | Intel RealSense（带深度）           |
+| `Reachy2Camera`   | Reachy 2 机器人摄像头               |
+
+> [!TIP]
+> 有关 `OpenCVCamera` 兼容性详细信息，请参阅 [OpenCV 视频 I/O 概述](https://docs.opencv.org/4.x/d0/da7/videoio_overview.html)。
+
+### 查找您的摄像头
+
+每个摄像头都需要一个唯一标识符来实例化，以便您可以区分多个连接的设备。
+
+`OpenCVCamera` 和 `RealSenseCamera` 支持自动发现。运行以下命令列出可用设备及其标识符。请注意，这些标识符可能会在重启计算机或重新插入摄像头后发生变化，具体取决于您的操作系统。
+
+```bash
+lerobot-find-cameras opencv # 或 realsense 用于 Intel Realsense 摄像头
+```
+
+如果您连接了两个摄像头，输出将如下所示：
+
+```bash
+--- Detected Cameras ---
+Camera #0:
+  Name: OpenCV Camera @ 0
+  Type: OpenCV
+  Id: 0
+  Backend api: AVFOUNDATION
+  Default stream profile:
+    Format: 16.0
+    Width: 1920
+    Height: 1080
+    Fps: 15.0
+--------------------
+(更多摄像头 ...)
+```
+
+> [!WARNING]
+> 在 `macOS` 中使用 Intel RealSense 摄像头时，您可能会遇到此[错误](https://github.com/IntelRealSense/librealsense/issues/12307)：`Error finding RealSense cameras: failed to set power state`，这可以通过使用 `sudo` 权限运行相同命令来解决。请注意，在 `macOS` 中使用 RealSense 摄像头不稳定。
+
+`ZMQCamera` 和 `Reachy2Camera` 不支持自动发现。必须通过提供其网络地址和端口或机器人 SDK 设置来手动配置它们。
+
+## 使用摄像头
+
+### 帧访问模式
+
+所有摄像头类都实现了三种捕获帧的访问模式：
+
+| 方法                      | 行为                                                                                                   | 是否阻塞？     | 最适合                               |
+| ------------------------- | ------------------------------------------------------------------------------------------------------ | -------------- | ------------------------------------ |
+| `read()`                  | 等待摄像头硬件返回帧。根据摄像头和 SDK，可能会阻塞很长时间。                                          | 是             | 简单脚本、顺序捕获                   |
+| `async_read(timeout_ms)`  | 从后台线程返回最新的未消费帧。仅在缓冲区为空时阻塞，最多 `timeout_ms`。如果没有帧到达，则引发 `TimeoutError`。 | 有超时         | 与摄像头 FPS 同步的控制循环          |
+| `read_latest(max_age_ms)` | 查看缓冲区中最新的帧（可能已过时）。如果帧早于 `max_age_ms`，则引发 `TimeoutError`。                  | 否             | UI 可视化、日志记录、监控            |
+
+### 使用示例
+
+以下示例展示了如何使用摄像头 API 配置和捕获不同类型摄像头的帧。
+
+- 使用基于 OpenCV 的摄像头进行**阻塞和非阻塞帧捕获**
+- 使用 Intel RealSense 摄像头进行**彩色和深度捕获**
+
+> [!WARNING]
+> 未能干净地断开摄像头连接可能会导致资源泄漏。使用上下文管理器协议确保自动清理：
+>
+> ```python
+> with OpenCVCamera(config) as camera:
+>     ...
+> ```
+>
+> 您也可以手动调用 `connect()` 和 `disconnect()`，但始终在后者使用 `finally` 块。
+
+<hfoptions id="shell_restart">
+<hfoption id="Open CV Camera">
+
+<!-- prettier-ignore-start -->
+```python
+from lerobot.cameras.opencv import OpenCVCamera, OpenCVCameraConfig
+from lerobot.cameras import ColorMode, Cv2Rotation
+
+# 使用所需的 FPS、分辨率、颜色模式和旋转构造 `OpenCVCameraConfig`。
+config = OpenCVCameraConfig(
+    index_or_path=0,
+    fps=15,
+    width=1920,
+    height=1080,
+    color_mode=ColorMode.RGB,
+    rotation=Cv2Rotation.NO_ROTATION
+)
+
+# 实例化并连接 `OpenCVCamera`，执行预热读取（默认）。
+with OpenCVCamera(config) as camera:
+
+    # 同步读取帧 — 阻塞直到硬件提供新帧
+    frame = camera.read()
+    print(f"read() 调用返回的帧形状:", frame.shape)
+
+    # 使用超时异步读取帧 — 返回最新的未消费帧或等待最多 timeout_ms 以获取新帧
+    try:
+        for i in range(10):
+            frame = camera.async_read(timeout_ms=200)
+            print(f"async_read 调用返回的帧 {i} 形状:", frame.shape)
+    except TimeoutError as e:
+        print(f"超时内未收到帧: {e}")
+
+    # 立即返回帧 - 返回摄像头捕获的最新帧
+    try:
+        initial_frame = camera.read_latest(max_age_ms=1000)
+        for i in range(10):
+            frame = camera.read_latest(max_age_ms=1000)
+            print(f"read_latest 调用返回的帧 {i} 形状:", frame.shape)
+            print(f"摄像头是否收到新帧? {not (initial_frame == frame).any()}")
+    except TimeoutError as e:
+        print(f"帧太旧: {e}")
+
+```
+<!-- prettier-ignore-end -->
+
+</hfoption>
+<hfoption id="Intel Realsense Camera">
+
+<!-- prettier-ignore-start -->
+```python
+from lerobot.cameras.realsense import RealSenseCamera, RealSenseCameraConfig
+from lerobot.cameras import ColorMode, Cv2Rotation
+
+# 创建 `RealSenseCameraConfig`，指定摄像头的序列号并启用深度。
+config = RealSenseCameraConfig(
+    serial_number_or_name="233522074606",
+    fps=15,
+    width=640,
+    height=480,
+    color_mode=ColorMode.RGB,
+    use_depth=True,
+    rotation=Cv2Rotation.NO_ROTATION
+)
+
+# 实例化并连接 `RealSenseCamera`，进行预热读取（默认）。
+camera = RealSenseCamera(config)
+camera.connect()
+
+# 通过 `read()` 捕获彩色帧，通过 `read_depth()` 捕获深度图。
+try:
+    color_frame = camera.read()
+    depth_map = camera.read_depth()
+    print("彩色帧形状:", color_frame.shape)
+    print("深度图形状:", depth_map.shape)
+finally:
+    camera.disconnect()
+```
+<!-- prettier-ignore-end -->
+
+</hfoption>
+</hfoptions>
+
+## 使用手机摄像头
+
+<hfoptions id="use phone">
+<hfoption id="iPhone & macOS">
+
+要在 macOS 上将 iPhone 用作摄像头，请启用连续互通相机功能：
+
+- 确保您的 Mac 运行 macOS 13 或更高版本，iPhone 运行 iOS 16 或更高版本。
+- 使用相同的 Apple ID 登录两台设备。
+- 使用 USB 线连接设备，或打开 Wi-Fi 和蓝牙进行无线连接。
+
+有关更多详细信息，请访问 [Apple 支持](https://support.apple.com/en-gb/guide/mac-help/mchl77879b8a/mac)。
+
+</hfoption>
+<hfoption id="OBS virtual camera">
+
+如果您想使用 OBS 将手机用作摄像头，请按照以下步骤设置虚拟摄像头。
+
+1. _（仅 Linux）安装 `v4l2loopback-dkms` 和 `v4l-utils`_。这些软件包创建虚拟摄像头设备并验证其设置。使用以下命令安装：
+
+```bash
+sudo apt install v4l2loopback-dkms v4l-utils
+```
+
+2. _在手机上安装 [DroidCam 应用](https://droidcam.app)_。此应用适用于 iOS 和 Android。
+3. _下载并安装 [OBS Studio](https://obsproject.com)_。
+4. _下载并安装 [DroidCam OBS 插件](https://droidcam.app/obs)_。
+5. _启动 OBS Studio_。
+
+6. _将手机添加为源_。按照[此处](https://droidcam.app/obs/usage)的说明操作。确保将分辨率设置为 `640x480` 以避免水印。
+7. _调整分辨率设置_。在 OBS Studio 中，转到 `File > Settings > Video` 或 `OBS > Preferences... > Video`。通过手动输入将 `Base(Canvas) Resolution` 和 `Output(Scaled) Resolution` 更改为 `640x480`。
+8. _启动虚拟摄像头_。在 OBS Studio 中，按照[此处](https://obsproject.com/kb/virtual-camera-guide)的说明操作。
+9. _验证虚拟摄像头设置和分辨率_。
+   - **Linux**：使用 `v4l2-ctl` 列出设备并检查分辨率：
+     ```bash
+     v4l2-ctl --list-devices  # 查找 VirtualCam 并记下其 /dev/videoX 路径
+     v4l2-ctl -d /dev/videoX --get-fmt-video  # 替换为您的 VirtualCam 路径
+     ```
+     您应该看到列出的 `VirtualCam` 和分辨率 `640x480`。
+   - **macOS**：打开 Photo Booth 或 FaceTime，选择"OBS Virtual Camera"作为输入。
+   - **Windows**：原生相机应用不支持虚拟摄像头。使用视频会议应用（Zoom、Teams）或直接运行 `lerobot-find-cameras opencv` 进行验证。
+
+<details>
+<summary><strong>故障排除</strong></summary>
+
+> 虚拟摄像头分辨率不正确。
+
+删除虚拟摄像头源并重新创建。创建后无法更改分辨率。
+
+> Error reading frame in background thread for OpenCVCamera(X): OpenCVCamera(X) frame width=640 or height=480 do not match configured width=1920 or height=1080.
+
+此错误是由 OBS Virtual Camera 宣传 `1920x1080` 分辨率但实际缩放引起的。目前唯一的修复方法是注释掉 `_postprocess_image()` 中的宽度和高度检查。
+
+</details>
+
+</hfoption>
+</hfoptions>
+
+如果一切设置正确，您的手机将显示为标准 OpenCV 摄像头，可以与 `OpenCVCamera` 一起使用。
