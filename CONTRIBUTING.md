@@ -1,28 +1,28 @@
-# How to contribute to 🤗 LeRobot
+# 如何为 🤗 LeRobot 做贡献
 
-Everyone is welcome to contribute, and we value everybody's contribution. Code is not the only way to help the community. Answering questions, helping others, reaching out, and improving the documentation are immensely valuable.
+欢迎每个人做出贡献，我们重视每个人的贡献。代码并不是帮助社区的唯一方式。回答问题、帮助他人、联系沟通和改进文档都是非常有价值的。
 
-Whichever way you choose to contribute, please be mindful to respect our [code of conduct](https://github.com/huggingface/lerobot/blob/main/CODE_OF_CONDUCT.md) and our [AI policy](https://github.com/huggingface/lerobot/blob/main/AI_POLICY.md).
+无论您选择以何种方式做出贡献，请注意尊重我们的[行为准则](https://github.com/huggingface/lerobot/blob/main/CODE_OF_CONDUCT.md)和我们的 [AI 政策](https://github.com/huggingface/lerobot/blob/main/AI_POLICY.md)。
 
-## Ways to Contribute
+## 贡献方式
 
-You can contribute in many ways:
+您可以通过多种方式做出贡献：
 
-- **Fixing issues:** Resolve bugs or improve existing code.
-- **New features:** Develop new features.
-- **Extend:** Implement new models/policies, robots, or simulation environments and upload datasets to the Hugging Face Hub.
-- **Documentation:** Improve examples, guides, and docstrings.
-- **Feedback:** Submit tickets related to bugs or desired new features.
+- **修复问题：** 解决错误或改进现有代码。
+- **新功能：** 开发新功能。
+- **扩展：** 实现新的模型/策略、机器人或仿真环境，并将数据集上传到 Hugging Face Hub。
+- **文档：** 改进示例、指南和文档字符串。
+- **反馈：** 提交与错误或期望的新功能相关的工单。
 
-If you are unsure where to start, join our [Discord Channel](https://discord.gg/q8Dzzpym3f).
+如果您不确定从哪里开始，请加入我们的 [Discord 频道](https://discord.gg/q8Dzzpym3f)。
 
-## Development Setup
+## 开发环境设置
 
-To contribute code, you need to set up a development environment.
+要贡献代码，您需要设置开发环境。
 
-### 1. Fork and Clone
+### 1. Fork 和克隆
 
-Fork the repository on GitHub, then clone your fork:
+在 GitHub 上 Fork 仓库，然后克隆您的 Fork：
 
 ```bash
 git clone https://github.com/<your-handle>/lerobot.git
@@ -30,57 +30,57 @@ cd lerobot
 git remote add upstream https://github.com/huggingface/lerobot.git
 ```
 
-### 2. Environment Installation
+### 2. 环境安装
 
-Please follow our [Installation Guide](https://huggingface.co/docs/lerobot/installation) for the environment setup & installation from source.
+请遵循我们的[安装指南](https://huggingface.co/docs/lerobot/installation)进行环境设置和从源代码安装。
 
-## Running Tests & Quality Checks
+## 运行测试和质量检查
 
-### Code Style (Pre-commit)
+### 代码风格（Pre-commit）
 
-Install `pre-commit` hooks to run checks automatically before you commit:
+安装 `pre-commit` 钩子以在提交前自动运行检查：
 
 ```bash
 pre-commit install
 ```
 
-To run checks manually on all files:
+要在所有文件上手动运行检查：
 
 ```bash
 pre-commit run --all-files
 ```
 
-### Running Tests
+### 运行测试
 
-We use `pytest`. First, ensure you have test artifacts by installing **git-lfs**:
+我们使用 `pytest`。首先，通过安装 **git-lfs** 确保您拥有测试工件：
 
 ```bash
 git lfs install
 git lfs pull
 ```
 
-Run the full suite (this may require extras installed):
+运行完整测试套件（这可能需要安装额外的依赖）：
 
 ```bash
 pytest -sv ./tests
 ```
 
-Or run a specific test file during development:
+或在开发期间运行特定的测试文件：
 
 ```bash
 pytest -sv tests/test_specific_feature.py
 ```
 
-## Submitting Issues & Pull Requests
+## 提交问题和拉取请求
 
-Use the templates for required fields and examples.
+使用模板填写必填字段和示例。
 
-- **Issues:** Follow the [ticket template](https://github.com/huggingface/lerobot/blob/main/.github/ISSUE_TEMPLATE/bug-report.yml).
-- **Pull requests:** Rebase on `upstream/main`, use a descriptive branch (don't work on `main`), run `pre-commit` and tests locally, and follow the [PR template](https://github.com/huggingface/lerobot/blob/main/.github/PULL_REQUEST_TEMPLATE.md).
+- **问题：** 遵循[工单模板](https://github.com/huggingface/lerobot/blob/main/.github/ISSUE_TEMPLATE/bug-report.yml)。
+- **拉取请求：** 在 `upstream/main` 上进行 rebase，使用描述性分支（不要在 `main` 上工作），在本地运行 `pre-commit` 和测试，并遵循 [PR 模板](https://github.com/huggingface/lerobot/blob/main/.github/PULL_REQUEST_TEMPLATE.md)。
 
 > [!IMPORTANT]
-> Community Review Policy: To help scale our efforts and foster a collaborative environment, we ask contributors to review at least one other person's open PR before their own receives attention. This shared responsibility multiplies our review capacity and helps everyone's code get merged faster!
+> 社区审查政策：为了帮助扩展我们的工作并培养协作环境，我们要求贡献者在自己的 PR 获得关注之前至少审查另一个人的开放 PR。这种共同责任会成倍增加我们的审查能力，并帮助每个人的代码更快地合并！
 
-Once you have submitted your PR and completed a peer review, a member of the LeRobot team will review your contribution.
+一旦您提交了 PR 并完成了同行审查，LeRobot 团队的成员将审查您的贡献。
 
-Thank you for contributing to LeRobot!
+感谢您为 LeRobot 做出贡献！
