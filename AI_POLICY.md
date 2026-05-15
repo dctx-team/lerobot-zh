@@ -1,25 +1,25 @@
-# AI Usage Policy
+# AI 使用政策
 
-The LeRobot project welcomes contributions from everyone, and we have a few guidelines regarding AI usage to ensure high code quality, clear communication, and a healthy open-source ecosystem:
+LeRobot 项目欢迎每个人的贡献，我们对 AI 使用有一些指导方针，以确保高代码质量、清晰的沟通和健康的开源生态系统：
 
-- **Please disclose significant AI assistance.** If you used AI tools (e.g., Copilot, Claude, Cursor, ChatGPT) to generate a substantial portion of your code or text, let us know in your PR description. Transparency helps us review your changes more effectively.
-- **Own your code (The Human-in-the-Loop).** You must fully understand all the changes you are proposing. If you cannot explain what your AI-assisted code does or how it interacts with LeRobot's broader architecture, please take the time to learn and test it before submitting.
-- **Keep issues and discussions focused.** You are welcome to use AI to help draft issues or PR descriptions, but please review and edit them carefully before posting. AI can often be overly verbose; trimming the noise and getting straight to the point helps our maintainers address your needs faster.
+- **请披露重要的 AI 辅助。** 如果您使用 AI 工具（例如 Copilot、Claude、Cursor、ChatGPT）生成了代码或文本的大部分内容，请在您的 PR 描述中告知我们。透明度有助于我们更有效地审查您的更改。
+- **对您的代码负责（人在回路中）。** 您必须完全理解您提出的所有更改。如果您无法解释 AI 辅助代码的作用或它如何与 LeRobot 的更广泛架构交互，请在提交之前花时间学习和测试它。
+- **保持问题和讨论的重点。** 欢迎您使用 AI 帮助起草问题或 PR 描述，但请在发布之前仔细审查和编辑它们。AI 通常过于冗长；删减噪音并直奔主题有助于我们的维护者更快地满足您的需求。
 
-Our core maintainers also use AI tools to aid their workflows, but they do so while bringing deep contextual knowledge of the LeRobot codebase to validate the output. We ask all contributors to apply that same level of rigor.
+我们的核心维护者也使用 AI 工具来辅助他们的工作流程，但他们在使用时会带来对 LeRobot 代码库的深入上下文知识来验证输出。我们要求所有贡献者应用同样水平的严谨性。
 
-## Remember the Human Maintainers
+## 记住人类维护者
 
-Please remember that LeRobot is maintained by a dedicated team of humans.
+请记住，LeRobot 是由一个专注的人类团队维护的。
 
-Every discussion, issue, and pull request is read and reviewed by real people. While AI tools can generate thousands of lines of code in seconds, reviewing that code still takes human time and energy. Submitting unverified or low-effort AI output puts an unfair burden on our maintainers.
+每个讨论、问题和拉取请求都由真人阅读和审查。虽然 AI 工具可以在几秒钟内生成数千行代码，但审查该代码仍然需要人类的时间和精力。提交未经验证或低质量的 AI 输出会给我们的维护者带来不公平的负担。
 
-Today, the quality of the AI output still heavily depends on the developer driving the tool. We ask that you respect our maintainers' time by thoroughly vetting, testing, and refining your submissions.
+如今，AI 输出的质量仍然在很大程度上取决于驱动工具的开发人员。我们要求您通过彻底审查、测试和完善您的提交来尊重我们维护者的时间。
 
-## AI is Welcome Here
+## AI 在这里受欢迎
 
-LeRobot operates at the cutting edge of AI and robotics, and many of our maintainers actively embrace AI coding assistants as valuable productivity tools. We are a pro-AI project!
+LeRobot 处于 AI 和机器人技术的前沿，我们的许多维护者积极拥抱 AI 编码助手作为有价值的生产力工具。我们是一个支持 AI 的项目！
 
-Our reason for having an AI policy is not an anti-AI stance. Rather, it exists to ensure that AI is used to enhance human contributions, not replace them with unverified noise. It's about how the tools are used, not the tools themselves.
+我们制定 AI 政策的原因不是反 AI 立场。相反，它的存在是为了确保 AI 被用来增强人类贡献，而不是用未经验证的噪音取代它们。这是关于工具的使用方式，而不是工具本身。
 
-We value the unique human insight you bring to the LeRobot community. Let AI empower your workflow, but always let your own judgment take the wheel.
+我们重视您为 LeRobot 社区带来的独特人类洞察力。让 AI 增强您的工作流程，但始终让您自己的判断掌舵。
