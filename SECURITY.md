@@ -1,48 +1,48 @@
-# Security Policy
+# 安全政策
 
-## Project Status & Philosophy
+## 项目状态与理念
 
-`lerobot` has so far been primarily a research and prototyping tool, which is why deployment security hasn’t been a strong focus until now. As `lerobot` continues to be adopted and deployed in production, we are paying much closer attention to these kinds of issues.
+到目前为止，`lerobot` 主要是一个研究和原型工具，这就是为什么部署安全性直到现在还不是一个重点关注的领域。随着 `lerobot` 继续被采用并部署到生产环境中，我们正在更加密切地关注这类问题。
 
-Fortunately, being an open-source project, the community can also help by reporting and fixing vulnerabilities. We appreciate your efforts to responsibly disclose your findings and will make every effort to acknowledge your contributions.
+幸运的是，作为一个开源项目，社区也可以通过报告和修复漏洞来提供帮助。我们感谢您负责任地披露您的发现，并将尽一切努力认可您的贡献。
 
-## Reporting a Vulnerability
+## 报告漏洞
 
-To report a security issue, please use the GitHub Security Advisory ["Report a Vulnerability"](https://github.com/huggingface/lerobot/security/advisories/new) tab.
+要报告安全问题，请使用 GitHub 安全公告的["报告漏洞"](https://github.com/huggingface/lerobot/security/advisories/new)选项卡。
 
-The `lerobot` team will send a response indicating the next steps in handling your report. After the initial reply to your report, the security team will keep you informed of the progress towards a fix and full announcement, and may ask for additional information or guidance.
+`lerobot` 团队将发送回复，说明处理您报告的后续步骤。在对您的报告进行初步回复后，安全团队将让您了解修复和完整公告的进展情况，并可能要求提供其他信息或指导。
 
-#### Hugging Face Security Team
+#### Hugging Face 安全团队
 
-Since this project is part of the Hugging Face ecosystem, feel free to submit vulnerability reports directly to: **[security@huggingface.co](mailto:security@huggingface.co)**. Someone from the HF security team will review the report and recommend next steps.
+由于该项目是 Hugging Face 生态系统的一部分，请随时直接向 **[security@huggingface.co](mailto:security@huggingface.co)** 提交漏洞报告。HF 安全团队的成员将审查报告并建议后续步骤。
 
-#### Open Source Disclosures
+#### 开源披露
 
-If reporting a vulnerability specific to the open-source codebase (and not the underlying Hub infrastructure), you may also use [Huntr](https://huntr.com), a vulnerability disclosure program for open source software.
+如果报告特定于开源代码库（而不是底层 Hub 基础设施）的漏洞，您也可以使用 [Huntr](https://huntr.com)，这是一个针对开源软件的漏洞披露计划。
 
-## Supported Versions
+## 支持的版本
 
-Currently, we treat `lerobot` as a rolling release. We prioritize security updates for the latest available version (`main` branch).
+目前，我们将 `lerobot` 视为滚动发布。我们优先为最新可用版本（`main` 分支）提供安全更新。
 
-| Version  | Supported |
-| -------- | --------- |
-| Latest   | ✅        |
-| < Latest | ❌        |
+| 版本     | 支持状态 |
+| -------- | -------- |
+| 最新版本 | ✅       |
+| < 最新   | ❌       |
 
-## Secure Usage Guidelines
+## 安全使用指南
 
-`lerobot` is tightly coupled to the Hugging Face Hub for sharing data and pretrained policies. When downloading artifacts uploaded by others, you expose yourself to risks. Please read below for recommendations to keep your runtime and robot environment safe.
+`lerobot` 与 Hugging Face Hub 紧密耦合，用于共享数据和预训练策略。当下载他人上传的工件时，您会面临风险。请阅读以下建议，以保持您的运行时和机器人环境的安全。
 
-### Remote Artefacts (Weights & Policies)
+### 远程工件（权重和策略）
 
-Models and policies uploaded to the Hugging Face Hub come in different formats. We heavily recommend uploading and downloading models in the [`safetensors`](https://github.com/huggingface/safetensors) format.
+上传到 Hugging Face Hub 的模型和策略有不同的格式。我们强烈建议以 [`safetensors`](https://github.com/huggingface/safetensors) 格式上传和下载模型。
 
-`safetensors` was developed specifically to prevent arbitrary code execution on your system, which is critical when running software on physical hardware/robots.
+`safetensors` 是专门开发的，用于防止在您的系统上执行任意代码，这在物理硬件/机器人上运行软件时至关重要。
 
-To avoid loading models from unsafe formats (e.g., `pickle`), you should ensure you are prioritizing `safetensors` files.
+为了避免从不安全的格式（例如 `pickle`）加载模型，您应该确保优先使用 `safetensors` 文件。
 
-### Remote Code
+### 远程代码
 
-Some models or environments on the Hub may require `trust_remote_code=True` to run custom architecture code.
+Hub 上的某些模型或环境可能需要 `trust_remote_code=True` 来运行自定义架构代码。
 
-Please **always** verify the content of the modeling files when using this argument. We recommend setting a specific `revision` (commit hash) when loading remote code to ensure you protect yourself from unverified updates to the repository.
+使用此参数时，请**始终**验证建模文件的内容。我们建议在加载远程代码时设置特定的 `revision`（提交哈希），以确保您免受对仓库未经验证的更新的影响。
