@@ -12,113 +12,122 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import numpy as np
+
+from lerobot.utils.import_utils import _placo_available, require_package
+
+if TYPE_CHECKING or _placo_available:
+    import placo  # type: ignore[import-not-found]
+else:
+    placo = None
 
 
 class RobotKinematics:
-    """使用 placo 库进行机器人正向和逆向运动学计算"""
+    """Robot kinematics using placo library for forward and inverse kinematics."""
 
     def __init__(
         self,
         urdf_path: str,
         target_frame_name: str = "gripper_frame_link",
-        joint_names: list[str] = None,
+        joint_names: list[str] | None = None,
     ):
         """
-        初始化基于 placo 的运动学求解器
+        Initialize placo-based kinematics solver.
 
         Args:
-            urdf_path: 机器人 URDF 文件的路径
-            target_frame_name: URDF 中末端执行器框架的名称
-            joint_names: 用于运动学求解器的关节名称列表
+            urdf_path (str): Path to the robot URDF file
+            target_frame_name (str): Name of the end-effector frame in the URDF
+            joint_names (list[str] | None): List of joint names to use for the kinematics solver
         """
-        try:
-            import placo
-        except ImportError as e:
-            raise ImportError(
-                "placo is required for RobotKinematics. "
-                "Please install the optional dependencies of `kinematics` in the package."
-            ) from e
+        require_package("placo", extra="placo-dep")
 
         self.robot = placo.RobotWrapper(urdf_path)
         self.solver = placo.KinematicsSolver(self.robot)
-        self.solver.mask_fbase(True)  # 固定基座
+        self.solver.mask_fbase(True)  # Fix the base
 
         self.target_frame_name = target_frame_name
 
-        # 设置关节名称
+        # Set joint names
         self.joint_names = list(self.robot.joint_names()) if joint_names is None else joint_names
 
-        # 为逆运动学初始化框架任务
+        # Initialize frame task for IK
         self.tip_frame = self.solver.add_frame_task(self.target_frame_name, np.eye(4))
 
-    def forward_kinematics(self, joint_pos_deg):
+    def forward_kinematics(self, joint_pos_deg: np.ndarray) -> np.ndarray:
         """
-        计算给定关节配置的正向运动学，目标框架名称在构造函数中指定
+        Compute forward kinematics for given joint configuration given the target frame name in the constructor.
 
         Args:
-            joint_pos_deg: 关节位置（角度制，numpy 数组）
+            joint_pos_deg: Joint positions in degrees (numpy array)
 
         Returns:
-            末端执行器姿态的 4x4 变换矩阵
+            4x4 transformation matrix of the end-effector pose
         """
 
-        # 将角度转换为弧度
+        # Convert degrees to radians
         joint_pos_rad = np.deg2rad(joint_pos_deg[: len(self.joint_names)])
 
-        # 更新 placo 机器人中的关节位置
+        # Update joint positions in placo robot
         for i, joint_name in enumerate(self.joint_names):
             self.robot.set_joint(joint_name, joint_pos_rad[i])
 
-        # 更新运动学
+        # Update kinematics
         self.robot.update_kinematics()
 
-        # 获取变换矩阵
+        # Get the transformation matrix
         return self.robot.get_T_world_frame(self.target_frame_name)
 
     def inverse_kinematics(
-        self, current_joint_pos, desired_ee_pose, position_weight=1.0, orientation_weight=0.01
-    ):
+        self,
+        current_joint_pos: np.ndarray,
+        desired_ee_pose: np.ndarray,
+        position_weight: float = 1.0,
+        orientation_weight: float = 0.01,
+    ) -> np.ndarray:
         """
-        使用 placo 求解器计算逆运动学
+        Compute inverse kinematics using placo solver.
 
         Args:
-            current_joint_pos: 当前关节位置（角度制，用作初始猜测值）
-            desired_ee_pose: 目标末端执行器姿态（4x4 变换矩阵）
-            position_weight: 逆运动学中位置约束的权重
-            orientation_weight: 逆运动学中方向约束的权重，设为 0.0 则仅约束位置
+            current_joint_pos: Current joint positions in degrees (used as initial guess)
+            desired_ee_pose: Target end-effector pose as a 4x4 transformation matrix
+            position_weight: Weight for position constraint in IK
+            orientation_weight: Weight for orientation constraint in IK, set to 0.0 to only constrain position
 
         Returns:
-            达到期望末端执行器姿态的关节位置（角度制）
+            Joint positions in degrees that achieve the desired end-effector pose
         """
 
-        # 将当前关节位置转换为弧度作为初始猜测值
+        # Convert current joint positions to radians for initial guess
         current_joint_rad = np.deg2rad(current_joint_pos[: len(self.joint_names)])
 
-        # 将当前关节位置设为初始猜测值
+        # Set current joint positions as initial guess
         for i, joint_name in enumerate(self.joint_names):
             self.robot.set_joint(joint_name, current_joint_rad[i])
 
-        # 更新框架任务的目标姿态
+        # Update the target pose for the frame task
         self.tip_frame.T_world_frame = desired_ee_pose
 
-        # 根据 position_only 标志配置任务
+        # Configure the task based on position_only flag
         self.tip_frame.configure(self.target_frame_name, "soft", position_weight, orientation_weight)
 
-        # 求解逆运动学
+        # Solve IK
         self.solver.solve(True)
         self.robot.update_kinematics()
 
-        # 提取关节位置
+        # Extract joint positions
         joint_pos_rad = []
         for joint_name in self.joint_names:
             joint = self.robot.get_joint(joint_name)
             joint_pos_rad.append(joint)
 
-        # 转换回角度制
+        # Convert back to degrees
         joint_pos_deg = np.rad2deg(joint_pos_rad)
 
-        # 如果 current_joint_pos 中存在夹爪位置，则保留它
+        # Preserve gripper position if present in current_joint_pos
         if len(current_joint_pos) > len(self.joint_names):
             result = np.zeros_like(current_joint_pos)
             result[: len(self.joint_names)] = joint_pos_deg

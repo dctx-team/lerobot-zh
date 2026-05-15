@@ -15,107 +15,170 @@
 # limitations under the License.
 
 import abc
+import warnings
 from typing import Any
 
-import numpy as np
+from numpy.typing import NDArray  # type: ignore  # TODO: add type stubs for numpy.typing
 
-from .configs import CameraConfig, ColorMode
+from .configs import CameraConfig
 
 
 class Camera(abc.ABC):
-    """摄像头实现的基类。
+    """Base class for camera implementations.
 
-    为不同后端的摄像头操作定义了标准接口。
-    子类必须实现所有抽象方法。
+    Defines a standard interface for camera operations across different backends.
+    Subclasses must implement all abstract methods.
 
-    管理基本的摄像头属性（FPS、分辨率）和核心操作：
-    - 连接/断开连接
-    - 帧捕获（同步/异步）
+    Manages basic camera properties (FPS, resolution) and core operations:
+    - Connection/disconnection
+    - Frame capture (sync/async/latest)
 
-    属性：
-        fps (int | None): 配置的每秒帧数
-        width (int | None): 帧宽度（像素）
-        height (int | None): 帧高度（像素）
-
-    示例：
-        class MyCamera(Camera):
-            def __init__(self, config): ...
-            @property
-            def is_connected(self) -> bool: ...
-            def connect(self, warmup=True): ...
-            # 以及其他必需的方法
+    Attributes:
+        fps (int | None): Configured frames per second
+        width (int | None): Frame width in pixels
+        height (int | None): Frame height in pixels
     """
 
     def __init__(self, config: CameraConfig):
-        """使用给定的配置初始化摄像头。
+        """Initialize the camera with the given configuration.
 
-        参数：
-            config: 包含 FPS 和分辨率的摄像头配置。
+        Args:
+            config: Camera configuration containing FPS and resolution.
         """
         self.fps: int | None = config.fps
         self.width: int | None = config.width
         self.height: int | None = config.height
 
+    def __enter__(self):
+        """
+        Context manager entry.
+        Automatically connects to the camera.
+        """
+        self.connect()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        """
+        Context manager exit.
+        Automatically disconnects, ensuring resources are released even on error.
+        """
+        self.disconnect()
+
+    def __del__(self) -> None:
+        """
+        Destructor safety net.
+        Attempts to disconnect if the object is garbage collected without cleanup.
+        """
+        try:
+            if self.is_connected:
+                self.disconnect()
+        except Exception:  # nosec B110
+            pass
+
     @property
     @abc.abstractmethod
     def is_connected(self) -> bool:
-        """检查摄像头当前是否已连接。
+        """Check if the camera is currently connected.
 
-        返回：
-            bool: 如果摄像头已连接并准备好捕获帧则返回 True，
-                  否则返回 False。
+        Returns:
+            bool: True if the camera is connected and ready to capture frames,
+                  False otherwise.
         """
         pass
 
     @staticmethod
     @abc.abstractmethod
     def find_cameras() -> list[dict[str, Any]]:
-        """检测连接到系统的可用摄像头。
-
-        返回：
-            List[Dict[str, Any]]: 字典列表，
-            其中每个字典包含有关检测到的摄像头的信息。
+        """Detects available cameras connected to the system.
+        Returns:
+            List[Dict[str, Any]]: A list of dictionaries,
+            where each dictionary contains information about a detected camera.
         """
         pass
 
     @abc.abstractmethod
     def connect(self, warmup: bool = True) -> None:
-        """建立与摄像头的连接。
+        """Establish connection to the camera.
 
-        参数：
-            warmup: 如果为 True（默认值），则在返回之前捕获一个预热帧。这对于
-                   需要时间来调整捕获设置的摄像头很有用。
-                   如果为 False，则跳过预热帧。
+        Args:
+            warmup: If True (default), captures a warmup frame before returning. Useful
+                   for cameras that require time to adjust capture settings.
+                   If False, skips the warmup frame.
         """
         pass
 
     @abc.abstractmethod
-    def read(self, color_mode: ColorMode | None = None) -> np.ndarray:
-        """从摄像头捕获并返回单个帧。
+    def read(self) -> NDArray[Any]:
+        """Capture and return a single frame from the camera synchronously.
 
-        参数：
-            color_mode: 输出帧所需的颜色模式。如果为 None，
-                        则使用摄像头的默认颜色模式。
+        This is a blocking call that will wait for the hardware and its SDK.
 
-        返回：
-            np.ndarray: 捕获的帧，作为 numpy 数组。
+        Returns:
+            np.ndarray: Captured frame as a numpy array.
         """
         pass
 
     @abc.abstractmethod
-    def async_read(self, timeout_ms: float = ...) -> np.ndarray:
-        """异步捕获并返回摄像头的单个帧。
+    def async_read(self, timeout_ms: float = ...) -> NDArray[Any]:
+        """Return the most recent new frame.
 
-        参数：
-            timeout_ms: 等待帧的最大时间（毫秒）。
-                        默认为实现特定的超时时间。
+        This method retrieves the latest frame captured by the background thread.
+        If a new frame is already available in the buffer (captured since the last call),
+        it returns it immediately.
 
-        返回：
-            np.ndarray: 捕获的帧，作为 numpy 数组。
+        It blocks up to `timeout_ms` only if the buffer is empty or if the latest frame
+        was already consumed by a previous `async_read` call.
+
+        Essentially, this method return the latest unconsumed frame, waiting if necessary
+        for a new one to arrive within the specified timeout.
+
+        Usage:
+            - Ideal for control loops where you want to ensure every processed frame
+            is fresh, effectively synchronizing your loop to the camera's FPS.
+            - Causes of a timeout usually include: very low camera FPS, heavy processing load,
+            or if the camera is disconnected.
+
+        Args:
+            timeout_ms: Maximum time to wait for a new frame in milliseconds.
+                        Defaults to 200ms (0.2s).
+
+        Returns:
+            np.ndarray: Captured frame as a numpy array.
+
+        Raises:
+            TimeoutError: If no new frame arrives within `timeout_ms`.
         """
         pass
+
+    def read_latest(self, max_age_ms: int = 500) -> NDArray[Any]:
+        """Return the most recent frame captured immediately (Peeking).
+
+        This method is non-blocking and returns whatever is currently in the
+        memory buffer. The frame may be stale,
+        meaning it could have been captured a while ago (hanging camera scenario e.g.).
+
+        Usage:
+            Ideal for scenarios requiring zero latency or decoupled frequencies & when
+            we want a guaranteed frame, such as UI visualization, logging, or
+            non-critical monitoring.
+
+        Returns:
+            NDArray[Any]: The frame image (numpy array).
+
+        Raises:
+            TimeoutError: If the latest frame is older than `max_age_ms`.
+            NotConnectedError: If the camera is not connected.
+            RuntimeError: If the camera is connected but has not captured any frames yet.
+        """
+        warnings.warn(
+            f"{self.__class__.__name__}.read_latest() is not implemented. "
+            "Please override read_latest(); it will be required in future releases.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        return self.async_read()
 
     @abc.abstractmethod
     def disconnect(self) -> None:
-        """断开与摄像头的连接并释放资源。"""
+        """Disconnect from the camera and release resources."""
         pass

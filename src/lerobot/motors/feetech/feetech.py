@@ -16,10 +16,12 @@ import logging
 from copy import deepcopy
 from enum import Enum
 from pprint import pformat
+from typing import TYPE_CHECKING
 
-from lerobot.motors.encoding_utils import decode_sign_magnitude, encode_sign_magnitude
+from lerobot.utils.import_utils import _feetech_sdk_available, require_package
 
-from ..motors_bus import Motor, MotorCalibration, MotorsBus, NameOrID, Value, get_address
+from ..encoding_utils import decode_sign_magnitude, encode_sign_magnitude
+from ..motors_bus import Motor, MotorCalibration, NameOrID, SerialMotorsBus, Value, get_address
 from .tables import (
     FIRMWARE_MAJOR_VERSION,
     FIRMWARE_MINOR_VERSION,
@@ -33,6 +35,11 @@ from .tables import (
     SCAN_BAUDRATES,
 )
 
+if TYPE_CHECKING or _feetech_sdk_available:
+    import scservo_sdk as scs
+else:
+    scs = None
+
 DEFAULT_PROTOCOL_VERSION = 0
 DEFAULT_BAUDRATE = 1_000_000
 DEFAULT_TIMEOUT_MS = 1000
@@ -43,13 +50,16 @@ logger = logging.getLogger(__name__)
 
 
 class OperatingMode(Enum):
-    # 位置伺服模式
+    # position servo mode
     POSITION = 0
-    # 电机处于恒速模式，由参数0x2e控制，最高位15为方向位
+    # The motor is in constant speed mode, which is controlled by parameter 0x2e, and the highest bit 15 is
+    # the direction bit
     VELOCITY = 1
-    # PWM开环调速模式，由参数0x2c的运行时间参数控制，位11为方向位
+    # PWM open-loop speed regulation mode, with parameter 0x2c running time parameter control, bit11 as
+    # direction bit
     PWM = 2
-    # 步进伺服模式，步进进度数由参数0x2a表示，最高位15为方向位
+    # In step servo mode, the number of step progress is represented by parameter 0x2a, and the highest bit 15
+    # is the direction bit
     STEP = 3
 
 
@@ -63,39 +73,23 @@ class TorqueMode(Enum):
     DISABLED = 0
 
 
-def _split_into_byte_chunks(value: int, length: int) -> list[int]:
-    import scservo_sdk as scs
-
-    if length == 1:
-        data = [value]
-    elif length == 2:
-        data = [scs.SCS_LOBYTE(value), scs.SCS_HIBYTE(value)]
-    elif length == 4:
-        data = [
-            scs.SCS_LOBYTE(scs.SCS_LOWORD(value)),
-            scs.SCS_HIBYTE(scs.SCS_LOWORD(value)),
-            scs.SCS_LOBYTE(scs.SCS_HIWORD(value)),
-            scs.SCS_HIBYTE(scs.SCS_HIWORD(value)),
-        ]
-    return data
-
-
 def patch_setPacketTimeout(self, packet_length):  # noqa: N802
     """
-    HACK: 此方法修补PortHandler行为以设置正确的数据包超时。
+    HACK: This patches the PortHandler behavior to set the correct packet timeouts.
 
-    它修复了 https://gitee.com/ftservo/SCServoSDK/issues/IBY2S6
-    该bug已在官方Feetech SDK仓库上修复（https://gitee.com/ftservo/FTServo_Python）
-    但由于该版本未在PyPI上发布，我们依赖于已发布的（非官方）版本，需要打补丁。
+    It fixes https://gitee.com/ftservo/SCServoSDK/issues/IBY2S6
+    The bug is fixed on the official Feetech SDK repo (https://gitee.com/ftservo/FTServo_Python)
+    but because that version is not published on PyPI, we rely on the (unofficial) on that is, which needs
+    patching.
     """
     self.packet_start_time = self.getCurrentTime()
     self.packet_timeout = (self.tx_time_per_byte * packet_length) + (self.tx_time_per_byte * 3.0) + 50
 
 
-class FeetechMotorsBus(MotorsBus):
+class FeetechMotorsBus(SerialMotorsBus):
     """
-    FeetechMotorsBus类允许高效地读取和写入已连接的电机。它依赖于
-    Python feetech SDK与电机通信，该SDK本身基于dynamixel SDK。
+    The FeetechMotorsBus class allows to efficiently read and write to the attached motors. It relies on the
+    python feetech sdk to communicate with the motors, which is itself based on the dynamixel sdk.
     """
 
     apply_drive_mode = True
@@ -116,14 +110,13 @@ class FeetechMotorsBus(MotorsBus):
         calibration: dict[str, MotorCalibration] | None = None,
         protocol_version: int = DEFAULT_PROTOCOL_VERSION,
     ):
+        require_package("feetech-servo-sdk", extra="feetech", import_name="scservo_sdk")
         super().__init__(port, motors, calibration)
         self.protocol_version = protocol_version
         self._assert_same_protocol()
-        import scservo_sdk as scs
-
         self.port_handler = scs.PortHandler(self.port)
-        # HACK: 猴子补丁
-        self.port_handler.setPacketTimeout = patch_setPacketTimeout.__get__(
+        # HACK: monkeypatch
+        self.port_handler.setPacketTimeout = patch_setPacketTimeout.__get__(  # type: ignore[method-assign]
             self.port_handler, scs.PortHandler
         )
         self.packet_handler = scs.PacketHandler(protocol_version)
@@ -133,30 +126,30 @@ class FeetechMotorsBus(MotorsBus):
         self._no_error = 0x00
 
         if any(MODEL_PROTOCOL[model] != self.protocol_version for model in self.models):
-            raise ValueError(f"某些电机与 protocol_version={self.protocol_version} 不兼容")
+            raise ValueError(f"Some motors are incompatible with protocol_version={self.protocol_version}")
 
     def _assert_same_protocol(self) -> None:
         if any(MODEL_PROTOCOL[model] != self.protocol_version for model in self.models):
-            raise RuntimeError("某些电机使用不兼容的协议。")
+            raise RuntimeError("Some motors use an incompatible protocol.")
 
     def _assert_protocol_is_compatible(self, instruction_name: str) -> None:
         if instruction_name == "sync_read" and self.protocol_version == 1:
             raise NotImplementedError(
-                "'同步读取'在使用协议1的Feetech电机上不可用。请改用顺序'读取'。"
+                "'Sync Read' is not available with Feetech motors using Protocol 1. Use 'Read' sequentially instead."
             )
         if instruction_name == "broadcast_ping" and self.protocol_version == 1:
             raise NotImplementedError(
-                "'广播Ping'在使用协议1的Feetech电机上不可用。请改用顺序'Ping'。"
+                "'Broadcast Ping' is not available with Feetech motors using Protocol 1. Use 'Ping' sequentially instead."
             )
 
     def _assert_same_firmware(self) -> None:
         firmware_versions = self._read_firmware_version(self.ids, raise_on_error=True)
         if len(set(firmware_versions.values())) != 1:
             raise RuntimeError(
-                "某些电机使用不同的固件版本："
+                "Some Motors use different firmware versions:"
                 f"\n{pformat(firmware_versions)}\n"
-                "请先使用Feetech的软件更新它们的固件。"
-                "访问 https://www.feetechrc.com/software。"
+                "Update their firmware first using Feetech's software. "
+                "Visit https://www.feetechrc.com/software."
             )
 
     def _handshake(self) -> None:
@@ -183,17 +176,15 @@ class FeetechMotorsBus(MotorsBus):
                 found_id, found_model = next(iter(id_model.items()))
                 if found_model != expected_model_nb:
                     raise RuntimeError(
-                        f"在 {baudrate=} 上找到一个id为{found_id}的电机，但它的"
-                        f"型号'{found_model}'与预期的不同：'{expected_model_nb}'。"
-                        f"请确保您只连接到'{motor}'电机（型号'{model}'）。"
+                        f"Found one motor on {baudrate=} with id={found_id} but it has a "
+                        f"model number '{found_model}' different than the one expected: '{expected_model_nb}'. "
+                        f"Make sure you are connected only connected to the '{motor}' motor (model '{model}')."
                     )
                 return baudrate, found_id
 
-        raise RuntimeError(f"未找到电机'{motor}'（型号'{model}'）。请确保它已连接。")
+        raise RuntimeError(f"Motor '{motor}' (model '{model}') was not found. Make sure it is connected.")
 
     def _find_single_motor_p1(self, motor: str, initial_baudrate: int | None = None) -> tuple[int, int]:
-        import scservo_sdk as scs
-
         model = self.motors[motor].model
         search_baudrates = (
             [initial_baudrate] if initial_baudrate is not None else self.model_baudrate_table[model]
@@ -207,23 +198,31 @@ class FeetechMotorsBus(MotorsBus):
                 if found_model is not None:
                     if found_model != expected_model_nb:
                         raise RuntimeError(
-                            f"在 {baudrate=} 上找到一个id为{id_}的电机，但它的"
-                            f"型号'{found_model}'与预期的不同：'{expected_model_nb}'。"
-                            f"请确保您只连接到'{motor}'电机（型号'{model}'）。"
+                            f"Found one motor on {baudrate=} with id={id_} but it has a "
+                            f"model number '{found_model}' different than the one expected: '{expected_model_nb}'. "
+                            f"Make sure you are connected only connected to the '{motor}' motor (model '{model}')."
                         )
                     return baudrate, id_
 
-        raise RuntimeError(f"未找到电机'{motor}'（型号'{model}'）。请确保它已连接。")
+        raise RuntimeError(f"Motor '{motor}' (model '{model}') was not found. Make sure it is connected.")
 
     def configure_motors(self, return_delay_time=0, maximum_acceleration=254, acceleration=254) -> None:
         for motor in self.motors:
-            # 默认情况下，Feetech电机的延迟响应时间为500µs（在'Return_Delay_Time'地址上对应值250）。
-            # 我们确保将其减少到最小值2µs（值为0）。
+            # By default, Feetech motors have a 500µs delay response time (corresponding to a value of 250 on
+            # the 'Return_Delay_Time' address). We ensure this is reduced to the minimum of 2µs (value of 0).
             self.write("Return_Delay_Time", motor, return_delay_time)
-            # 将'Maximum_Acceleration'设置为254以加快电机的加速和减速。
+            # Set 'Maximum_Acceleration' to 254 to speedup acceleration and deceleration of the motors.
             if self.protocol_version == 0:
                 self.write("Maximum_Acceleration", motor, maximum_acceleration)
             self.write("Acceleration", motor, acceleration)
+
+            # Clear bit 4 (0x10) of the Phase register (0x12) to set angle feedback mode to 0.
+            # This forces position readings to be in the range [0, resolution - 1] and prevents overflow or negative values.
+            # Only known to be necessary for the STS3215.
+            if self.motors[motor].model == "sts3215":
+                phase = self.read("Phase", motor, normalize=False)
+                if phase & 0x10:
+                    self.write("Phase", motor, phase & ~0x10)
 
     @property
     def is_calibrated(self) -> bool:
@@ -259,9 +258,9 @@ class FeetechMotorsBus(MotorsBus):
             calibration[motor] = MotorCalibration(
                 id=m.id,
                 drive_mode=0,
-                homing_offset=offsets[motor],
-                range_min=mins[motor],
-                range_max=maxes[motor],
+                homing_offset=int(offsets[motor]),
+                range_min=int(mins[motor]),
+                range_max=int(maxes[motor]),
             )
 
         return calibration
@@ -278,10 +277,10 @@ class FeetechMotorsBus(MotorsBus):
 
     def _get_half_turn_homings(self, positions: dict[NameOrID, Value]) -> dict[NameOrID, Value]:
         """
-        在Feetech电机上：
+        On Feetech Motors:
         Present_Position = Actual_Position - Homing_Offset
         """
-        half_turn_homings = {}
+        half_turn_homings: dict[NameOrID, Value] = {}
         for motor, pos in positions.items():
             model = self._get_motor_model(motor)
             max_res = self.model_resolution_table[model] - 1
@@ -289,18 +288,18 @@ class FeetechMotorsBus(MotorsBus):
 
         return half_turn_homings
 
-    def disable_torque(self, motors: str | list[str] | None = None, num_retry: int = 0) -> None:
+    def disable_torque(self, motors: int | str | list[str] | None = None, num_retry: int = 0) -> None:
         for motor in self._get_motors_list(motors):
             self.write("Torque_Enable", motor, TorqueMode.DISABLED.value, num_retry=num_retry)
             self.write("Lock", motor, 0, num_retry=num_retry)
 
-    def _disable_torque(self, motor_id: int, model: str, num_retry: int = 0) -> None:
+    def _disable_torque(self, motor: int, model: str, num_retry: int = 0) -> None:
         addr, length = get_address(self.model_ctrl_table, model, "Torque_Enable")
-        self._write(addr, length, motor_id, TorqueMode.DISABLED.value, num_retry=num_retry)
+        self._write(addr, length, motor, TorqueMode.DISABLED.value, num_retry=num_retry)
         addr, length = get_address(self.model_ctrl_table, model, "Lock")
-        self._write(addr, length, motor_id, 0, num_retry=num_retry)
+        self._write(addr, length, motor, 0, num_retry=num_retry)
 
-    def enable_torque(self, motors: str | list[str] | None = None, num_retry: int = 0) -> None:
+    def enable_torque(self, motors: int | str | list[str] | None = None, num_retry: int = 0) -> None:
         for motor in self._get_motors_list(motors):
             self.write("Torque_Enable", motor, TorqueMode.ENABLED.value, num_retry=num_retry)
             self.write("Lock", motor, 1, num_retry=num_retry)
@@ -326,12 +325,21 @@ class FeetechMotorsBus(MotorsBus):
         return ids_values
 
     def _split_into_byte_chunks(self, value: int, length: int) -> list[int]:
-        return _split_into_byte_chunks(value, length)
+        if length == 1:
+            data = [value]
+        elif length == 2:
+            data = [scs.SCS_LOBYTE(value), scs.SCS_HIBYTE(value)]
+        elif length == 4:
+            data = [
+                scs.SCS_LOBYTE(scs.SCS_LOWORD(value)),
+                scs.SCS_HIBYTE(scs.SCS_LOWORD(value)),
+                scs.SCS_LOBYTE(scs.SCS_HIWORD(value)),
+                scs.SCS_HIBYTE(scs.SCS_HIWORD(value)),
+            ]
+        return data
 
     def _broadcast_ping(self) -> tuple[dict[int, int], int]:
-        import scservo_sdk as scs
-
-        data_list = {}
+        data_list: dict[int, int] = {}
 
         status_length = 6
 
@@ -351,7 +359,7 @@ class FeetechMotorsBus(MotorsBus):
             self.port_handler.is_using = False
             return data_list, result
 
-        # 设置接收超时
+        # set rx timeout
         self.port_handler.setPacketTimeoutMillis((wait_length * tx_time_per_byte) + (3.0 * scs.MAX_ID) + 16.0)
 
         rxpacket = []
@@ -368,15 +376,15 @@ class FeetechMotorsBus(MotorsBus):
             if rx_length < status_length:
                 return data_list, scs.COMM_RX_CORRUPT
 
-            # 查找数据包头
+            # find packet header
             for idx in range(0, (rx_length - 1)):
                 if (rxpacket[idx] == 0xFF) and (rxpacket[idx + 1] == 0xFF):
                     break
 
-            if idx == 0:  # 在数据包开头找到
-                # 计算校验和
+            if idx == 0:  # found at the beginning of the packet
+                # calculate checksum
                 checksum = 0
-                for idx in range(2, status_length - 1):  # 除了头部和校验和
+                for idx in range(2, status_length - 1):  # except header & checksum
                     checksum += rxpacket[idx]
 
                 checksum = ~checksum & 0xFF
@@ -391,11 +399,11 @@ class FeetechMotorsBus(MotorsBus):
                         return data_list, result
                 else:
                     result = scs.COMM_RX_CORRUPT
-                    # 移除头部 (0xFF 0xFF)
+                    # remove header (0xFF 0xFF)
                     del rxpacket[0:2]
                     rx_length = rx_length - 2
             else:
-                # 移除不必要的数据包
+                # remove unnecessary packets
                 del rxpacket[0:idx]
                 rx_length = rx_length - idx
 
@@ -405,18 +413,18 @@ class FeetechMotorsBus(MotorsBus):
             ids_status, comm = self._broadcast_ping()
             if self._is_comm_success(comm):
                 break
-            logger.debug(f"端口'{self.port}'上的广播ping失败 ({n_try=})")
+            logger.debug(f"Broadcast ping failed on port '{self.port}' ({n_try=})")
             logger.debug(self.packet_handler.getTxRxResult(comm))
 
         if not self._is_comm_success(comm):
             if raise_on_error:
                 raise ConnectionError(self.packet_handler.getTxRxResult(comm))
-            return
+            return None
 
         ids_errors = {id_: status for id_, status in ids_status.items() if self._is_error(status)}
         if ids_errors:
             display_dict = {id_: self.packet_handler.getRxPacketError(err) for id_, err in ids_errors.items()}
-            logger.error(f"找到的一些电机返回了错误状态：\n{pformat(display_dict, indent=4)}")
+            logger.error(f"Some motors found returned an error status:\n{pformat(display_dict, indent=4)}")
 
         return self._read_model_number(list(ids_status), raise_on_error)
 

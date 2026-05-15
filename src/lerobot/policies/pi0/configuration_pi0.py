@@ -1,4 +1,6 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#!/usr/bin/env python
+
+# Copyright 2025 Physical Intelligence and The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,23 +16,58 @@
 
 from dataclasses import dataclass, field
 
-from lerobot.configs.policies import PreTrainedConfig
-from lerobot.configs.types import FeatureType, NormalizationMode, PolicyFeature
-from lerobot.optim.optimizers import AdamWConfig
-from lerobot.optim.schedulers import (
-    CosineDecayWithWarmupSchedulerConfig,
-)
-from lerobot.utils.constants import OBS_IMAGES
+from lerobot.configs import FeatureType, NormalizationMode, PolicyFeature, PreTrainedConfig
+from lerobot.optim import AdamWConfig, CosineDecayWithWarmupSchedulerConfig
+from lerobot.utils.constants import ACTION, OBS_IMAGES, OBS_STATE
+
+from ..rtc.configuration_rtc import RTCConfig
+
+DEFAULT_IMAGE_SIZE = 224
 
 
 @PreTrainedConfig.register_subclass("pi0")
 @dataclass
 class PI0Config(PreTrainedConfig):
-    # 输入/输出结构。
-    n_obs_steps: int = 1
-    chunk_size: int = 50
-    n_action_steps: int = 50
+    paligemma_variant: str = "gemma_2b"
+    action_expert_variant: str = "gemma_300m"
+    dtype: str = "float32"  # Options: "bfloat16", "float32"
 
+    n_obs_steps: int = 1
+    chunk_size: int = 50  # Number of action steps to predict, in openpi called "action_horizon"
+    n_action_steps: int = 50  # Number of action steps to execute
+
+    # Shorter state and action vectors will be padded to these dimensions
+    max_state_dim: int = 32
+    max_action_dim: int = 32
+
+    # Flow matching parameters: see openpi `PI0Pytorch`
+    num_inference_steps: int = 10  # Number of denoising steps during inference
+    time_sampling_beta_alpha: float = 1.5
+    time_sampling_beta_beta: float = 1.0
+    time_sampling_scale: float = 0.999
+    time_sampling_offset: float = 0.001
+    min_period: float = 4e-3
+    max_period: float = 4.0
+
+    # Relative actions: converts absolute actions to relative (relative to state).
+    use_relative_actions: bool = False
+    # Joint names to exclude from relative (kept absolute). Empty list = all dims relative.
+    relative_exclude_joints: list[str] = field(default_factory=lambda: ["gripper"])
+    # Populated at runtime from dataset metadata by make_policy.
+    action_feature_names: list[str] | None = None
+
+    # Real-Time Chunking (RTC) configuration
+    rtc_config: RTCConfig | None = None
+
+    image_resolution: tuple[int, int] = (
+        DEFAULT_IMAGE_SIZE,
+        DEFAULT_IMAGE_SIZE,
+    )  # see openpi `preprocessing_pytorch.py`
+
+    # Add empty images. Used to add empty cameras when no image features are present.
+    empty_cameras: int = 0
+
+    # Normalization
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
             "VISUAL": NormalizationMode.IDENTITY,
@@ -39,87 +76,73 @@ class PI0Config(PreTrainedConfig):
         }
     )
 
-    # 较短的状态和动作向量将被填充
-    max_state_dim: int = 32
-    max_action_dim: int = 32
+    # Training settings
+    gradient_checkpointing: bool = False  # Enable gradient checkpointing for memory optimization
+    compile_model: bool = False  # Whether to use torch.compile for model optimization
+    compile_mode: str = "max-autotune"  # Torch compile mode
+    device: str | None = None  # Device to use for the model (None = auto-detect)
 
-    # 图像预处理
-    resize_imgs_with_padding: tuple[int, int] = (224, 224)
+    # Finetuning settings
+    freeze_vision_encoder: bool = False  # Freeze only the vision encoder
+    train_expert_only: bool = False  # Freeze entire VLM, train only action expert and projections
 
-    # 添加空图像。由 pi0_aloha_sim 使用，它在顶部相机之外
-    # 添加了左侧和右侧腕部相机。
-    empty_cameras: int = 0
-
-    # 将关节和夹爪值从标准 Aloha 空间转换为
-    # 用于训练基础模型的 pi 内部运行时使用的空间。
-    adapt_to_pi_aloha: bool = False
-
-    # 将关节维度转换为相对于当前状态的增量，然后再传递给模型。
-    # 夹爪维度将保持绝对值。
-    use_delta_joint_actions_aloha: bool = False
-
-    # 分词器
-    tokenizer_max_length: int = 48
-
-    # 投影器
-    proj_width: int = 1024
-
-    # 解码
-    num_steps: int = 10
-
-    # 注意力工具
-    use_cache: bool = True
-    attention_implementation: str = "eager"  # 或 fa2, flex
-
-    # 微调设置
-    freeze_vision_encoder: bool = True
-    train_expert_only: bool = False
-    train_state_proj: bool = True
-
-    # 训练预设
-    optimizer_lr: float = 2.5e-5
+    # Optimizer settings: see openpi `AdamW``
+    optimizer_lr: float = 2.5e-5  # see openpi `CosineDecaySchedule: peak_lr`
     optimizer_betas: tuple[float, float] = (0.9, 0.95)
     optimizer_eps: float = 1e-8
-    optimizer_weight_decay: float = 1e-10
+    optimizer_weight_decay: float = 0.01
+    optimizer_grad_clip_norm: float = 1.0
 
+    # Scheduler settings: see openpi `CosineDecaySchedule`
+    # Note: These will auto-scale if --steps < scheduler_decay_steps
+    # For example, --steps=3000 will scale warmup to 100 and decay to 3000
     scheduler_warmup_steps: int = 1_000
     scheduler_decay_steps: int = 30_000
     scheduler_decay_lr: float = 2.5e-6
 
-    # 待办: 添加 EMA
+    tokenizer_max_length: int = 48  # see openpi `__post_init__`
 
     def __post_init__(self):
         super().__post_init__()
 
-        # 待办(Steven): 在所有策略配置中验证设备和 amp？
-        """输入验证（不详尽）。"""
+        # Validate configuration
         if self.n_action_steps > self.chunk_size:
             raise ValueError(
-                f"块大小是每次模型调用的动作步数的上限。得到的 "
-                f"`n_action_steps` 为 {self.n_action_steps}，`chunk_size` 为 {self.chunk_size}。"
-            )
-        if self.n_obs_steps != 1:
-            raise ValueError(
-                f"尚未处理多个观测步。得到 `nobs_steps={self.n_obs_steps}`"
+                f"n_action_steps ({self.n_action_steps}) cannot be greater than chunk_size ({self.chunk_size})"
             )
 
-        if self.use_delta_joint_actions_aloha:
-            raise NotImplementedError(
-                "`use_delta_joint_actions_aloha` 由 pi0 用于 aloha 真实模型。它尚未移植到 LeRobot 中。"
-            )
+        if self.paligemma_variant not in ["gemma_300m", "gemma_2b"]:
+            raise ValueError(f"Invalid paligemma_variant: {self.paligemma_variant}")
+
+        if self.action_expert_variant not in ["gemma_300m", "gemma_2b"]:
+            raise ValueError(f"Invalid action_expert_variant: {self.action_expert_variant}")
+
+        if self.dtype not in ["bfloat16", "float32"]:
+            raise ValueError(f"Invalid dtype: {self.dtype}")
 
     def validate_features(self) -> None:
-        # 待办: 实现 value error
-        # if not self.image_features and not self.env_state_feature:
-        #     raise ValueError("您必须在输入中提供至少一张图像或环境状态。")
-
+        """Validate and set up input/output features."""
         for i in range(self.empty_cameras):
             key = f"{OBS_IMAGES}.empty_camera_{i}"
             empty_camera = PolicyFeature(
                 type=FeatureType.VISUAL,
-                shape=(3, 480, 640),
+                shape=(3, *self.image_resolution),  # Use configured image resolution
             )
             self.input_features[key] = empty_camera
+
+        if OBS_STATE not in self.input_features:
+            state_feature = PolicyFeature(
+                type=FeatureType.STATE,
+                shape=(self.max_state_dim,),  # Padded to max_state_dim
+            )
+            self.input_features[OBS_STATE] = state_feature
+
+        if ACTION not in self.output_features:
+            action_feature = PolicyFeature(
+                type=FeatureType.ACTION,
+                shape=(self.max_action_dim,),  # Padded to max_action_dim
+            )
+            self.output_features[ACTION] = action_feature
 
     def get_optimizer_preset(self) -> AdamWConfig:
         return AdamWConfig(
@@ -127,6 +150,7 @@ class PI0Config(PreTrainedConfig):
             betas=self.optimizer_betas,
             eps=self.optimizer_eps,
             weight_decay=self.optimizer_weight_decay,
+            grad_clip_norm=self.optimizer_grad_clip_norm,
         )
 
     def get_scheduler_preset(self):

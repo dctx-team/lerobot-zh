@@ -1,26 +1,26 @@
-# 向后兼容性
+# Backward compatibility
 
-## 策略归一化迁移 (PR #1452)
+## Policy Normalization Migration (PR #1452)
 
-**重大变更**: LeRobot 策略不再将内置归一化层嵌入到其权重中。归一化现在由外部 `PolicyProcessorPipeline` 组件处理。
+**Breaking Change**: LeRobot policies no longer have built-in normalization layers embedded in their weights. Normalization is now handled by external `PolicyProcessorPipeline` components.
 
-### 变更了什么?
+### What changed?
 
-|                            | PR #1452 之前                                  | PR #1452 之后                                               |
+|                            | Before PR #1452                                  | After PR #1452                                               |
 | -------------------------- | ------------------------------------------------ | ------------------------------------------------------------ |
-| **归一化位置** | 嵌入在模型权重中(`normalize_inputs.*`) | 外部 `PolicyProcessorPipeline` 组件                |
-| **模型状态字典**       | 包含归一化统计信息                | **仅包含干净的权重** - 无归一化参数         |
-| **使用方法**                  | `policy(batch)` 处理所有事情               | `preprocessor(batch)` → `policy(...)` → `postprocessor(...)` |
+| **Normalization Location** | Embedded in model weights (`normalize_inputs.*`) | External `PolicyProcessorPipeline` components                |
+| **Model State Dict**       | Contains normalization statistics                | **Clean weights only** - no normalization parameters         |
+| **Usage**                  | `policy(batch)` handles everything               | `preprocessor(batch)` → `policy(...)` → `postprocessor(...)` |
 
-### 对现有模型的影响
+### Impact on existing models
 
-- 在 PR #1452 **之前**训练的模型在其权重中嵌入了归一化
-- 这些模型需要迁移才能与新的 `PolicyProcessorPipeline` 系统一起使用
-- 迁移会提取归一化统计信息并创建单独的处理器管道
+- Models trained **before** PR #1452 have normalization embedded in their weights
+- These models need migration to work with the new `PolicyProcessorPipeline` system
+- The migration extracts normalization statistics and creates separate processor pipelines
 
-### 迁移旧模型
+### Migrating old models
 
-使用迁移脚本转换带有嵌入式归一化的模型:
+Use the migration script to convert models with embedded normalization:
 
 ```shell
 python src/lerobot/processor/migrate_policy_normalization.py \
@@ -29,57 +29,57 @@ python src/lerobot/processor/migrate_policy_normalization.py \
     --branch migrated
 ```
 
-该脚本:
+The script:
 
-1. **提取**模型权重中的归一化统计信息
-2. **创建**外部预处理器和后处理器管道
-3. **移除**模型权重中的归一化层
-4. **保存**干净的模型 + 处理器管道
-5. **推送**到 Hub 并自动创建 PR
+1. **Extracts** normalization statistics from model weights
+2. **Creates** external preprocessor and postprocessor pipelines
+3. **Removes** normalization layers from model weights
+4. **Saves** clean model + processor pipelines
+5. **Pushes** to Hub with automatic PR creation
 
-### 使用迁移后的模型
+### Using migrated models
 
 ```python
-# 新的使用模式(迁移后)
-from lerobot.policies.factory import make_policy, make_pre_post_processors
+# New usage pattern (after migration)
+from lerobot.policies import make_policy, make_pre_post_processors
 
-# 分别加载模型和处理器
+# Load model and processors separately
 policy = make_policy(config, ds_meta=dataset.meta)
 preprocessor, postprocessor = make_pre_post_processors(
     policy_cfg=config,
     dataset_stats=dataset.meta.stats
 )
 
-# 通过管道处理数据
+# Process data through pipeline
 processed_batch = preprocessor(raw_batch)
 action = policy.select_action(processed_batch)
 final_action = postprocessor(action)
 ```
 
-## 硬件 API 重新设计
+## Hardware API redesign
 
-PR [#777](https://github.com/huggingface/lerobot/pull/777) 改进了 LeRobot 校准,但**不向后兼容**。以下是变更内容的概述以及如何继续使用在此 PR 之前创建的数据集。
+PR [#777](https://github.com/huggingface/lerobot/pull/777) improves the LeRobot calibration but is **not backward-compatible**. Below is a overview of what changed and how you can continue to work with datasets created before this pull request.
 
-### 变更了什么?
+### What changed?
 
-|                                   | PR #777 之前                                    | PR #777 之后                                                |
+|                                   | Before PR #777                                    | After PR #777                                                |
 | --------------------------------- | ------------------------------------------------- | ------------------------------------------------------------ |
-| **关节范围**                   | 度数 `-180...180°`                             | **归一化范围** 关节:`–100...100` 夹爪:`0...100` |
-| **零位置 (SO100 / SO101)** | 手臂水平完全伸展                   | **在每个关节范围的中间**                    |
-| **边界处理**             | 用于检测 ±180° 环绕的软件保护措施 | 由于中间范围零点,不需要环绕逻辑            |
+| **Joint range**                   | Degrees `-180...180°`                             | **Normalised range** Joints: `–100...100` Gripper: `0...100` |
+| **Zero position (SO100 / SO101)** | Arm fully extended horizontally                   | **In middle of the range for each joint**                    |
+| **Boundary handling**             | Software safeguards to detect ±180 ° wrap-arounds | No wrap-around logic needed due to mid-range zero            |
 
 ---
 
-### 对现有数据集的影响
+### Impact on existing datasets
 
-- 在 PR #777 **之前**记录的轨迹如果直接加载将无法正确重放:
-  - 关节角度偏移并且归一化不正确。
-- 任何直接在旧数据上微调或训练的模型都需要转换其输入和输出。
+- Recorded trajectories created **before** PR #777 will replay incorrectly if loaded directly:
+  - Joint angles are offset and incorrectly normalized.
+- Any models directly finetuned or trained on the old data will need their inputs and outputs converted.
 
-### 使用以前校准系统制作的数据集
+### Using datasets made with the previous calibration system
 
-我们提供了一个迁移示例脚本,用于重放使用以前校准记录的片段:`examples/backward_compatibility/replay.py`。
-下面我们将带你了解示例脚本中所做的修改,以使以前的校准数据集正常工作。
+We provide a migration example script for replaying an episode recorded with the previous calibration here: `examples/backward_compatibility/replay.py`.
+Below we take you through the modifications that are done in the example script to make the previous calibration datasets work.
 
 ```diff
 +   key = f"{name.removeprefix('main_')}.pos"
@@ -88,8 +88,8 @@ PR [#777](https://github.com/huggingface/lerobot/pull/777) 改进了 LeRobot 校
 +   action["elbow_flex.pos"] -= 90
 ```
 
-让我们来分解一下。
-新代码库使用 `.pos` 后缀表示位置观察,我们移除了 `main_` 前缀:
+Let's break this down.
+New codebase uses `.pos` suffix for the position observations and we have removed `main_` prefix:
 
 <!-- prettier-ignore-start -->
 ```python
@@ -97,7 +97,7 @@ key = f"{name.removeprefix('main_')}.pos"
 ```
 <!-- prettier-ignore-end -->
 
-对于 `"shoulder_lift"`(id = 2),与旧校准/代码相比,0 位置改变了 -90 度,方向相反。
+For `"shoulder_lift"` (id = 2), the 0 position is changed by -90 degrees and the direction is reversed compared to old calibration/code.
 
 <!-- prettier-ignore-start -->
 ```python
@@ -105,7 +105,7 @@ action["shoulder_lift.pos"] = -(action["shoulder_lift.pos"] - 90)
 ```
 <!-- prettier-ignore-end -->
 
-对于 `"elbow_flex"`(id = 3),与旧校准/代码相比,0 位置改变了 -90 度。
+For `"elbow_flex"` (id = 3), the 0 position is changed by -90 degrees compared to old calibration/code.
 
 <!-- prettier-ignore-start -->
 ```python
@@ -113,7 +113,7 @@ action["elbow_flex.pos"] -= 90
 ```
 <!-- prettier-ignore-end -->
 
-为了使用度数归一化,我们然后将 `--robot.use_degrees` 选项设置为 `true`。
+To use degrees normalization we then set the `--robot.use_degrees` option to `true`.
 
 ```diff
 python examples/backward_compatibility/replay.py \
@@ -125,12 +125,12 @@ python examples/backward_compatibility/replay.py \
     --dataset.episode=0
 ```
 
-### 使用以前校准系统训练的策略
+### Using policies trained with the previous calibration system
 
-策略以与数据集相同的格式(`torch.Tensors`)输出动作。因此,应该应用相同的转换。
+Policies output actions in the same format as the datasets (`torch.Tensors`). Therefore, the same transformations should be applied.
 
-要找到这些转换,我们建议首先尝试使用上面的部分重放你的策略训练所用数据集的一个片段。
-然后,在你的推理脚本中添加这些相同的转换(此处显示在 `record.py` 脚本中):
+To find these transformations, we recommend to first try and and replay an episode of the dataset your policy was trained on using the section above.
+Then, add these same transformations on your inference script (shown here in the `record.py` script):
 
 ```diff
 action_values = predict_action(
@@ -148,4 +148,4 @@ action_values = predict_action(
     robot.send_action(action)
 ```
 
-如果你有问题或遇到迁移问题,请随时在 [Discord](https://discord.gg/s3KuuzsPFb) 上提问
+If you have questions or run into migration issues, feel free to ask them on [Discord](https://discord.gg/s3KuuzsPFb)

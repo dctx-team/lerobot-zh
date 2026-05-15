@@ -15,7 +15,8 @@
 # limitations under the License.
 
 """
-此脚本定义了一个处理器步骤，用于将环境转换数据移动到特定的 torch 设备并转换其浮点精度。
+This script defines a processor step for moving environment transition data to a specific torch device and casting
+its floating-point precision.
 """
 
 from dataclasses import dataclass
@@ -23,10 +24,10 @@ from typing import Any
 
 import torch
 
-from lerobot.configs.types import PipelineFeatureType, PolicyFeature
-from lerobot.utils.utils import get_safe_torch_device
+from lerobot.configs import PipelineFeatureType, PolicyFeature
+from lerobot.types import EnvTransition, PolicyAction, TransitionKey
+from lerobot.utils.device_utils import get_safe_torch_device
 
-from .core import EnvTransition, PolicyAction, TransitionKey
 from .pipeline import ProcessorStep, ProcessorStepRegistry
 
 
@@ -34,14 +35,15 @@ from .pipeline import ProcessorStep, ProcessorStepRegistry
 @dataclass
 class DeviceProcessorStep(ProcessorStep):
     """
-    将 `EnvTransition` 中的所有张量移动到指定设备并可选地转换其浮点数据类型的处理器步骤。
+    Processor step to move all tensors within an `EnvTransition` to a specified device and optionally cast their
+    floating-point data type.
 
-    这对于在 GPU 等硬件上准备用于模型训练或推理的数据至关重要。
+    This is crucial for preparing data for model training or inference on hardware like GPUs.
 
-    属性：
-        device: 张量的目标设备（例如，"cpu"、"cuda"、"cuda:0"）。
-        float_dtype: 目标浮点数据类型字符串（例如，"float32"、"float16"、"bfloat16"）。
-                     如果为 None，则不更改数据类型。
+    Attributes:
+        device: The target device for tensors (e.g., "cpu", "cuda", "cuda:0").
+        float_dtype: The target floating-point dtype as a string (e.g., "float32", "float16", "bfloat16").
+                     If None, the dtype is not changed.
     """
 
     device: str = "cpu"
@@ -59,17 +61,17 @@ class DeviceProcessorStep(ProcessorStep):
 
     def __post_init__(self):
         """
-        通过将字符串配置转换为 torch 对象来初始化处理器。
+        Initializes the processor by converting string configurations to torch objects.
 
-        此方法设置 `torch.device`，确定传输是否可以是非阻塞的，并验证 `float_dtype` 字符串，
-        将其转换为 `torch.dtype` 对象。
+        This method sets up the `torch.device`, determines if transfers can be non-blocking, and validates the
+        `float_dtype` string, converting it to a `torch.dtype` object.
         """
         self.tensor_device: torch.device = get_safe_torch_device(self.device)
-        # 在选择特定 GPU 时更新设备字符串（例如 "cuda" -> "cuda:0"）
+        # Update device string in case a specific GPU was selected (e.g., "cuda" -> "cuda:0")
         self.device = self.tensor_device.type
         self.non_blocking = "cuda" in str(self.device)
 
-        # 验证并将 float_dtype 字符串转换为 torch 数据类型
+        # Validate and convert float_dtype string to torch dtype
         if self.float_dtype is not None:
             if self.float_dtype not in self.DTYPE_MAPPING:
                 raise ValueError(
@@ -81,36 +83,37 @@ class DeviceProcessorStep(ProcessorStep):
 
     def _process_tensor(self, tensor: torch.Tensor) -> torch.Tensor:
         """
-        将单个张量移动到目标设备并转换其数据类型。
+        Moves a single tensor to the target device and casts its dtype.
 
-        通过在张量已经在与目标不同的 CUDA 设备上时不移动张量来处理多 GPU 场景，
-        这在使用 Accelerate 等框架时很有用。
+        Handles multi-GPU scenarios by not moving a tensor if it's already on a different CUDA device than
+        the target, which is useful when using frameworks like Accelerate.
 
-        参数：
-            tensor: 输入 torch.Tensor。
+        Args:
+            tensor: The input torch.Tensor.
 
-        返回：
-            处理后的张量，位于正确的设备上并具有正确的数据类型。
+        Returns:
+            The processed tensor on the correct device and with the correct dtype.
         """
-        # 确定目标设备
+        # Determine target device
         if tensor.is_cuda and self.tensor_device.type == "cuda":
-            # 张量和目标都在 GPU 上 - 保留张量的 GPU 位置。
-            # 这处理多 GPU 场景，其中 Accelerate 已经将张量放置在每个进程的正确 GPU 上。
+            # Both tensor and target are on GPU - preserve tensor's GPU placement.
+            # This handles multi-GPU scenarios where Accelerate has already placed
+            # tensors on the correct GPU for each process.
             target_device = tensor.device
         else:
-            # 张量在 CPU 上，或者我们配置为 CPU。
-            # 在这两种情况下，使用配置的设备。
+            # Either tensor is on CPU, or we're configured for CPU.
+            # In both cases, use the configured device.
             target_device = self.tensor_device
 
-        # MPS 解决方法：将 float64 转换为 float32，因为 MPS 不支持 float64
+        # MPS workaround: Convert float64 to float32 since MPS doesn't support float64
         if target_device.type == "mps" and tensor.dtype == torch.float64:
             tensor = tensor.to(dtype=torch.float32)
 
-        # 仅在必要时移动
+        # Only move if necessary
         if tensor.device != target_device:
             tensor = tensor.to(target_device, non_blocking=self.non_blocking)
 
-        # 如果指定了浮点数据类型并且张量是浮点类型，则进行转换
+        # Convert float dtype if specified and tensor is floating point
         if self._target_float_dtype is not None and tensor.is_floating_point():
             tensor = tensor.to(dtype=self._target_float_dtype)
 
@@ -118,16 +121,16 @@ class DeviceProcessorStep(ProcessorStep):
 
     def __call__(self, transition: EnvTransition) -> EnvTransition:
         """
-        对环境转换中的所有张量应用设备和数据类型转换。
+        Applies device and dtype conversion to all tensors in an environment transition.
 
-        它遍历转换，找到所有 `torch.Tensor` 对象（包括嵌套在 `observation` 等字典中的对象），
-        并对其进行处理。
+        It iterates through the transition, finds all `torch.Tensor` objects (including those nested in
+        dictionaries like `observation`), and processes them.
 
-        参数：
-            transition: 输入 `EnvTransition` 对象。
+        Args:
+            transition: The input `EnvTransition` object.
 
-        返回：
-            所有张量都已移动到目标设备和数据类型的新 `EnvTransition` 对象。
+        Returns:
+            A new `EnvTransition` object with all tensors moved to the target device and dtype.
         """
         new_transition = transition.copy()
         action = new_transition.get(TransitionKey.ACTION)
@@ -147,13 +150,13 @@ class DeviceProcessorStep(ProcessorStep):
             TransitionKey.COMPLEMENTARY_DATA,
         ]
 
-        # 处理简单的顶层张量
+        # Process simple, top-level tensors
         for key in simple_tensor_keys:
             value = transition.get(key)
             if isinstance(value, torch.Tensor):
                 new_transition[key] = self._process_tensor(value)
 
-        # 处理嵌套在字典中的张量
+        # Process tensors nested within dictionaries
         for key in dict_tensor_keys:
             data_dict = transition.get(key)
             if data_dict is not None:
@@ -167,10 +170,10 @@ class DeviceProcessorStep(ProcessorStep):
 
     def get_config(self) -> dict[str, Any]:
         """
-        返回处理器的可序列化配置。
+        Returns the serializable configuration of the processor.
 
-        返回：
-            包含设备和 float_dtype 设置的字典。
+        Returns:
+            A dictionary containing the device and float_dtype settings.
         """
         return {"device": self.device, "float_dtype": self.float_dtype}
 
@@ -178,14 +181,14 @@ class DeviceProcessorStep(ProcessorStep):
         self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
     ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
         """
-        返回未更改的输入特征。
+        Returns the input features unchanged.
 
-        设备和数据类型转换不会改变特征的基本定义（例如，形状）。
+        Device and dtype transformations do not alter the fundamental definition of the features (e.g., shape).
 
-        参数：
-            features: 策略特征字典。
+        Args:
+            features: A dictionary of policy features.
 
-        返回：
-            原始策略特征字典。
+        Returns:
+            The original dictionary of policy features.
         """
         return features

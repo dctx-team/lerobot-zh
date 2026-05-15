@@ -13,9 +13,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import logging
 from collections.abc import Iterator
 
 import torch
+
+logger = logging.getLogger(__name__)
 
 
 class EpisodeAwareSampler:
@@ -28,23 +31,45 @@ class EpisodeAwareSampler:
         drop_n_last_frames: int = 0,
         shuffle: bool = False,
     ):
-        """可选择性地结合回合边界信息的采样器。
+        """Sampler that optionally incorporates episode boundary information.
 
         Args:
-            dataset_from_indices: 包含数据集中每个回合起始位置的索引列表。
-            dataset_to_indices: 包含数据集中每个回合结束位置的索引列表。
-            episode_indices_to_use: 要使用的回合索引列表。如果为 None，则使用所有回合。
-                                    假设回合的索引从 0 到 N-1。
-            drop_n_first_frames: 从每个回合开始处丢弃的帧数。
-            drop_n_last_frames: 从每个回合结束处丢弃的帧数。
-            shuffle: 是否打乱索引。
+            dataset_from_indices: List of indices containing the start of each episode in the dataset.
+            dataset_to_indices: List of indices containing the end of each episode in the dataset.
+            episode_indices_to_use: List of episode indices to use. If None, all episodes are used.
+                                    Assumes that episodes are indexed from 0 to N-1.
+            drop_n_first_frames: Number of frames to drop from the start of each episode.
+            drop_n_last_frames: Number of frames to drop from the end of each episode.
+            shuffle: Whether to shuffle the indices.
         """
+        if drop_n_first_frames < 0:
+            raise ValueError(f"drop_n_first_frames must be >= 0, got {drop_n_first_frames}")
+        if drop_n_last_frames < 0:
+            raise ValueError(f"drop_n_last_frames must be >= 0, got {drop_n_last_frames}")
+
         indices = []
         for episode_idx, (start_index, end_index) in enumerate(
             zip(dataset_from_indices, dataset_to_indices, strict=True)
         ):
             if episode_indices_to_use is None or episode_idx in episode_indices_to_use:
+                ep_length = end_index - start_index
+                if drop_n_first_frames + drop_n_last_frames >= ep_length:
+                    logger.warning(
+                        "Episode %d has %d frames but drop_n_first_frames=%d and "
+                        "drop_n_last_frames=%d removes all frames. Skipping.",
+                        episode_idx,
+                        ep_length,
+                        drop_n_first_frames,
+                        drop_n_last_frames,
+                    )
+                    continue
                 indices.extend(range(start_index + drop_n_first_frames, end_index - drop_n_last_frames))
+
+        if not indices:
+            raise ValueError(
+                "No valid frames remain after applying drop_n_first_frames and drop_n_last_frames. "
+                "All episodes were either filtered out or had too few frames."
+            )
 
         self.indices = indices
         self.shuffle = shuffle

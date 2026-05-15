@@ -16,10 +16,11 @@
 
 from dataclasses import dataclass
 
-from lerobot.configs.types import PipelineFeatureType, PolicyFeature
+from lerobot.configs import PipelineFeatureType, PolicyFeature
+from lerobot.types import EnvAction, EnvTransition, PolicyAction, TransitionKey
 
 from .converters import to_tensor
-from .core import EnvAction, EnvTransition, PolicyAction
+from .hil_processor import TELEOP_ACTION_KEY
 from .pipeline import ActionProcessorStep, ProcessorStep, ProcessorStepRegistry
 
 
@@ -27,14 +28,15 @@ from .pipeline import ActionProcessorStep, ProcessorStep, ProcessorStepRegistry
 @dataclass
 class Torch2NumpyActionProcessorStep(ActionProcessorStep):
     """
-    将 PyTorch 张量动作转换为 NumPy 数组。
+    Converts a PyTorch tensor action to a NumPy array.
 
-    当策略的输出（通常是 torch.Tensor）需要传递给期望 NumPy 数组的环境或组件时，
-    此步骤非常有用。
+    This step is useful when the output of a policy (typically a torch.Tensor)
+    needs to be passed to an environment or component that expects a NumPy array.
 
-    属性：
-        squeeze_batch_dim: 如果为 True，则在数组的第一个维度大小为 1 时移除该维度。
-                           这对于将大小为 (1, D) 的批处理动作转换为大小为 (D,) 的单个动作很有用。
+    Attributes:
+        squeeze_batch_dim: If True, removes the first dimension of the array
+                           if it is of size 1. This is useful for converting a
+                           batched action of size (1, D) to a single action of size (D,).
     """
 
     squeeze_batch_dim: bool = True
@@ -48,8 +50,8 @@ class Torch2NumpyActionProcessorStep(ActionProcessorStep):
 
         numpy_action = action.detach().cpu().numpy()
 
-        # 移除批次维度但保留动作维度。
-        # 仅在存在批次维度（第一个维度 == 1）时压缩。
+        # Remove batch dimensions but preserve action dimensions.
+        # Only squeeze if there's a batch dimension (first dim == 1).
         if (
             self.squeeze_batch_dim
             and numpy_action.shape
@@ -69,12 +71,10 @@ class Torch2NumpyActionProcessorStep(ActionProcessorStep):
 @ProcessorStepRegistry.register("numpy2torch_action_processor")
 @dataclass
 class Numpy2TorchActionProcessorStep(ProcessorStep):
-    """当动作存在时，将 NumPy 数组动作转换为 PyTorch 张量。"""
+    """Converts a NumPy array action to a PyTorch tensor when action is present."""
 
     def __call__(self, transition: EnvTransition) -> EnvTransition:
-        """如果动作存在，则将 NumPy 动作转换为 torch 张量，否则直接通过。"""
-        from .core import TransitionKey
-
+        """Converts numpy action to torch tensor if action exists, otherwise passes through."""
         self._current_transition = transition.copy()
         new_transition = self._current_transition
 
@@ -85,8 +85,15 @@ class Numpy2TorchActionProcessorStep(ProcessorStep):
                     f"Expected np.ndarray or None, got {type(action).__name__}. "
                     "Use appropriate processor for non-tensor actions."
                 )
-            torch_action = to_tensor(action, dtype=None)  # 保留原始数据类型
+            torch_action = to_tensor(action, dtype=None)  # Preserve original dtype
             new_transition[TransitionKey.ACTION] = torch_action
+
+        complementary_data = new_transition.get(TransitionKey.COMPLEMENTARY_DATA, {})
+        if TELEOP_ACTION_KEY in complementary_data:
+            teleop_action = complementary_data[TELEOP_ACTION_KEY]
+            if isinstance(teleop_action, EnvAction):
+                complementary_data[TELEOP_ACTION_KEY] = to_tensor(teleop_action)
+            new_transition[TransitionKey.COMPLEMENTARY_DATA] = complementary_data
 
         return new_transition
 

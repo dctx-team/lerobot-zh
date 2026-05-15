@@ -27,18 +27,19 @@ import torch.nn.functional as F  # noqa: N812
 import torchvision
 from torch import Tensor, nn
 
-from lerobot.policies.pretrained import PreTrainedPolicy
-from lerobot.policies.utils import get_device_from_parameters, get_output_shape, populate_queues
-from lerobot.policies.vqbet.configuration_vqbet import VQBeTConfig
-from lerobot.policies.vqbet.vqbet_utils import GPT, ResidualVQ
 from lerobot.utils.constants import ACTION, OBS_IMAGES, OBS_STATE
+
+from ..pretrained import PreTrainedPolicy
+from ..utils import get_device_from_parameters, get_output_shape, populate_queues
+from .configuration_vqbet import VQBeTConfig
+from .vqbet_utils import GPT, ResidualVQ
 
 # ruff: noqa: N806
 
 
 class VQBeTPolicy(PreTrainedPolicy):
     """
-    VQ-BeT策略，基于论文"Behavior Generation with Latent Actions"
+    VQ-BeT Policy as per "Behavior Generation with Latent Actions"
     """
 
     config_class = VQBeTConfig
@@ -47,12 +48,14 @@ class VQBeTPolicy(PreTrainedPolicy):
     def __init__(
         self,
         config: VQBeTConfig | None = None,
+        **kwargs,
     ):
         """
-        参数:
-            config: 策略配置类实例，如果为None，则使用配置类的默认实例化。
-            dataset_stats: 用于归一化的数据集统计信息。如果在此处未传递，则期望在使用策略之前
-                通过调用`load_state_dict`传递。
+        Args:
+            config: Policy configuration class instance or None, in which case the default instantiation of
+                the configuration class is used.
+            dataset_stats: Dataset statistics to be used for normalization. If not passed here, it is expected
+                that they will be passed with a call to `load_state_dict` before the policy is used.
         """
         super().__init__(config)
         config.validate_features()
@@ -104,8 +107,8 @@ class VQBeTPolicy(PreTrainedPolicy):
 
     def reset(self):
         """
-        清空观测和动作队列。应该在`env.reset()`时调用。
-        队列在策略推演过程中被填充，它们包含最新的n个观测和动作。
+        Clear observation and action queues. Should be called on `env.reset()`
+        queues are populated during rollout of the policy, they contain the n latest observations and actions
         """
         self._queues = {
             OBS_IMAGES: deque(maxlen=self.config.n_obs_steps),
@@ -121,18 +124,19 @@ class VQBeTPolicy(PreTrainedPolicy):
 
     @torch.no_grad()
     def select_action(self, batch: dict[str, Tensor]) -> Tensor:
-        """在给定环境观测的情况下选择单个动作。
+        """Select a single action given environment observations.
 
-        此方法封装了`select_actions`，以便一次返回一个动作在环境中执行。它通过管理队列中的
-        动作来工作，仅在队列为空时调用`select_actions`。
+        This method wraps `select_actions` in order to return one action at a time for execution in the
+        environment. It works by managing the actions in a queue and only calling `select_actions` when the
+        queue is empty.
         """
-        # 注意：对于离线评估，批次中有动作，因此我们需要将其弹出
+        # NOTE: for offline evaluation, we have action in the batch, so we need to pop it out
         if ACTION in batch:
             batch.pop(ACTION)
-        batch = dict(batch)  # 浅拷贝，以便添加键不会修改原始数据
-        # 注意：重要的是，这发生在将图像堆叠成单个键之后。
+        batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
+        # NOTE: It's important that this happens after stacking the images into a single key.
         batch[OBS_IMAGES] = torch.stack([batch[key] for key in self.config.image_features], dim=-4)
-        # 注意：对于离线评估，批次中有动作，因此我们需要将其弹出
+        # NOTE: for offline evaluation, we have action in the batch, so we need to pop it out
         if ACTION in batch:
             batch.pop(ACTION)
 
@@ -140,27 +144,27 @@ class VQBeTPolicy(PreTrainedPolicy):
 
         if not self.vqbet.action_head.vqvae_model.discretized.item():
             warnings.warn(
-                "要在环境中评估，您的VQ-BeT模型应包含预训练的残差VQ。",
+                "To evaluate in the environment, your VQ-BeT model should contain a pretrained Residual VQ.",
                 stacklevel=1,
             )
 
         if len(self._queues[ACTION]) == 0:
             actions = self.predict_action_chunk(batch)
-            # 由于动作队列中的数据维度是(action_chunk_size, batch_size, action_dim)，我们转置动作并填充队列
+            # since the data in the action queue's dimension is (action_chunk_size, batch_size, action_dim), we transpose the action and fill the queue
             self._queues[ACTION].extend(actions.transpose(0, 1))
 
         action = self._queues[ACTION].popleft()
         return action
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
-        """通过模型运行批次数据并计算训练或验证的损失。"""
-        batch = dict(batch)  # 浅拷贝，以便添加键不会修改原始数据
+        """Run the batch through the model and compute the loss for training or validation."""
+        batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
         batch[OBS_IMAGES] = torch.stack([batch[key] for key in self.config.image_features], dim=-4)
-        # VQ-BeT在训练BeT之前使用VQ-VAE离散化动作（请参阅VQ-BeT论文的3.2节 https://huggingface.co/papers/2403.03181）
+        # VQ-BeT discretizes action using VQ-VAE before training BeT (please refer to section 3.2 in the VQ-BeT paper https://huggingface.co/papers/2403.03181)
         if not self.vqbet.action_head.vqvae_model.discretized.item():
-            # loss: 训练RVQ的总损失
-            # n_different_codes: 单个批次中使用的总可能VQ代码数量（其中有多少至少有一个编码器嵌入作为最近邻）。最多可以是`vqvae_n_embed * RVQ层数(=2)`。
-            # n_different_combinations: 单个批次中使用的所有可能组合中有多少种不同的代码组合。最多可以是`vqvae_n_embed ^ RVQ层数(=2)`（提示：将RVQ视为决策树）。
+            # loss: total loss of training RVQ
+            # n_different_codes: how many of the total possible VQ codes are being used in single batch (how many of them have at least one encoder embedding as a nearest neighbor). This can be at most `vqvae_n_embed * number of layers of RVQ (=2)`.
+            # n_different_combinations: how many different code combinations are being used out of all possible combinations in single batch. This can be at most `vqvae_n_embed ^ number of layers of RVQ (=2)` (hint consider the RVQ as a decision tree).
             loss, n_different_codes, n_different_combinations, recon_l1_error = (
                 self.vqbet.action_head.discretize(self.config.n_vqvae_training_steps, batch[ACTION])
             )
@@ -169,7 +173,7 @@ class VQBeTPolicy(PreTrainedPolicy):
                 "n_different_combinations": n_different_combinations,
                 "recon_l1_error": recon_l1_error,
             }
-        # 如果残差VQ已经训练完成，VQ-BeT训练其GPT和码预测头/偏移预测头部分。
+        # if Residual VQ is already trained, VQ-BeT trains its GPT and bin prediction head / offset prediction head parts.
         _, loss_dict = self.vqbet(batch, rollout=False)
         loss = loss_dict.pop("loss")
 
@@ -178,31 +182,32 @@ class VQBeTPolicy(PreTrainedPolicy):
 
 class SpatialSoftmax(nn.Module):
     """
-    Finn等人在"Deep Spatial Autoencoders for Visuomotor Learning"中描述的空间软性Argmax操作
-    (https://huggingface.co/papers/1509.06113)。robomimic实现的最小化移植版本。
+    Spatial Soft Argmax operation described in "Deep Spatial Autoencoders for Visuomotor Learning" by Finn et al.
+    (https://huggingface.co/papers/1509.06113). A minimal port of the robomimic implementation.
 
-    从高层次来看，这采用2D特征图（来自卷积网络/ViT）并返回每个通道激活的"质心"，
-    即策略要关注的图像空间中的关键点。
+    At a high level, this takes 2D feature maps (from a convnet/ViT) and returns the "center of mass"
+    of activations of each channel, i.e., keypoints in the image space for the policy to focus on.
 
-    示例：采用大小为(512x10x12)的特征图。我们生成归一化坐标网格(10x12x2)：
+    Example: take feature maps of size (512x10x12). We generate a grid of normalized coordinates (10x12x2):
     -----------------------------------------------------
     | (-1., -1.)   | (-0.82, -1.)   | ... | (1., -1.)   |
     | (-1., -0.78) | (-0.82, -0.78) | ... | (1., -0.78) |
     | ...          | ...            | ... | ...         |
     | (-1., 1.)    | (-0.82, 1.)    | ... | (1., 1.)    |
     -----------------------------------------------------
-    这通过在激活(512x120)上应用按通道的softmax并与坐标(120x2)计算点积来实现，
-    以获得最大激活的期望点(512x2)。
+    This is achieved by applying channel-wise softmax over the activations (512x120) and computing the dot
+    product with the coordinates (120x2) to get expected points of maximal activation (512x2).
 
-    上述示例生成512个关键点（对应于512个输入通道）。我们可以选择性地提供num_kp != None
-    来控制关键点的数量。这是通过首先应用可学习的线性映射(in_channels, H, W) -> (num_kp, H, W)来实现的。
+    The example above results in 512 keypoints (corresponding to the 512 input channels). We can optionally
+    provide num_kp != None to control the number of keypoints. This is achieved by a first applying a learnable
+    linear mapping (in_channels, H, W) -> (num_kp, H, W).
     """
 
     def __init__(self, input_shape, num_kp=None):
         """
-        参数:
-            input_shape (list): (C, H, W) 输入特征图形状。
-            num_kp (int): 输出中关键点的数量。如果为None，输出将具有与输入相同数量的通道。
+        Args:
+            input_shape (list): (C, H, W) input feature map shape.
+            num_kp (int): number of keypoints in output. If None, output will have the same number of channels as input.
         """
         super().__init__()
 
@@ -216,67 +221,67 @@ class SpatialSoftmax(nn.Module):
             self.nets = None
             self._out_c = self._in_c
 
-        # 我们可以直接使用torch.linspace，但这似乎与numpy的行为略有不同，
-        # 会导致预训练模型的pc_success略有下降。
+        # we could use torch.linspace directly but that seems to behave slightly differently than numpy
+        # and causes a small degradation in pc_success of pre-trained models.
         pos_x, pos_y = np.meshgrid(np.linspace(-1.0, 1.0, self._in_w), np.linspace(-1.0, 1.0, self._in_h))
         pos_x = torch.from_numpy(pos_x.reshape(self._in_h * self._in_w, 1)).float()
         pos_y = torch.from_numpy(pos_y.reshape(self._in_h * self._in_w, 1)).float()
-        # 注册为缓冲区，以便将其移动到正确的设备。
+        # register as buffer so it's moved to the correct device.
         self.register_buffer("pos_grid", torch.cat([pos_x, pos_y], dim=1))
 
     def forward(self, features: Tensor) -> Tensor:
         """
-        参数:
-            features: (B, C, H, W) 输入特征图。
-        返回:
-            (B, K, 2) 关键点的图像空间坐标。
+        Args:
+            features: (B, C, H, W) input feature maps.
+        Returns:
+            (B, K, 2) image-space coordinates of keypoints.
         """
         if self.nets is not None:
             features = self.nets(features)
 
-        # [B, K, H, W] -> [B * K, H * W]，其中K是关键点数量
+        # [B, K, H, W] -> [B * K, H * W] where K is number of keypoints
         features = features.reshape(-1, self._in_h * self._in_w)
-        # 2d softmax归一化
+        # 2d softmax normalization
         attention = F.softmax(features, dim=-1)
-        # [B * K, H * W] x [H * W, 2] -> [B * K, 2]，用于x和y维度中的空间坐标均值
+        # [B * K, H * W] x [H * W, 2] -> [B * K, 2] for spatial coordinate mean in x and y dimensions
         expected_xy = attention @ self.pos_grid
-        # 重塑为[B, K, 2]
+        # reshape to [B, K, 2]
         feature_keypoints = expected_xy.view(-1, self._out_c, 2)
 
         return feature_keypoints
 
 
 class VQBeTModel(nn.Module):
-    """VQ-BeT：VQ-BeT的底层神经网络
+    """VQ-BeT: The underlying neural network for VQ-BeT
 
-    注意：在此代码中，我们使用术语`rgb_encoder`、'policy'、`action_head`。其含义如下：
-        - `rgb_encoder`将rgb风格的图像观测处理为一维嵌入向量
-        - `policy`是一个minGPT架构，接受观测序列和动作查询标记以生成`features`。
-        - 这些`features`通过动作头，该头经过代码预测、偏移预测头，
-        最终生成动作块的预测。
+    Note: In this code we use the terms `rgb_encoder`, 'policy', `action_head`. The meanings are as follows.
+        - The `rgb_encoder` process rgb-style image observations to one-dimensional embedding vectors
+        - A `policy` is a minGPT architecture, that takes observation sequences and action query tokens to generate `features`.
+        - These `features` pass through the action head, which passes through the code prediction, offset prediction head,
+        and finally generates a prediction for the action chunks.
 
-        -------------------------------** 图例 **-------------------------------
+        -------------------------------** legend **-------------------------------
         │   n = n_obs_steps, p = n_action_pred_token, c = action_chunk_size)   │
-        │   o_{t} : 时间步{t}的视觉观测                           │
-        │   s_{t} : 时间步{t}的状态观测                            │
-        │   a_{t} : 时间步{t}的动作                                       │
-        │   A_Q : action_query_token（动作查询标记）                                             │
+        │   o_{t} : visual observation at timestep {t}                           │
+        │   s_{t} : state observation at timestep {t}                            │
+        │   a_{t} : action at timestep {t}                                       │
+        │   A_Q : action_query_token                                             │
         --------------------------------------------------------------------------
 
 
-        训练阶段1. 使用残差VQ离散化动作（进行config.n_vqvae_training_steps步）
+        Training Phase 1. Discretize action using Residual VQ (for config.n_vqvae_training_steps steps)
 
 
         ┌─────────────────┐            ┌─────────────────┐            ┌─────────────────┐
         │                 │            │                 │            │                 │
-        │   RVQ编码器     │    ─►      │     残差        │    ─►      │   RVQ解码器     │
-        │ (a_{t}~a_{t+p}) │            │  代码量化器     │            │                 │
+        │   RVQ encoder   │    ─►      │     Residual    │    ─►      │   RVQ Decoder   │
+        │ (a_{t}~a_{t+p}) │            │  Code Quantizer │            │                 │
         │                 │            │                 │            │                 │
         └─────────────────┘            └─────────────────┘            └─────────────────┘
 
-        训练阶段2.
+        Training Phase 2.
 
-          时间步{t-n+1}   时间步{t-n+2}                时间步{t}
+          timestep {t-n+1}   timestep {t-n+2}                timestep {t}
             ┌─────┴─────┐     ┌─────┴─────┐                 ┌─────┴─────┐
 
         o_{t-n+1}         o_{t-n+2}           ...         o_{t}
@@ -294,15 +299,15 @@ class VQBeTModel(nn.Module):
                     ┌───┴───┐         ┌───┴───┐                     ┌───┴───┐       ┌───┴───┐
                   code    offset    code    offset                code    offset  code    offset
                     ▼       │         ▼       │                     ▼       │       ▼       │       =>    action_head
-               RVQ解码器    │    RVQ解码器    │                RVQ解码器    │  RVQ解码器    │
+               RVQ Decoder  │    RVQ Decoder  │                RVQ Decoder  │  RVQ Decoder  │
                     └── + ──┘         └── + ──┘                     └── + ──┘       └── + ──┘
                         ▼                 ▼                             ▼               ▼
-                   动作块            动作块                        动作块           动作块
+                   action chunk      action chunk                  action chunk     action chunk
                     a_{t-n+1} ~       a_{t-n+2} ~                   a_{t} ~     ...  a_{t+p-1} ~
                      a_{t-n+c}         a_{t-n+c+1}                   a_{t+c-1}        a_{t+p+c-1}
 
                                                                         ▼
-                                                      仅此块在推演中使用！
+                                                      ONLY this chunk is used in rollout!
     """
 
     def __init__(self, config: VQBeTConfig):
@@ -311,11 +316,11 @@ class VQBeTModel(nn.Module):
 
         self.rgb_encoder = VQBeTRgbEncoder(config)
         self.num_images = len(self.config.image_features)
-        # 此动作查询标记用作查询动作块的提示。请参阅上图中的"A_Q"。
-        # 注意：在前向传播过程中，此标记会根据需要重复多次。作者还尝试独立初始化所需数量的标记，但观察到结果较差。
+        # This action query token is used as a prompt for querying action chunks. Please refer to "A_Q" in the image above.
+        # Note: During the forward pass, this token is repeated as many times as needed. The authors also experimented with initializing the necessary number of tokens independently and observed inferior results.
         self.action_token = nn.Parameter(torch.randn(1, 1, self.config.gpt_input_dim))
 
-        # 要将状态和观测特征输入GPT层，我们首先投影这些特征以适应GPT输入大小的形状。
+        # To input state and observation features into GPT layers, we first project the features to fit the shape of input size of GPT.
         self.state_projector = MLP(
             config.robot_state_feature.shape[0], hidden_channels=[self.config.gpt_input_dim]
         )
@@ -323,12 +328,12 @@ class VQBeTModel(nn.Module):
             self.rgb_encoder.feature_dim, hidden_channels=[self.config.gpt_input_dim]
         )
 
-        # VQ-BeT的GPT部分
+        # GPT part of VQ-BeT
         self.policy = GPT(config)
-        # VQ-BeT的码预测头/偏移预测头部分
+        # bin prediction head / offset prediction head part of VQ-BeT
         self.action_head = VQBeTHead(config)
 
-        # 动作标记用于：每个观测步骤、当前动作标记以及所有未来动作标记。
+        # Action tokens for: each observation step, the current action token, and all future action tokens.
         num_tokens = self.config.n_action_pred_token + self.config.n_obs_steps - 1
         self.register_buffer(
             "select_target_actions_indices",
@@ -336,62 +341,62 @@ class VQBeTModel(nn.Module):
         )
 
     def forward(self, batch: dict[str, Tensor], rollout: bool) -> tuple[dict, dict]:
-        # 输入验证。
+        # Input validation.
         assert set(batch).issuperset({OBS_STATE, OBS_IMAGES})
         batch_size, n_obs_steps = batch[OBS_STATE].shape[:2]
         assert n_obs_steps == self.config.n_obs_steps
 
-        # 提取图像特征（首先合并批次和序列维度）。
+        # Extract image feature (first combine batch and sequence dims).
         img_features = self.rgb_encoder(einops.rearrange(batch[OBS_IMAGES], "b s n ... -> (b s n) ..."))
-        # 分离批次和序列维度。
+        # Separate batch and sequence dims.
         img_features = einops.rearrange(
             img_features, "(b s n) ... -> b s n ...", b=batch_size, s=n_obs_steps, n=self.num_images
         )
 
-        # 按类文档字符串中所示安排先前和当前观测步骤标记。
-        # 首先将特征投影到标记维度。
+        # Arrange prior and current observation step tokens as shown in the class docstring.
+        # First project features to token dimension.
         rgb_tokens = self.rgb_feature_projector(
             img_features
-        )  # (batch, obs_step, 不同相机数量, 投影维度)
+        )  # (batch, obs_step, number of different cameras, projection dims)
         input_tokens = [rgb_tokens[:, :, i] for i in range(rgb_tokens.size(2))]
-        input_tokens.append(self.state_projector(batch[OBS_STATE]))  # (batch, obs_step, 投影维度)
+        input_tokens.append(self.state_projector(batch[OBS_STATE]))  # (batch, obs_step, projection dims)
         input_tokens.append(einops.repeat(self.action_token, "1 1 d -> b n d", b=batch_size, n=n_obs_steps))
-        # 通过堆叠和重新排列来交错标记。
+        # Interleave tokens by stacking and rearranging.
         input_tokens = torch.stack(input_tokens, dim=2)
         input_tokens = einops.rearrange(input_tokens, "b n t d -> b (n t) d")
 
         len_additional_action_token = self.config.n_action_pred_token - 1
         future_action_tokens = self.action_token.repeat(batch_size, len_additional_action_token, 1)
 
-        # 添加用于预测未来动作块的额外动作查询标记
+        # add additional action query tokens for predicting future action chunks
         input_tokens = torch.cat([input_tokens, future_action_tokens], dim=1)
 
-        # 获取动作特征（通过GPT传递）
+        # get action features (pass through GPT)
         features = self.policy(input_tokens)
-        # len(self.config.input_features)是不同观测模式的数量。
-        # 这一行获取动作提示标记的索引。
+        # len(self.config.input_features) is the number of different observation modes.
+        # this line gets the index of action prompt tokens.
         historical_act_pred_index = np.arange(0, n_obs_steps) * (len(self.config.input_features) + 1) + len(
             self.config.input_features
         )
 
-        # 仅提取动作查询位置的输出标记：
-        # 行为Transformer（BeT）和VQ-BeT都是序列到序列预测模型，
-        # 将顺序观测映射到顺序动作（请参阅BeT论文的2.2节 https://huggingface.co/papers/2206.11251）。
-        # 因此，除了当前和未来动作（预测未来动作：可选）外，它还预测历史动作序列。
+        # only extract the output tokens at the position of action query:
+        # Behavior Transformer (BeT), and VQ-BeT are both sequence-to-sequence prediction models,
+        # mapping sequential observation to sequential action (please refer to section 2.2 in BeT paper https://huggingface.co/papers/2206.11251).
+        # Thus, it predicts a historical action sequence, in addition to current and future actions (predicting future actions : optional).
         if len_additional_action_token > 0:
             features = torch.cat(
                 [features[:, historical_act_pred_index], features[:, -len_additional_action_token:]], dim=1
             )
         else:
             features = features[:, historical_act_pred_index]
-        # 通过动作头传递
+        # pass through action head
         action_head_output = self.action_head(features)
-        # 如果是推演，VQ-BeT不计算损失
+        # if rollout, VQ-BeT don't calculate loss
         if rollout:
             return action_head_output["predicted_action"][:, n_obs_steps - 1, :].reshape(
                 batch_size, self.config.action_chunk_size, -1
             )
-        # 否则，它计算总体损失（码预测损失和偏移损失）
+        # else, it calculate overall loss (bin prediction loss, and offset loss)
         else:
             output = batch[ACTION][:, self.select_target_actions_indices]
             loss = self.action_head.loss_fn(action_head_output, output, reduction="mean")
@@ -401,21 +406,21 @@ class VQBeTModel(nn.Module):
 class VQBeTHead(nn.Module):
     def __init__(self, config: VQBeTConfig):
         """
-        VQBeTHead接收GPT层的输出，并通过码预测头（`self.map_to_cbet_preds_bin`）和偏移预测头（`self.map_to_cbet_preds_offset`）传递特征
+        VQBeTHead takes output of GPT layers, and pass the feature through bin prediction head (`self.map_to_cbet_preds_bin`), and offset prediction head (`self.map_to_cbet_preds_offset`)
 
-        self.map_to_cbet_preds_bin: 输出每个代码（对于每一层）的概率。
-            `self.map_to_cbet_preds_bin`的输入维度与GPT的输出相同，
-            `self.map_to_cbet_preds_bin`的输出维度是`self.vqvae_model.vqvae_num_layers (=固定为2) * self.config.vqvae_n_embed`。
-            如果智能体顺序选择代码，我们使用self.map_to_cbet_preds_primary_bin和self.map_to_cbet_preds_secondary_bin而不是self._map_to_cbet_preds_bin。
+        self.map_to_cbet_preds_bin: outputs probability of each code (for each layer).
+            The input dimension of `self.map_to_cbet_preds_bin` is same with the output of GPT,
+            and the output dimension of `self.map_to_cbet_preds_bin` is `self.vqvae_model.vqvae_num_layers (=fixed as 2) * self.config.vqvae_n_embed`.
+            if the agent select the code sequentially, we use self.map_to_cbet_preds_primary_bin and self.map_to_cbet_preds_secondary_bin instead of self._map_to_cbet_preds_bin.
 
-        self.map_to_cbet_preds_offset: 输出所有层中所有代码的预测偏移量。
-            `self.map_to_cbet_preds_offset`的输入维度与GPT的输出相同，
-            `self.map_to_cbet_preds_offset`的输出维度是`self.vqvae_model.vqvae_num_layers (=固定为2) * self.config.vqvae_n_embed * config.action_chunk_size * config.action_feature.shape[0]`。
+        self.map_to_cbet_preds_offset: output the predicted offsets for all the codes in all the layers.
+            The input dimension of ` self.map_to_cbet_preds_offset` is same with the output of GPT,
+            and the output dimension of ` self.map_to_cbet_preds_offset` is `self.vqvae_model.vqvae_num_layers (=fixed as 2) * self.config.vqvae_n_embed * config.action_chunk_size * config.action_feature.shape[0]`.
         """
 
         super().__init__()
         self.config = config
-        # 初始化vqvae
+        # init vqvae
         self.vqvae_model = VqVae(config)
         if config.sequentially_select:
             self.map_to_cbet_preds_primary_bin = MLP(
@@ -440,11 +445,11 @@ class VQBeTHead(nn.Module):
                 * config.action_feature.shape[0],
             ],
         )
-        # 损失
+        # loss
         self._focal_loss_fn = FocalLoss(gamma=2.0)
 
     def discretize(self, n_vqvae_training_steps, actions):
-        # 使用滑动窗口方法调整动作序列数据的大小以适应动作块大小。
+        # Resize the action sequence data to fit the action chunk size using a sliding window approach.
         actions = torch.cat(
             [
                 actions[:, j : j + self.config.action_chunk_size, :]
@@ -452,7 +457,7 @@ class VQBeTHead(nn.Module):
             ],
             dim=0,
         )
-        # `actions`是形状为(new_batch, action_chunk_size, action_dim)的张量，其中new_batch是使用滑动窗口从原始序列创建的可能块数。
+        # `actions` is a tensor of shape (new_batch, action_chunk_size, action_dim) where new_batch is the number of possible chunks created from the original sequences using the sliding window.
 
         loss, metric = self.vqvae_model.vqvae_forward(actions)
         n_different_codes = sum(
@@ -461,24 +466,24 @@ class VQBeTHead(nn.Module):
         n_different_combinations = len(torch.unique(metric[2], dim=0))
         recon_l1_error = metric[0].detach().cpu().item()
         self.vqvae_model.optimized_steps += 1
-        # 如果我们更新RVQ超过`n_vqvae_training_steps`步，我们冻结RVQ部分。
+        # if we updated RVQ more than `n_vqvae_training_steps` steps, we freeze the RVQ part.
         if self.vqvae_model.optimized_steps >= n_vqvae_training_steps:
-            self.vqvae_model.discretized = torch.tensor(True)
-            self.vqvae_model.vq_layer.freeze_codebook = torch.tensor(True)
-            print("完成离散化动作数据！")
+            self.vqvae_model.discretized.fill_(True)
+            self.vqvae_model.vq_layer.freeze_codebook.fill_(True)
+            print("Finished discretizing action data!")
             self.vqvae_model.eval()
             for param in self.vqvae_model.vq_layer.parameters():
                 param.requires_grad = False
         return loss, n_different_codes, n_different_combinations, recon_l1_error
 
     def forward(self, x, **kwargs) -> dict:
-        # N是批次大小，T是通过同一个GPT处理的动作查询标记数量
+        # N is the batch size, and T is number of action query tokens, which are process through same GPT
         N, T, _ = x.shape
-        # 我们并行计算N和T。因此，维度将是
-        # (批次大小 * 动作查询标记数量, 动作块大小, 动作维度)
+        # we calculate N and T side parallelly. Thus, the dimensions would be
+        # (batch size * number of action query tokens, action chunk size, action dimension)
         x = einops.rearrange(x, "N T WA -> (N T) WA")
 
-        # 采样偏移量
+        # sample offsets
         cbet_offsets = self.map_to_cbet_preds_offset(x)
         cbet_offsets = einops.rearrange(
             cbet_offsets,
@@ -486,11 +491,11 @@ class VQBeTHead(nn.Module):
             G=self.vqvae_model.vqvae_num_layers,
             C=self.config.vqvae_n_embed,
         )
-        # 如果self.config.sequentially_select为True，码预测头首先采样主代码，然后采样次代码
+        # if self.config.sequentially_select is True, bin prediction head first sample the primary code, and then sample secondary code
         if self.config.sequentially_select:
             cbet_primary_logits = self.map_to_cbet_preds_primary_bin(x)
 
-            # 首先选择主码
+            # select primary bin first
             cbet_primary_probs = torch.softmax(
                 cbet_primary_logits / self.config.bet_softmax_temperature, dim=-1
             )
@@ -517,7 +522,7 @@ class VQBeTHead(nn.Module):
             )
             sampled_centers = torch.stack((sampled_primary_centers, sampled_secondary_centers), axis=1)
             cbet_logits = torch.stack([cbet_primary_logits, cbet_secondary_logits], dim=1)
-        # 如果self.config.sequentially_select为False，码预测头同时采样主代码和次代码。
+        # if self.config.sequentially_select is False, bin prediction head samples primary and secondary code at once.
         else:
             cbet_logits = self.map_to_cbet_preds_bin(x)
             cbet_logits = einops.rearrange(
@@ -537,20 +542,20 @@ class VQBeTHead(nn.Module):
             torch.arange(self.vqvae_model.vqvae_num_layers, device=device).unsqueeze(0),
             sampled_centers,
         )
-        # 使用高级索引来采样值（仅提取对应于采样代码的偏移量。）
+        # Use advanced indexing to sample the values (Extract the only offsets corresponding to the sampled codes.)
         sampled_offsets = cbet_offsets[indices]
-        # 然后，对RVQ层上的偏移量求和，以获得码预测的净偏移量
+        # Then, sum the offsets over the RVQ layers to get a net offset for the bin prediction
         sampled_offsets = sampled_offsets.sum(dim=1)
         with torch.no_grad():
-            # 获取每层的质心（= 对应于代码的向量）以通过RVQ解码器传递
+            # Get the centroids (= vectors corresponding to the codes) of each layer to pass it through RVQ decoder
             return_decoder_input = self.vqvae_model.get_embeddings_from_code(sampled_centers).clone().detach()
-            # 通过解码器传递质心以获取动作。
+            # pass the centroids through decoder to get actions.
             decoded_action = self.vqvae_model.get_action_from_latent(return_decoder_input).clone().detach()
-        # 重塑提取的偏移量以匹配解码的质心
+        # reshaped extracted offset to match with decoded centroids
         sampled_offsets = einops.rearrange(
             sampled_offsets, "NT (W A) -> NT W A", W=self.config.action_chunk_size
         )
-        # 添加偏移量和解码的质心
+        # add offset and decoded centroids
         predicted_action = decoded_action + sampled_offsets
         predicted_action = einops.rearrange(
             predicted_action,
@@ -569,14 +574,14 @@ class VQBeTHead(nn.Module):
 
     def loss_fn(self, pred, target, **kwargs):
         """
-        对于给定的真实动作值（target）和预测（pred），此函数计算总体损失。
+        for given ground truth action values (target), and prediction (pred) this function calculates the overall loss.
 
-        predicted_action: 预测的动作块（偏移量 + 解码的质心）
-        sampled_centers: 采样的质心（RVQ的代码）
-        decoded_action: 解码的动作，通过将sampled_centers传递给RVQ解码器产生
-        NT: 批次大小 * T
-        T: 通过同一个GPT处理的动作查询标记数量
-        cbet_logits: 每层中所有代码的概率
+        predicted_action: predicted action chunk (offset + decoded centroids)
+        sampled_centers: sampled centroids (code of RVQ)
+        decoded_action: decoded action, which is produced by passing sampled_centers through RVQ decoder
+        NT: batch size * T
+        T: number of action query tokens, which are process through same GPT
+        cbet_logits: probability of all codes in each layer
         """
         action_seq = target
         predicted_action = pred["predicted_action"]
@@ -591,27 +596,27 @@ class VQBeTHead(nn.Module):
         )
 
         action_seq = einops.rearrange(action_seq, "N T W A -> (N T) W A")
-        # 计算动作的损失。
-        # 首先，我们需要为每个真实动作找到最近的聚类中心。
+        # Figure out the loss for the actions.
+        # First, we need to find the closest cluster center for each ground truth action.
         with torch.no_grad():
             state_vq, action_bins = self.vqvae_model.get_code(action_seq)  # action_bins: NT, G
 
-        # 现在我们可以计算损失。
+        # Now we can compute the loss.
 
-        # 偏移损失是预测动作和真实动作之间的L1距离
+        # offset loss is L1 distance between the predicted action and ground truth action
         offset_loss = F.l1_loss(action_seq, predicted_action)
 
-        # 计算主代码预测损失
+        # calculate primary code prediction loss
         cbet_loss1 = self._focal_loss_fn(
             cbet_logits[:, 0, :],
             action_bins[:, 0],
         )
-        # 计算次代码预测损失
+        # calculate secondary code prediction loss
         cbet_loss2 = self._focal_loss_fn(
             cbet_logits[:, 1, :],
             action_bins[:, 1],
         )
-        # 添加所有预测损失
+        # add all the prediction loss
         cbet_loss = (
             cbet_loss1 * self.config.primary_code_loss_weight
             + cbet_loss2 * self.config.secondary_code_loss_weight
@@ -642,19 +647,19 @@ class VQBeTHead(nn.Module):
 
 
 class VQBeTRgbEncoder(nn.Module):
-    """将RGB图像编码为1D特征向量。
+    """Encode an RGB image into a 1D feature vector.
 
-    包括首先归一化和裁剪图像的能力。
+    Includes the ability to normalize and crop the image first.
 
-    与modeling_diffusion.py中的DiffusionRgbEncoder相同
+    Same with DiffusionRgbEncoder from modeling_diffusion.py
     """
 
     def __init__(self, config: VQBeTConfig):
         super().__init__()
-        # 设置可选的预处理。
+        # Set up optional preprocessing.
         if config.crop_shape is not None:
             self.do_crop = True
-            # 对于评估始终使用中心裁剪
+            # Always use center crop for eval
             self.center_crop = torchvision.transforms.CenterCrop(config.crop_shape)
             if config.crop_is_random:
                 self.maybe_random_crop = torchvision.transforms.RandomCrop(config.crop_shape)
@@ -663,17 +668,17 @@ class VQBeTRgbEncoder(nn.Module):
         else:
             self.do_crop = False
 
-        # 设置骨干网络。
+        # Set up backbone.
         backbone_model = getattr(torchvision.models, config.vision_backbone)(
             weights=config.pretrained_backbone_weights
         )
-        # 注意：这假设layer4特征图是children()[-3]
-        # TODO(alexander-soare)：使用更安全的替代方法。
+        # Note: This assumes that the layer4 feature map is children()[-3]
+        # TODO(alexander-soare): Use a safer alternative.
         self.backbone = nn.Sequential(*(list(backbone_model.children())[:-2]))
         if config.use_group_norm:
             if config.pretrained_backbone_weights:
                 raise ValueError(
-                    "在不破坏权重的情况下，不能替换预训练模型中的BatchNorm！"
+                    "You can't replace BatchNorm in a pretrained model without ruining the weights!"
                 )
             self.backbone = _replace_submodules(
                 root_module=self.backbone,
@@ -681,10 +686,11 @@ class VQBeTRgbEncoder(nn.Module):
                 func=lambda x: nn.GroupNorm(num_groups=x.num_features // 16, num_channels=x.num_features),
             )
 
-        # 设置池化和最终层。
-        # 使用干运行来获取特征图形状。
-        # 虚拟输入应从`config.image_features`获取图像通道数，如果提供了`config.crop_shape`，
-        # 则应使用其高度和宽度，否则应使用`config.image_features`的高度和宽度。
+        # Set up pooling and final layers.
+        # Use a dry run to get the feature map shape.
+        # The dummy input should take the number of image channels from `config.image_features` and it should
+        # use the height and width from `config.crop_shape` if it is provided, otherwise it should use the
+        # height and width from `config.image_features`.
 
         images_shape = next(iter(config.image_features.values())).shape
         dummy_shape_h_w = config.crop_shape if config.crop_shape is not None else images_shape[1:]
@@ -698,21 +704,21 @@ class VQBeTRgbEncoder(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         """
-        参数:
-            x: (B, C, H, W) 像素值在[0, 1]范围内的图像张量。
-        返回:
-            (B, D) 图像特征。
+        Args:
+            x: (B, C, H, W) image tensor with pixel values in [0, 1].
+        Returns:
+            (B, D) image feature.
         """
-        # 预处理：可能裁剪（如果在__init__中设置）。
+        # Preprocess: maybe crop (if it was set up in the __init__).
         if self.do_crop:
             if self.training:  # noqa: SIM108
                 x = self.maybe_random_crop(x)
             else:
-                # 对于评估始终使用中心裁剪。
+                # Always use center crop for eval.
                 x = self.center_crop(x)
-        # 提取骨干特征。
+        # Extract backbone feature.
         x = torch.flatten(self.pool(self.backbone(x)), start_dim=1)
-        # 带非线性的最终线性层。
+        # Final linear layer with non-linearity.
         x = self.relu(self.out(x))
         return x
 
@@ -721,12 +727,12 @@ def _replace_submodules(
     root_module: nn.Module, predicate: Callable[[nn.Module], bool], func: Callable[[nn.Module], nn.Module]
 ) -> nn.Module:
     """
-    参数:
-        root_module: 需要替换子模块的模块
-        predicate: 接受模块作为参数，如果该模块要被替换则必须返回True。
-        func: 接受模块作为参数并返回一个新模块来替换它。
-    返回:
-        替换了子模块的根模块。
+    Args:
+        root_module: The module for which the submodules need to be replaced
+        predicate: Takes a module as an argument and must return True if the that module is to be replaced.
+        func: Takes a module as an argument and returns a new module to replace it with.
+    Returns:
+        The root module with its submodules replaced.
     """
     if predicate(root_module):
         return func(root_module)
@@ -745,7 +751,7 @@ def _replace_submodules(
             parent_module[int(k)] = tgt_module
         else:
             setattr(parent_module, k, tgt_module)
-    # 验证所有BN都已被替换
+    # verify that all BN are replaced
     assert not any(predicate(m) for _, m in root_module.named_modules(remove_duplicate=True))
     return root_module
 
@@ -756,20 +762,20 @@ class VqVae(nn.Module):
         config: VQBeTConfig,
     ):
         """
-        VQ-VAE由三部分组成：编码器、vq_layer和解码器。
-        编码器和解码器是由输入层、输出层和隐藏层组成的MLP。
-        vq_layer使用残差VQ。
+        VQ-VAE is composed of three parts: encoder, vq_layer, and decoder.
+        Encoder and decoder are MLPs consisting of an input, output layer, and hidden layer, respectively.
+        The vq_layer uses residual VQs.
 
-        此类包含用于训练编码器和解码器以及残差VQ层（用于训练阶段1）的函数，
-        以及在训练阶段2中帮助BeT训练部分的函数。
+        This class contains functions for training the encoder and decoder along with the residual VQ layer (for training phase 1),
+        as well as functions to help BeT training part in training phase 2.
         """
 
         super().__init__()
         self.config = config
-        # 'discretized'表示残差VQ部分是否已训练。（训练完成后，我们设置discretized=True）
+        # 'discretized' indicates whether the Residual VQ part is trained or not. (After finishing the training, we set discretized=True)
         self.register_buffer("discretized", torch.tensor(False))
         self.optimized_steps = 0
-        # 我们在所有环境中使用固定数量的残差VQ层。
+        # we use the fixed number of layers for Residual VQ across all environments.
         self.vqvae_num_layers = 2
 
         self.vq_layer = ResidualVQ(
@@ -796,15 +802,15 @@ class VqVae(nn.Module):
         )
 
     def get_embeddings_from_code(self, encoding_indices):
-        # 此函数获取代码索引作为输入，并输出对应于代码索引的嵌入向量。
+        # This function gets code indices as inputs, and outputs embedding vectors corresponding to the code indices.
         with torch.no_grad():
             z_embed = self.vq_layer.get_codebook_vector_from_indices(encoding_indices)
-            # 由于RVQ有多层，它在层的轴上添加向量以为该代码组合提供一个向量。
+            # since the RVQ has multiple layers, it adds the vectors in the axis of layers to provide a vector for that code combination.
             z_embed = z_embed.sum(dim=0)
         return z_embed
 
     def get_action_from_latent(self, latent):
-        # 给定潜在向量，此函数输出解码的动作。
+        # given latent vector, this function outputs the decoded action.
         output = self.decoder(latent)
         if self.config.action_chunk_size == 1:
             return einops.rearrange(output, "N (T A) -> N T A", A=self.config.action_feature.shape[0])
@@ -812,8 +818,8 @@ class VqVae(nn.Module):
             return einops.rearrange(output, "N (T A) -> N T A", A=self.config.action_feature.shape[0])
 
     def get_code(self, state):
-        # 在VQ-BeT训练的阶段2中，我们需要`动作数据的真实标签`来计算代码预测头的Focal损失。（请参阅论文的3.3节 https://huggingface.co/papers/2403.03181）
-        # 此函数使用冻结的编码器和量化层输出给定动作的`GT代码`。（请参阅论文中的图2 https://huggingface.co/papers/2403.03181）
+        # in phase 2 of VQ-BeT training, we need a `ground truth labels of action data` to calculate the Focal loss for code prediction head. (please refer to section 3.3 in the paper https://huggingface.co/papers/2403.03181)
+        # this function outputs the `GT code` of given action using frozen encoder and quantization layers. (please refer to Figure 2. in the paper https://huggingface.co/papers/2403.03181)
         state = einops.rearrange(state, "N T A -> N (T A)")
         with torch.no_grad():
             state_rep = self.encoder(state)
@@ -826,23 +832,23 @@ class VqVae(nn.Module):
             return state_vq, vq_code
 
     def vqvae_forward(self, state):
-        # 此函数将给定的数据通过带有编码器和解码器的残差VQ传递。请参阅论文的3.2节（https://huggingface.co/papers/2403.03181）。
+        # This function passes the given data through Residual VQ with Encoder and Decoder. Please refer to section 3.2 in the paper https://huggingface.co/papers/2403.03181).
         state = einops.rearrange(state, "N T A -> N (T A)")
-        # 我们首先通过编码器ϕ传递动作（或动作块）at:t+n。
+        # We start with passing action (or action chunk) at:t+n through the encoder ϕ.
         state_rep = self.encoder(state)
         state_rep_shape = state_rep.shape[:-1]
         state_rep_flat = state_rep.view(state_rep.size(0), -1, state_rep.size(1))
-        # 然后通过最近邻查找将结果潜在嵌入向量x = ϕ(at:t+n)映射到RVQ层码本中的嵌入向量。
+        # The resulting latent embedding vector x = ϕ(at:t+n) is then mapped to an embedding vector in the codebook of the RVQ layers by the nearest neighbor look-up.
         state_rep_flat, vq_code, vq_loss_state = self.vq_layer(state_rep_flat)
         state_vq = state_rep_flat.view(*state_rep_shape, -1)
         vq_code = vq_code.view(*state_rep_shape, -1)
-        # 由于RVQ有多层，它在层的轴上添加向量以为该代码组合提供一个向量。
+        # since the RVQ has multiple layers, it adds the vectors in the axis of layers to provide a vector for that code combination.
         vq_loss_state = torch.sum(vq_loss_state)
-        # 然后，离散化向量zq(x)通过解码器ψ重建为ψ(zq(x))。
+        # Then, the discretized vector zq(x) is reconstructed as ψ(zq(x)) by passing through the decoder ψ.
         dec_out = self.decoder(state_vq)
-        # 计算L1重建损失
+        # Calculate L1 reconstruction loss
         encoder_loss = (state - dec_out).abs().mean()
-        # 添加编码器重建损失和承诺损失
+        # add encoder reconstruction loss and commitment loss
         rep_loss = encoder_loss + vq_loss_state * 5
 
         metric = (
@@ -856,7 +862,7 @@ class VqVae(nn.Module):
 
 class FocalLoss(nn.Module):
     """
-    来自 https://github.com/notmahi/miniBET/blob/main/behavior_transformer/bet.py
+    From https://github.com/notmahi/miniBET/blob/main/behavior_transformer/bet.py
     """
 
     def __init__(self, gamma: float = 0, size_average: bool = True):

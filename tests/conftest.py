@@ -17,23 +17,37 @@
 import traceback
 
 import pytest
-from serial import SerialException
 
 from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
+from lerobot.utils.import_utils import is_package_available
 from tests.utils import DEVICE
 
-# Import fixture modules as plugins
+# Import fixture modules as plugins.
+# Fixtures that depend on optional packages are only registered when those packages are available,
+# so that tests can be collected and run even with a minimal install.
 pytest_plugins = [
-    "tests.fixtures.dataset_factories",
-    "tests.fixtures.files",
-    "tests.fixtures.hub",
     "tests.fixtures.optimizers",
-    "tests.plugins.reachy2_sdk",
 ]
+
+if is_package_available("datasets"):
+    pytest_plugins += [
+        "tests.fixtures.dataset_factories",
+        "tests.fixtures.files",
+        "tests.fixtures.hub",
+    ]
 
 
 def pytest_collection_finish():
     print(f"\nTesting with {DEVICE=}")
+
+
+def _is_serial_exception(exc: Exception) -> bool:
+    """Check if an exception is a SerialException without requiring pyserial."""
+    if not is_package_available("pyserial", import_name="serial"):
+        return False
+    from serial import SerialException
+
+    return isinstance(exc, SerialException)
 
 
 def _check_component_availability(component_type, available_components, make_component):
@@ -54,7 +68,7 @@ def _check_component_availability(component_type, available_components, make_com
 
         if isinstance(e, ModuleNotFoundError):
             print(f"\nInstall module '{e.name}'")
-        elif isinstance(e, SerialException):
+        elif _is_serial_exception(e):
             print("\nNo physical device detected.")
         elif isinstance(e, ValueError) and "camera_index" in str(e):
             print("\nNo physical camera detected.")
@@ -85,7 +99,7 @@ def policy_feature_factory():
 
 def assert_contract_is_typed(features: dict[PipelineFeatureType, dict[str, PolicyFeature]]) -> None:
     assert isinstance(features, dict)
-    assert all(isinstance(k, PipelineFeatureType) for k in features.keys())
+    assert all(isinstance(k, PipelineFeatureType) for k in features)
     assert all(isinstance(v, dict) for v in features.values())
-    assert all(all(isinstance(nk, str) for nk in v.keys()) for v in features.values())
+    assert all(all(isinstance(nk, str) for nk in v) for v in features.values())
     assert all(all(isinstance(nv, PolicyFeature) for nv in v.values()) for v in features.values())

@@ -18,7 +18,6 @@ from typing import Any
 
 import torch
 
-from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
 from lerobot.processor import (
     AddBatchDimensionProcessorStep,
     DeviceProcessorStep,
@@ -27,9 +26,12 @@ from lerobot.processor import (
     PolicyProcessorPipeline,
     RenameObservationsProcessorStep,
     UnnormalizerProcessorStep,
+    policy_action_to_transition,
+    transition_to_policy_action,
 )
-from lerobot.processor.converters import policy_action_to_transition, transition_to_policy_action
 from lerobot.utils.constants import POLICY_POSTPROCESSOR_DEFAULT_NAME, POLICY_PREPROCESSOR_DEFAULT_NAME
+
+from .configuration_diffusion import DiffusionConfig
 
 
 def make_diffusion_pre_post_processors(
@@ -40,26 +42,26 @@ def make_diffusion_pre_post_processors(
     PolicyProcessorPipeline[PolicyAction, PolicyAction],
 ]:
     """
-    为扩散策略构建预处理器和后处理器管道。
+    Constructs pre-processor and post-processor pipelines for a diffusion policy.
 
-    预处理管道通过以下步骤为模型准备输入数据：
-    1. 重命名特征。
-    2. 基于数据集统计信息对输入和输出特征进行归一化。
-    3. 添加批次维度。
-    4. 将数据移动到指定设备。
+    The pre-processing pipeline prepares the input data for the model by:
+    1. Renaming features.
+    2. Normalizing the input and output features based on dataset statistics.
+    3. Adding a batch dimension.
+    4. Moving the data to the specified device.
 
-    后处理管道通过以下步骤处理模型的输出：
-    1. 将数据移动到 CPU。
-    2. 将输出特征反归一化到其原始尺度。
+    The post-processing pipeline handles the model's output by:
+    1. Moving the data to the CPU.
+    2. Unnormalizing the output features to their original scale.
 
-    参数：
-        config: 扩散策略的配置对象，
-            包含特征定义、归一化映射和设备信息。
-        dataset_stats: 用于归一化的统计信息字典。
-            默认为 None。
+    Args:
+        config: The configuration object for the diffusion policy,
+            containing feature definitions, normalization mappings, and device information.
+        dataset_stats: A dictionary of statistics used for normalization.
+            Defaults to None.
 
-    返回：
-        包含已配置的预处理器和后处理器管道的元组。
+    Returns:
+        A tuple containing the configured pre-processor and post-processor pipelines.
     """
 
     input_steps = [

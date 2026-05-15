@@ -4,7 +4,6 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
@@ -18,17 +17,20 @@
 import math
 import time
 from dataclasses import dataclass
-from typing import Any, Protocol, TypeVar, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar, runtime_checkable
 
 import numpy as np
 import torch
 import torchvision.transforms.functional as F  # noqa: N812
 
-from lerobot.configs.types import PipelineFeatureType, PolicyFeature
-from lerobot.teleoperators.teleoperator import Teleoperator
+from lerobot.configs import PipelineFeatureType, PolicyFeature
 from lerobot.teleoperators.utils import TeleopEvents
 
-from .core import EnvTransition, PolicyAction, TransitionKey
+if TYPE_CHECKING:
+    from lerobot.teleoperators.teleoperator import Teleoperator
+
+from lerobot.types import EnvTransition, PolicyAction, TransitionKey
+
 from .pipeline import (
     ComplementaryDataProcessorStep,
     InfoProcessorStep,
@@ -46,39 +48,41 @@ TELEOP_ACTION_KEY = "teleop_action"
 @runtime_checkable
 class HasTeleopEvents(Protocol):
     """
-    为提供遥操作事件的对象定义的最小协议。
+    Minimal protocol for objects that provide teleoperation events.
 
-    此协议定义了 `get_teleop_events()` 方法，允许处理器步骤与支持基于事件控制
-    (如剧集终止或成功标记) 的遥操作器交互，而无需知道遥操作器的具体类。
+    This protocol defines the `get_teleop_events()` method, allowing processor
+    steps to interact with teleoperators that support event-based controls
+    (like episode termination or success flagging) without needing to know the
+    teleoperator's specific class.
     """
 
     def get_teleop_events(self) -> dict[str, Any]:
         """
-        从遥操作器获取额外的控制事件。
+        Get extra control events from the teleoperator.
 
-        返回:
-            包含控制事件的字典，例如:
-            - `is_intervention`: bool - 人类是否正在进行干预。
-            - `terminate_episode`: bool - 是否终止当前剧集。
-            - `success`: bool - 剧集是否成功。
-            - `rerecord_episode`: bool - 是否重新记录剧集。
+        Returns:
+            A dictionary containing control events such as:
+            - `is_intervention`: bool - Whether the human is currently intervening.
+            - `terminate_episode`: bool - Whether to terminate the current episode.
+            - `success`: bool - Whether the episode was successful.
+            - `rerecord_episode`: bool - Whether to rerecord the episode.
         """
         ...
 
 
-# 限制为同时实现事件的 Teleoperator 子类的类型变量
-TeleopWithEvents = TypeVar("TeleopWithEvents", bound=Teleoperator)
+# Type variable constrained to Teleoperator subclasses that also implement events
+TeleopWithEvents = TypeVar("TeleopWithEvents", bound="Teleoperator")
 
 
-def _check_teleop_with_events(teleop: Teleoperator) -> None:
+def _check_teleop_with_events(teleop: "Teleoperator") -> None:
     """
-    运行时检查遥操作器是否实现了 `HasTeleopEvents` 协议。
+    Runtime check that a teleoperator implements the `HasTeleopEvents` protocol.
 
-    参数:
-        teleop: 要检查的遥操作器实例。
+    Args:
+        teleop: The teleoperator instance to check.
 
-    抛出:
-        TypeError: 如果遥操作器没有 `get_teleop_events` 方法。
+    Raises:
+        TypeError: If the teleoperator does not have a `get_teleop_events` method.
     """
     if not isinstance(teleop, HasTeleopEvents):
         raise TypeError(
@@ -91,26 +95,28 @@ def _check_teleop_with_events(teleop: Teleoperator) -> None:
 @dataclass
 class AddTeleopActionAsComplimentaryDataStep(ComplementaryDataProcessorStep):
     """
-    将遥操作器的原始动作添加到转换的互补数据中。
+    Adds the raw action from a teleoperator to the transition's complementary data.
 
-    这对于人机协作场景非常有用，在这些场景中，人类的输入需要对下游处理器可用，
-    例如，在干预期间覆盖策略的动作。
+    This is useful for human-in-the-loop scenarios where the human's input needs to
+    be available to downstream processors, for example, to override a policy's action
+    during an intervention.
 
-    属性:
-        teleop_device: 从中获取动作的遥操作器实例。
+    Attributes:
+        teleop_device: The teleoperator instance to get the action from.
     """
 
-    teleop_device: Teleoperator
+    teleop_device: "Teleoperator"
 
     def complementary_data(self, complementary_data: dict) -> dict:
         """
-        检索遥操作器的动作并将其添加到互补数据中。
+        Retrieves the teleoperator's action and adds it to the complementary data.
 
-        参数:
-            complementary_data: 传入的互补数据字典。
+        Args:
+            complementary_data: The incoming complementary data dictionary.
 
-        返回:
-            在 `teleop_action` 键下添加了遥操作器动作的新字典。
+        Returns:
+            A new dictionary with the teleoperator action added under the
+            `teleop_action` key.
         """
         new_complementary_data = dict(complementary_data)
         new_complementary_data[TELEOP_ACTION_KEY] = self.teleop_device.get_action()
@@ -126,29 +132,31 @@ class AddTeleopActionAsComplimentaryDataStep(ComplementaryDataProcessorStep):
 @dataclass
 class AddTeleopEventsAsInfoStep(InfoProcessorStep):
     """
-    将遥操作器控制事件(例如，终止、成功)添加到转换的 info 中。
+    Adds teleoperator control events (e.g., terminate, success) to the transition's info.
 
-    此步骤从支持基于事件交互的遥操作器中提取控制事件，使这些信号可供系统的其他部分使用。
+    This step extracts control events from teleoperators that support event-based
+    interaction, making these signals available to other parts of the system.
 
-    属性:
-        teleop_device: 实现 `HasTeleopEvents` 协议的遥操作器实例。
+    Attributes:
+        teleop_device: An instance of a teleoperator that implements the
+                       `HasTeleopEvents` protocol.
     """
 
     teleop_device: TeleopWithEvents
 
     def __post_init__(self):
-        """在初始化后验证提供的遥操作器是否支持事件。"""
+        """Validates that the provided teleoperator supports events after initialization."""
         _check_teleop_with_events(self.teleop_device)
 
     def info(self, info: dict) -> dict:
         """
-        检索遥操作器事件并更新 info 字典。
+        Retrieves teleoperator events and updates the info dictionary.
 
-        参数:
-            info: 传入的 info 字典。
+        Args:
+            info: The incoming info dictionary.
 
-        返回:
-            包含遥操作器事件的新字典。
+        Returns:
+            A new dictionary including the teleoperator events.
         """
         new_info = dict(info)
 
@@ -166,14 +174,16 @@ class AddTeleopEventsAsInfoStep(InfoProcessorStep):
 @dataclass
 class ImageCropResizeProcessorStep(ObservationProcessorStep):
     """
-    裁剪和/或调整图像观测的大小。
+    Crops and/or resizes image observations.
 
-    此步骤遍历观测字典中的所有图像键并应用指定的变换。它处理设备放置，
-    如果加速器(如 MPS)不支持某些操作，则将张量移动到 CPU。
+    This step iterates through all image keys in an observation dictionary and applies
+    the specified transformations. It handles device placement, moving tensors to the
+    CPU if necessary for operations not supported on certain accelerators like MPS.
 
-    属性:
-        crop_params_dict: 将图像键映射到裁剪参数(顶部、左侧、高度、宽度)的字典。
-        resize_size: 用于将所有图像调整为的元组(高度、宽度)。
+    Attributes:
+        crop_params_dict: A dictionary mapping image keys to cropping parameters
+                          (top, left, height, width).
+        resize_size: A tuple (height, width) to resize all images to.
     """
 
     crop_params_dict: dict[str, tuple[int, int, int, int]] | None = None
@@ -181,30 +191,30 @@ class ImageCropResizeProcessorStep(ObservationProcessorStep):
 
     def observation(self, observation: dict) -> dict:
         """
-        对观测字典中的所有图像应用裁剪和调整大小。
+        Applies cropping and resizing to all images in the observation dictionary.
 
-        参数:
-            observation: 观测字典，可能包含图像张量。
+        Args:
+            observation: The observation dictionary, potentially containing image tensors.
 
-        返回:
-            包含已变换图像的新观测字典。
+        Returns:
+            A new observation dictionary with transformed images.
         """
         if self.resize_size is None and not self.crop_params_dict:
             return observation
 
         new_observation = dict(observation)
 
-        # 处理观测中的所有图像键
+        # Process all image keys in the observation
         for key in observation:
             if "image" not in key:
                 continue
 
             image = observation[key]
             device = image.device
-            # 注意 (maractingi): 裁剪和调整大小没有 mps 内核，因此需要移动到 cpu
+            # NOTE (maractingi): No mps kernel for crop and resize, so we need to move to cpu
             if device.type == "mps":
                 image = image.cpu()
-            # 如果为此键提供了裁剪参数，则进行裁剪
+            # Crop if crop params are provided for this key
             if self.crop_params_dict is not None and key in self.crop_params_dict:
                 crop_params = self.crop_params_dict[key]
                 image = F.crop(image, *crop_params)
@@ -217,10 +227,10 @@ class ImageCropResizeProcessorStep(ObservationProcessorStep):
 
     def get_config(self) -> dict[str, Any]:
         """
-        返回步骤的配置以进行序列化。
+        Returns the configuration of the step for serialization.
 
-        返回:
-            包含裁剪参数和调整大小尺寸的字典。
+        Returns:
+            A dictionary with the crop parameters and resize dimensions.
         """
         return {
             "crop_params_dict": self.crop_params_dict,
@@ -231,13 +241,13 @@ class ImageCropResizeProcessorStep(ObservationProcessorStep):
         self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
     ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
         """
-        如果应用了调整大小，则更新策略特征字典中的图像特征形状。
+        Updates the image feature shapes in the policy features dictionary if resizing is applied.
 
-        参数:
-            features: 策略特征字典。
+        Args:
+            features: The policy features dictionary.
 
-        返回:
-            具有新图像形状的更新策略特征字典。
+        Returns:
+            The updated policy features dictionary with new image shapes.
         """
         if self.resize_size is None:
             return features
@@ -255,11 +265,11 @@ class ImageCropResizeProcessorStep(ObservationProcessorStep):
 @ProcessorStepRegistry.register("time_limit_processor")
 class TimeLimitProcessorStep(TruncatedProcessorStep):
     """
-    跟踪剧集步数并通过截断来强制执行时间限制。
+    Tracks episode steps and enforces a time limit by truncating the episode.
 
-    属性:
-        max_episode_steps: 每个剧集允许的最大步数。
-        current_step: 当前活动剧集的当前步数。
+    Attributes:
+        max_episode_steps: The maximum number of steps allowed per episode.
+        current_step: The current step count for the active episode.
     """
 
     max_episode_steps: int
@@ -267,34 +277,69 @@ class TimeLimitProcessorStep(TruncatedProcessorStep):
 
     def truncated(self, truncated: bool) -> bool:
         """
-        递增步数计数器，如果达到时间限制则设置截断标志。
+        Increments the step counter and sets the truncated flag if the time limit is reached.
 
-        参数:
-            truncated: 传入的截断标志。
+        Args:
+            truncated: The incoming truncated flag.
 
-        返回:
-            如果达到剧集步数限制则为 True，否则为传入值。
+        Returns:
+            True if the episode step limit is reached, otherwise the incoming value.
         """
         self.current_step += 1
         if self.current_step >= self.max_episode_steps:
             truncated = True
-        # TODO (steven): 是否缺少 else truncated = False?
+        # TODO (steven): missing an else truncated = False?
         return truncated
 
     def get_config(self) -> dict[str, Any]:
         """
-        返回步骤的配置以进行序列化。
+        Returns the configuration of the step for serialization.
 
-        返回:
-            包含 `max_episode_steps` 的字典。
+        Returns:
+            A dictionary containing the `max_episode_steps`.
         """
         return {
             "max_episode_steps": self.max_episode_steps,
         }
 
     def reset(self) -> None:
-        """重置步数计数器，通常在新剧集开始时调用。"""
+        """Resets the step counter, typically called at the start of a new episode."""
         self.current_step = 0
+
+    def transform_features(
+        self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
+    ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
+        return features
+
+
+@ProcessorStepRegistry.register("gym_hil_adapter_processor")
+class GymHILAdapterProcessorStep(ProcessorStep):
+    """
+    Adapts the output of the `gym-hil` environment to the format expected by `lerobot` processors.
+
+    This step normalizes the `transition` object by:
+    1. Copying `teleop_action` from `info` to `complementary_data`.
+    2. Copying `is_intervention` from `info` (using the string key) to `info` (using the enum key).
+    3. Copying `discrete_penalty` from `info` to `complementary_data`.
+    """
+
+    def __call__(self, transition: EnvTransition) -> EnvTransition:
+        info = transition.get(TransitionKey.INFO, {})
+        complementary_data = transition.get(TransitionKey.COMPLEMENTARY_DATA, {})
+
+        if TELEOP_ACTION_KEY in info:
+            complementary_data[TELEOP_ACTION_KEY] = info[TELEOP_ACTION_KEY]
+
+        if DISCRETE_PENALTY_KEY in info:
+            complementary_data[DISCRETE_PENALTY_KEY] = info[DISCRETE_PENALTY_KEY]
+
+        if "is_intervention" in info:
+            info[TeleopEvents.IS_INTERVENTION] = info["is_intervention"]
+
+        transition[TransitionKey.INFO] = info
+        transition[TransitionKey.COMPLEMENTARY_DATA] = complementary_data
+
+        return transition
 
     def transform_features(
         self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
@@ -304,74 +349,95 @@ class TimeLimitProcessorStep(TruncatedProcessorStep):
 
 @dataclass
 @ProcessorStepRegistry.register("gripper_penalty_processor")
-class GripperPenaltyProcessorStep(ComplementaryDataProcessorStep):
+class GripperPenaltyProcessorStep(ProcessorStep):
     """
-    对低效的夹爪使用施加惩罚。
+    Applies a small per-transition cost on the discrete gripper action.
 
-    此步骤基于位置阈值，对试图关闭已关闭的夹爪或打开已打开的夹爪的动作进行惩罚。
+    Fires only when the commanded action would actually transition the gripper
+    from one extreme to the other (close-while-open or open-while-closed).
+    This discourages gripper oscillation while leaving "stay" and saturating-further
+    commands unpenalized.
 
-    属性:
-        penalty: 要应用的负奖励值。
-        max_gripper_pos: 夹爪的最大位置值，用于归一化。
+    Attributes:
+        penalty: The negative reward value to apply.
+        max_gripper_pos: The maximum position value for the gripper, used for normalization.
+        open_threshold: Normalized state below which the gripper is considered "open".
+        closed_threshold: Normalized state above which the gripper is considered "closed".
     """
 
-    penalty: float = -0.01
+    penalty: float = -0.02
     max_gripper_pos: float = 30.0
+    open_threshold: float = 0.1
+    closed_threshold: float = 0.9
 
-    def complementary_data(self, complementary_data: dict) -> dict:
+    def __call__(self, transition: EnvTransition) -> EnvTransition:
         """
-        计算夹爪惩罚并将其添加到互补数据中。
+        Calculates the gripper penalty and adds it to the complementary data.
 
-        参数:
-            complementary_data: 传入的互补数据，应包含原始关节位置。
+        Args:
+            transition: The incoming environment transition.
 
-        返回:
-            添加了 `discrete_penalty` 键的新互补数据字典。
+        Returns:
+            The modified transition with the penalty added to complementary data.
         """
-        action = self.transition.get(TransitionKey.ACTION)
+        new_transition = transition.copy()
+        action = new_transition.get(TransitionKey.ACTION)
+        complementary_data = new_transition.get(TransitionKey.COMPLEMENTARY_DATA, {})
 
-        raw_joint_positions = complementary_data.get("raw_joint_positions", None)
+        raw_joint_positions = complementary_data.get("raw_joint_positions")
         if raw_joint_positions is None:
-            return complementary_data
+            return new_transition
 
-        current_gripper_pos = raw_joint_positions.get(GRIPPER_KEY, None)
+        current_gripper_pos = raw_joint_positions.get(f"{GRIPPER_KEY}.pos", None)
         if current_gripper_pos is None:
-            return complementary_data
+            return new_transition
 
-        # 在此阶段，夹爪动作是 PolicyAction
+        # During reset, the transition may not carry any action yet.
+        if action is None:
+            return new_transition
+
+        # Gripper action is expected as the last action dimension.
         gripper_action = action[-1].item()
         gripper_action_normalized = gripper_action / self.max_gripper_pos
 
-        # 归一化夹爪状态和动作
+        # Normalize gripper state and action
         gripper_state_normalized = current_gripper_pos / self.max_gripper_pos
 
-        # 与原始版本一样计算惩罚布尔值
-        gripper_penalty_bool = (gripper_state_normalized < 0.5 and gripper_action_normalized > 0.5) or (
-            gripper_state_normalized > 0.75 and gripper_action_normalized < 0.5
-        )
+        # Calculate penalty boolean as in original
+        #   - currently open  AND target is closed  -> close transition
+        #   - currently closed AND target is open   -> open transition
+        is_open = gripper_state_normalized < self.open_threshold
+        is_closed = gripper_state_normalized > self.closed_threshold
+        cmd_close = gripper_action_normalized > self.closed_threshold
+        cmd_open = gripper_action_normalized < self.open_threshold
+        gripper_penalty_bool = (is_open and cmd_close) or (is_closed and cmd_open)
 
         gripper_penalty = self.penalty * int(gripper_penalty_bool)
 
-        # 创建包含惩罚信息的新互补数据
+        # Update complementary data with penalty info
         new_complementary_data = dict(complementary_data)
         new_complementary_data[DISCRETE_PENALTY_KEY] = gripper_penalty
+        new_transition[TransitionKey.COMPLEMENTARY_DATA] = new_complementary_data
 
-        return new_complementary_data
+        return new_transition
 
     def get_config(self) -> dict[str, Any]:
         """
-        返回步骤的配置以进行序列化。
+        Returns the configuration of the step for serialization.
 
-        返回:
-            包含惩罚值和最大夹爪位置的字典。
+        Returns:
+            A dictionary containing the penalty value, max gripper position,
+            and the open/closed thresholds.
         """
         return {
             "penalty": self.penalty,
             "max_gripper_pos": self.max_gripper_pos,
+            "open_threshold": self.open_threshold,
+            "closed_threshold": self.closed_threshold,
         }
 
     def reset(self) -> None:
-        """重置处理器的内部状态。"""
+        """Resets the processor's internal state."""
         pass
 
     def transform_features(
@@ -384,14 +450,16 @@ class GripperPenaltyProcessorStep(ComplementaryDataProcessorStep):
 @ProcessorStepRegistry.register("intervention_action_processor")
 class InterventionActionProcessorStep(ProcessorStep):
     """
-    处理人工干预，覆盖策略动作并管理剧集终止。
+    Handles human intervention, overriding policy actions and managing episode termination.
 
-    当检测到干预(通过 `info` 字典中的遥操作器事件)时，此步骤将策略的动作
-    替换为人类的遥操作动作。它还处理终止剧集或标记成功的信号。
+    When an intervention is detected (via teleoperator events in the `info` dict),
+    this step replaces the policy's action with the human's teleoperated action.
+    It also processes signals to terminate the episode or flag success.
 
-    属性:
-        use_gripper: 是否在遥操作动作中包含夹爪。
-        terminate_on_success: 如果为 True，则在收到 `success` 事件时自动设置 `done` 标志。
+    Attributes:
+        use_gripper: Whether to include the gripper in the teleoperated action.
+        terminate_on_success: If True, automatically sets the `done` flag when a
+                              `success` event is received.
     """
 
     use_gripper: bool = False
@@ -399,19 +467,20 @@ class InterventionActionProcessorStep(ProcessorStep):
 
     def __call__(self, transition: EnvTransition) -> EnvTransition:
         """
-        处理转换以处理干预。
+        Processes the transition to handle interventions.
 
-        参数:
-            transition: 传入的环境转换。
+        Args:
+            transition: The incoming environment transition.
 
-        返回:
-            修改后的转换，可能包含覆盖的动作、更新的奖励和终止状态。
+        Returns:
+            The modified transition, potentially with an overridden action, updated
+            reward, and termination status.
         """
         action = transition.get(TransitionKey.ACTION)
         if not isinstance(action, PolicyAction):
             raise ValueError(f"Action should be a PolicyAction type got {type(action)}")
 
-        # 从互补数据中获取干预信号
+        # Get intervention signals from complementary data
         info = transition.get(TransitionKey.INFO, {})
         complementary_data = transition.get(TransitionKey.COMPLEMENTARY_DATA, {})
         teleop_action = complementary_data.get(TELEOP_ACTION_KEY, {})
@@ -422,10 +491,10 @@ class InterventionActionProcessorStep(ProcessorStep):
 
         new_transition = transition.copy()
 
-        # 如果干预处于活动状态，则覆盖动作
+        # Override action if intervention is active
         if is_intervention and teleop_action is not None:
             if isinstance(teleop_action, dict):
-                # 将 teleop_action 字典转换为张量格式
+                # Convert teleop_action dict to tensor format
                 action_list = [
                     teleop_action.get("delta_x", 0.0),
                     teleop_action.get("delta_y", 0.0),
@@ -441,20 +510,20 @@ class InterventionActionProcessorStep(ProcessorStep):
             teleop_action_tensor = torch.tensor(action_list, dtype=action.dtype, device=action.device)
             new_transition[TransitionKey.ACTION] = teleop_action_tensor
 
-        # 处理剧集终止
+        # Handle episode termination
         new_transition[TransitionKey.DONE] = bool(terminate_episode) or (
             self.terminate_on_success and success
         )
         new_transition[TransitionKey.REWARD] = float(success)
 
-        # 使用干预元数据更新 info
+        # Update info with intervention metadata
         info = new_transition.get(TransitionKey.INFO, {})
         info[TeleopEvents.IS_INTERVENTION] = is_intervention
         info[TeleopEvents.RERECORD_EPISODE] = rerecord_episode
         info[TeleopEvents.SUCCESS] = success
         new_transition[TransitionKey.INFO] = info
 
-        # 使用遥控动作更新互补数据
+        # Update complementary data with teleop action
         complementary_data = new_transition.get(TransitionKey.COMPLEMENTARY_DATA, {})
         complementary_data[TELEOP_ACTION_KEY] = new_transition.get(TransitionKey.ACTION)
         new_transition[TransitionKey.COMPLEMENTARY_DATA] = complementary_data
@@ -463,10 +532,10 @@ class InterventionActionProcessorStep(ProcessorStep):
 
     def get_config(self) -> dict[str, Any]:
         """
-        返回步骤的配置以进行序列化。
+        Returns the configuration of the step for serialization.
 
-        返回:
-            包含步骤配置属性的字典。
+        Returns:
+            A dictionary containing the step's configuration attributes.
         """
         return {
             "use_gripper": self.use_gripper,
@@ -483,17 +552,18 @@ class InterventionActionProcessorStep(ProcessorStep):
 @ProcessorStepRegistry.register("reward_classifier_processor")
 class RewardClassifierProcessorStep(ProcessorStep):
     """
-    将预训练的奖励分类器应用于图像观测以预测成功。
+    Applies a pretrained reward classifier to image observations to predict success.
 
-    此步骤使用模型来确定当前状态是否成功，更新奖励并可能终止剧集。
+    This step uses a model to determine if the current state is successful, updating
+    the reward and potentially terminating the episode.
 
-    属性:
-        pretrained_path: 预训练的奖励分类器模型的路径。
-        device: 运行分类器的设备。
-        success_threshold: 将预测视为成功的概率阈值。
-        success_reward: 成功时分配的奖励值。
-        terminate_on_success: 如果为 True，则在成功分类后终止剧集。
-        reward_classifier: 加载的分类器模型实例。
+    Attributes:
+        pretrained_path: Path to the pretrained reward classifier model.
+        device: The device to run the classifier on.
+        success_threshold: The probability threshold to consider a prediction as successful.
+        success_reward: The reward value to assign on success.
+        terminate_on_success: If True, terminates the episode upon successful classification.
+        reward_classifier: The loaded classifier model instance.
     """
 
     pretrained_path: str | None = None
@@ -505,9 +575,9 @@ class RewardClassifierProcessorStep(ProcessorStep):
     reward_classifier: Any = None
 
     def __post_init__(self):
-        """在创建数据类后初始化奖励分类器模型。"""
+        """Initializes the reward classifier model after the dataclass is created."""
         if self.pretrained_path is not None:
-            from lerobot.policies.sac.reward_model.modeling_classifier import Classifier
+            from lerobot.rewards.classifier.modeling_classifier import Classifier
 
             self.reward_classifier = Classifier.from_pretrained(self.pretrained_path)
             self.reward_classifier.to(self.device)
@@ -515,33 +585,34 @@ class RewardClassifierProcessorStep(ProcessorStep):
 
     def __call__(self, transition: EnvTransition) -> EnvTransition:
         """
-        处理转换，将奖励分类器应用于其图像观测。
+        Processes a transition, applying the reward classifier to its image observations.
 
-        参数:
-            transition: 传入的环境转换。
+        Args:
+            transition: The incoming environment transition.
 
-        返回:
-            根据分类器的预测更新了奖励和完成标志的修改后的转换。
+        Returns:
+            The modified transition with an updated reward and done flag based on the
+            classifier's prediction.
         """
         new_transition = transition.copy()
         observation = new_transition.get(TransitionKey.OBSERVATION)
         if observation is None or self.reward_classifier is None:
             return new_transition
 
-        # 从观测中提取图像
+        # Extract images from observation
         images = {key: value for key, value in observation.items() if "image" in key}
 
         if not images:
             return new_transition
 
-        # 运行奖励分类器
+        # Run reward classifier
         start_time = time.perf_counter()
         with torch.inference_mode():
             success = self.reward_classifier.predict_reward(images, threshold=self.success_threshold)
 
         classifier_frequency = 1 / (time.perf_counter() - start_time)
 
-        # 计算奖励和终止
+        # Calculate reward and termination
         reward = new_transition.get(TransitionKey.REWARD, 0.0)
         terminated = new_transition.get(TransitionKey.DONE, False)
 
@@ -550,11 +621,11 @@ class RewardClassifierProcessorStep(ProcessorStep):
             if self.terminate_on_success:
                 terminated = True
 
-        # 更新转换
+        # Update transition
         new_transition[TransitionKey.REWARD] = reward
         new_transition[TransitionKey.DONE] = terminated
 
-        # 使用分类器频率更新 info
+        # Update info with classifier frequency
         info = new_transition.get(TransitionKey.INFO, {})
         info["reward_classifier_frequency"] = classifier_frequency
         new_transition[TransitionKey.INFO] = info
@@ -563,10 +634,10 @@ class RewardClassifierProcessorStep(ProcessorStep):
 
     def get_config(self) -> dict[str, Any]:
         """
-        返回步骤的配置以进行序列化。
+        Returns the configuration of the step for serialization.
 
-        返回:
-            包含步骤配置属性的字典。
+        Returns:
+            A dictionary containing the step's configuration attributes.
         """
         return {
             "device": self.device,

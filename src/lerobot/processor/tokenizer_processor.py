@@ -15,30 +15,39 @@
 # limitations under the License.
 
 """
-此脚本定义了一个处理器，用于对来自环境转换的自然语言指令进行分词。
+This script defines a processor for tokenizing natural language instructions from an environment transition.
 
-它使用来自 Hugging Face `transformers` 库的分词器将任务描述（文本）转换为
-令牌 ID 和注意力掩码，然后将它们添加到观测字典中。
+It uses a tokenizer from the Hugging Face `transformers` library to convert task descriptions (text) into
+token IDs and attention masks, which are then added to the observation dictionary.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import torch
 
-from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
-from lerobot.utils.constants import OBS_LANGUAGE_ATTENTION_MASK, OBS_LANGUAGE_TOKENS
+from lerobot.configs import FeatureType, PipelineFeatureType, PolicyFeature
+from lerobot.types import EnvTransition, RobotObservation, TransitionKey
+from lerobot.utils.constants import (
+    ACTION_TOKEN_MASK,
+    ACTION_TOKENS,
+    OBS_LANGUAGE_ATTENTION_MASK,
+    OBS_LANGUAGE_SUBTASK_ATTENTION_MASK,
+    OBS_LANGUAGE_SUBTASK_TOKENS,
+    OBS_LANGUAGE_TOKENS,
+)
 from lerobot.utils.import_utils import _transformers_available
 
-from .core import EnvTransition, TransitionKey
-from .pipeline import ObservationProcessorStep, ProcessorStepRegistry
+from .pipeline import ActionProcessorStep, ObservationProcessorStep, ProcessorStepRegistry
 
-# 用于类型检查和延迟加载的条件导入
+# Conditional import for type checking and lazy loading
 if TYPE_CHECKING or _transformers_available:
-    from transformers import AutoTokenizer
+    from transformers import AutoProcessor, AutoTokenizer
 else:
+    AutoProcessor = None
     AutoTokenizer = None
 
 
@@ -46,23 +55,23 @@ else:
 @ProcessorStepRegistry.register(name="tokenizer_processor")
 class TokenizerProcessorStep(ObservationProcessorStep):
     """
-    用于对自然语言任务描述进行分词的处理器步骤。
+    Processor step to tokenize a natural language task description.
 
-    此步骤从 `EnvTransition` 的 `complementary_data` 中提取任务字符串，
-    使用 Hugging Face `transformers` 分词器对其进行分词，并将生成的
-    令牌 ID 和注意力掩码添加到 `observation` 字典中。
+    This step extracts a task string from the `complementary_data` of an `EnvTransition`,
+    tokenizes it using a Hugging Face `transformers` tokenizer, and adds the resulting
+    token IDs and attention mask to the `observation` dictionary.
 
-    需要安装 `transformers` 库。
+    Requires the `transformers` library to be installed.
 
-    属性：
-        tokenizer_name: Hugging Face Hub 中预训练分词器的名称（例如 "bert-base-uncased"）。
-        tokenizer: 预初始化的分词器对象。如果提供，则忽略 `tokenizer_name`。
-        max_length: 填充或截断序列的最大长度。
-        task_key: `complementary_data` 中存储任务字符串的键。
-        padding_side: 填充的一侧（'left' 或 'right'）。
-        padding: 填充策略（'max_length'、'longest' 等）。
-        truncation: 是否截断长度超过 `max_length` 的序列。
-        input_tokenizer: 内部分词器实例，在初始化期间加载。
+    Attributes:
+        tokenizer_name: The name of a pretrained tokenizer from the Hugging Face Hub (e.g., "bert-base-uncased").
+        tokenizer: A pre-initialized tokenizer object. If provided, `tokenizer_name` is ignored.
+        max_length: The maximum length to pad or truncate sequences to.
+        task_key: The key in `complementary_data` where the task string is stored.
+        padding_side: The side to pad on ('left' or 'right').
+        padding: The padding strategy ('max_length', 'longest', etc.).
+        truncation: Whether to truncate sequences longer than `max_length`.
+        input_tokenizer: The internal tokenizer instance, loaded during initialization.
     """
 
     tokenizer_name: str | None = None
@@ -73,19 +82,19 @@ class TokenizerProcessorStep(ObservationProcessorStep):
     padding: str = "max_length"
     truncation: bool = True
 
-    # 内部分词器实例（不是配置的一部分）
+    # Internal tokenizer instance (not part of the config)
     input_tokenizer: Any = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         """
-        在创建数据类后初始化分词器。
+        Initializes the tokenizer after the dataclass is created.
 
-        它检查 `transformers` 库的可用性，并从提供的对象
-        或通过 Hugging Face Hub 的名称加载分词器。
+        It checks for the availability of the `transformers` library and loads the tokenizer
+        either from a provided object or by name from the Hugging Face Hub.
 
-        异常：
-            ImportError: 如果未安装 `transformers` 库。
-            ValueError: 如果既未提供 `tokenizer` 也未提供 `tokenizer_name`。
+        Raises:
+            ImportError: If the `transformers` library is not installed.
+            ValueError: If neither `tokenizer` nor `tokenizer_name` is provided.
         """
         if not _transformers_available:
             raise ImportError(
@@ -94,7 +103,7 @@ class TokenizerProcessorStep(ObservationProcessorStep):
             )
 
         if self.tokenizer is not None:
-            # 直接使用提供的分词器对象
+            # Use provided tokenizer object directly
             self.input_tokenizer = self.tokenizer
         elif self.tokenizer_name is not None:
             if AutoTokenizer is None:
@@ -108,13 +117,13 @@ class TokenizerProcessorStep(ObservationProcessorStep):
 
     def get_task(self, transition: EnvTransition) -> list[str] | None:
         """
-        从转换的补充数据中提取任务描述。
+        Extracts the task description(s) from the transition's complementary data.
 
-        参数：
-            transition: 环境转换。
+        Args:
+            transition: The environment transition.
 
-        返回：
-            任务字符串列表，如果未找到任务键或值为 None，则返回 None。
+        Returns:
+            A list of task strings, or None if the task key is not found or the value is None.
         """
         complementary_data = transition.get(TransitionKey.COMPLEMENTARY_DATA)
         if complementary_data is None:
@@ -124,88 +133,132 @@ class TokenizerProcessorStep(ObservationProcessorStep):
         if task is None:
             raise ValueError("Task extracted from Complementary data is None")
 
-        # 将其标准化为分词器的字符串列表
+        # Standardize to a list of strings for the tokenizer
         if isinstance(task, str):
             return [task]
-        elif isinstance(task, list) and all(isinstance(t, str) for t in task):
-            return task
+        elif isinstance(task, (list, tuple)) and all(isinstance(t, str) for t in task):
+            return list(task)
 
         return None
 
-    def observation(self, observation: dict[str, Any]) -> dict[str, Any]:
+    def get_subtask(self, transition: EnvTransition) -> list[str] | None:
         """
-        对任务描述进行分词并将其添加到观测字典中。
+        Extracts the subtask from the transition's complementary data.
 
-        此方法检索任务，对其进行分词，将生成的张量移动到
-        与转换中其他数据相同的设备，并更新观测。
+        Args:
+            transition: The environment transition.
 
-        参数：
-            observation: 原始观测字典。
+        Returns:
+            A list of subtask strings, or None if the subtask key is not found or the value is None.
+        """
+        complementary_data = transition.get(TransitionKey.COMPLEMENTARY_DATA)
+        if complementary_data is None:
+            return None
 
-        返回：
-            更新后的观测字典，包括令牌 ID 和注意力掩码。
+        subtask = complementary_data.get("subtask")
+        if subtask is None:
+            return None
+
+        # Standardize to a list of strings for the tokenizer
+        if isinstance(subtask, str):
+            return [subtask]
+        elif isinstance(subtask, list) and all(isinstance(t, str) for t in subtask):
+            return subtask
+
+        return None
+
+    def observation(self, observation: RobotObservation) -> RobotObservation:
+        """
+        Tokenizes the task description and adds it to the observation dictionary.
+
+        This method retrieves the task, tokenizes it, moves the resulting tensors to the
+        same device as other data in the transition, and updates the observation.
+
+        Args:
+            observation: The original observation dictionary.
+
+        Returns:
+            The updated observation dictionary including token IDs and an attention mask.
         """
         task = self.get_task(self.transition)
         if task is None:
             raise ValueError("Task cannot be None")
 
-        # 对任务进行分词（这将创建 CPU 张量）
+        # Tokenize the task (this will create CPU tensors)
         tokenized_prompt = self._tokenize_text(task)
 
-        # 从转换中的现有张量检测设备以确保一致性
+        # Detect the device from existing tensors in the transition to ensure consistency
         target_device = self._detect_device(self.transition)
 
-        # 将新的分词张量移动到检测到的设备
+        # Move new tokenized tensors to the detected device
         if target_device is not None:
             tokenized_prompt = {
                 k: v.to(target_device) if isinstance(v, torch.Tensor) else v
                 for k, v in tokenized_prompt.items()
             }
 
-        # 创建新的观测字典以避免就地修改原始字典
+        # Create a new observation dict to avoid modifying the original in place
         new_observation = dict(observation)
 
-        # 将分词数据添加到观测
+        # Add tokenized data to the observation
         new_observation[OBS_LANGUAGE_TOKENS] = tokenized_prompt["input_ids"]
         new_observation[OBS_LANGUAGE_ATTENTION_MASK] = tokenized_prompt["attention_mask"].to(dtype=torch.bool)
+
+        # Tokenize subtask if available
+        subtask = self.get_subtask(self.transition)
+        if subtask is not None:
+            tokenized_subtask = self._tokenize_text(subtask)
+
+            # Move new tokenized tensors to the detected device
+            if target_device is not None:
+                tokenized_subtask = {
+                    k: v.to(target_device) if isinstance(v, torch.Tensor) else v
+                    for k, v in tokenized_subtask.items()
+                }
+
+            # Add tokenized subtask to the observation
+            new_observation[OBS_LANGUAGE_SUBTASK_TOKENS] = tokenized_subtask["input_ids"]
+            new_observation[OBS_LANGUAGE_SUBTASK_ATTENTION_MASK] = tokenized_subtask["attention_mask"].to(
+                dtype=torch.bool
+            )
 
         return new_observation
 
     def _detect_device(self, transition: EnvTransition) -> torch.device | None:
         """
-        从转换中的现有张量检测 torch.device。
+        Detects the torch.device from existing tensors in the transition.
 
-        它首先检查观测字典中的张量，然后检查动作张量。
+        It checks tensors in the observation dictionary first, then the action tensor.
 
-        参数：
-            transition: 环境转换。
+        Args:
+            transition: The environment transition.
 
-        返回：
-            检测到的 `torch.device`，如果未找到张量则返回 None。
+        Returns:
+            The detected `torch.device`, or None if no tensors are found.
         """
-        # 首先检查观测张量（最有可能找到张量的地方）
+        # Check observation tensors first (most likely place to find tensors)
         observation = transition.get(TransitionKey.OBSERVATION)
         if observation:
             for value in observation.values():
                 if isinstance(value, torch.Tensor):
                     return value.device
 
-        # 回退到检查动作张量
+        # Fallback to checking the action tensor
         action = transition.get(TransitionKey.ACTION)
         if isinstance(action, torch.Tensor):
             return action.device
 
-        return None  # 未找到张量，默认为 CPU
+        return None  # No tensors found, default will be CPU
 
     def _tokenize_text(self, text: str | list[str]) -> dict[str, torch.Tensor]:
         """
-        分词器调用的包装器。
+        A wrapper around the tokenizer call.
 
-        参数：
-            text: 要分词的字符串或字符串列表。
+        Args:
+            text: A string or list of strings to tokenize.
 
-        返回：
-            包含分词后的 'input_ids' 和 'attention_mask' 的字典，作为 PyTorch 张量。
+        Returns:
+            A dictionary containing tokenized 'input_ids' and 'attention_mask' as PyTorch tensors.
         """
         return self.input_tokenizer(
             text,
@@ -218,13 +271,13 @@ class TokenizerProcessorStep(ObservationProcessorStep):
 
     def get_config(self) -> dict[str, Any]:
         """
-        返回处理器的可序列化配置。
+        Returns the serializable configuration of the processor.
 
-        注意：分词器对象本身不会被序列化。如果处理器是使用
-        分词器名称初始化的，该名称将包含在配置中。
+        Note: The tokenizer object itself is not serialized. If the processor was initialized
+        with a tokenizer name, that name will be included in the config.
 
-        返回：
-            包含处理器配置参数的字典。
+        Returns:
+            A dictionary with the processor's configuration parameters.
         """
         config = {
             "max_length": self.max_length,
@@ -234,7 +287,7 @@ class TokenizerProcessorStep(ObservationProcessorStep):
             "truncation": self.truncation,
         }
 
-        # 仅在使用 tokenizer_name 创建分词器时才保存它
+        # Only save tokenizer_name if it was used to create the tokenizer
         if self.tokenizer_name is not None and self.tokenizer is None:
             config["tokenizer_name"] = self.tokenizer_name
 
@@ -244,27 +297,280 @@ class TokenizerProcessorStep(ObservationProcessorStep):
         self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
     ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
         """
-        为语言令牌和注意力掩码添加特征定义。
+        Adds feature definitions for the language tokens and attention mask.
 
-        这会更新策略特征字典以包含添加到观测的新数据，
-        确保下游组件了解它们的形状和类型。
+        This updates the policy features dictionary to include the new data added to the
+        observation, ensuring downstream components are aware of their shape and type.
 
-        参数：
-            features: 现有策略特征的字典。
+        Args:
+            features: The dictionary of existing policy features.
 
-        返回：
-            更新后的策略特征字典。
+        Returns:
+            The updated dictionary of policy features.
         """
-        # 如果令牌 ID 的特征尚不存在，则添加它
+        # Add a feature for the token IDs if it doesn't already exist
         if OBS_LANGUAGE_TOKENS not in features[PipelineFeatureType.OBSERVATION]:
             features[PipelineFeatureType.OBSERVATION][OBS_LANGUAGE_TOKENS] = PolicyFeature(
                 type=FeatureType.LANGUAGE, shape=(self.max_length,)
             )
 
-        # 如果注意力掩码的特征尚不存在，则添加它
+        # Add a feature for the attention mask if it doesn't already exist
         if OBS_LANGUAGE_ATTENTION_MASK not in features[PipelineFeatureType.OBSERVATION]:
             features[PipelineFeatureType.OBSERVATION][OBS_LANGUAGE_ATTENTION_MASK] = PolicyFeature(
                 type=FeatureType.LANGUAGE, shape=(self.max_length,)
             )
 
+        return features
+
+
+@dataclass
+@ProcessorStepRegistry.register(name="action_tokenizer_processor")
+class ActionTokenizerProcessorStep(ActionProcessorStep):
+    """
+    Processor step to tokenize action data using a fast action tokenizer.
+
+    This step takes action tensors from an `EnvTransition`, tokenizes them using
+    a Hugging Face `transformers` AutoProcessor (such as the Physical Intelligence "fast" tokenizer),
+    and returns the tokenized action.
+
+    Requires the `transformers` library to be installed.
+
+    Attributes:
+        tokenizer_name: The name of a pretrained processor from the Hugging Face Hub (e.g., "lerobot/fast-action-tokenizer").
+        tokenizer: A pre-initialized processor/tokenizer object. If provided, `tokenizer_name` is ignored.
+        trust_remote_code: Whether to trust remote code when loading the tokenizer (required for some tokenizers).
+        action_tokenizer: The internal tokenizer/processor instance, loaded during initialization.
+        paligemma_tokenizer_name: The name of a pretrained PaliGemma tokenizer from the Hugging Face Hub (e.g., "google/paligemma-3b-pt-224").
+    """
+
+    action_tokenizer_name: str | None = None
+    action_tokenizer_input_object: Any | None = None
+    trust_remote_code: bool = True
+    max_action_tokens: int = 256
+    fast_skip_tokens: int = 128
+    paligemma_tokenizer_name: str = "google/paligemma-3b-pt-224"
+    # Internal tokenizer instance (not part of the config)
+    action_tokenizer: Any = field(default=None, init=False, repr=False)
+    _paligemma_tokenizer: Any = field(default=None, init=False, repr=False)
+
+    def __post_init__(self):
+        """
+        Initializes the action tokenizer after the dataclass is created.
+
+        It checks for the availability of the `transformers` library and loads the tokenizer
+        either from a provided object or by name from the Hugging Face Hub.
+
+        Raises:
+            ImportError: If the `transformers` library is not installed.
+            ValueError: If neither `tokenizer` nor `tokenizer_name` is provided.
+        """
+        if not _transformers_available:
+            raise ImportError(
+                "The 'transformers' library is not installed. "
+                "Please install it with `pip install 'lerobot[transformers-dep]'` to use ActionTokenizerProcessorStep."
+            )
+
+        if self.action_tokenizer_input_object is not None:
+            self.action_tokenizer = self.action_tokenizer_input_object
+
+        elif self.action_tokenizer_name is not None:
+            if AutoProcessor is None:
+                raise ImportError("AutoProcessor is not available")
+            self.action_tokenizer = AutoProcessor.from_pretrained(
+                self.action_tokenizer_name, trust_remote_code=self.trust_remote_code
+            )
+        else:
+            raise ValueError(
+                "Either 'action_tokenizer' or 'action_tokenizer_name' must be provided. "
+                "Pass a tokenizer object directly or a tokenizer name to auto-load."
+            )
+
+        self._paligemma_tokenizer = AutoTokenizer.from_pretrained(
+            self.paligemma_tokenizer_name,
+            trust_remote_code=self.trust_remote_code,
+            add_eos_token=True,
+            add_bos_token=False,
+        )
+
+    def __call__(self, transition: EnvTransition) -> EnvTransition:
+        """
+        Applies action tokenization to the transition.
+
+        This overrides the base class to handle both tokens and mask.
+
+        Args:
+            transition: The input transition with action data.
+
+        Returns:
+            The processed transition with tokenized actions and mask in complementary data.
+        """
+        self._current_transition = transition.copy()
+        new_transition = self._current_transition
+
+        action = new_transition.get(TransitionKey.ACTION)
+        if action is None:
+            # During inference, no action is available, skip tokenization
+            return new_transition
+
+        # Tokenize and get both tokens and mask
+        tokens, mask = self._tokenize_action(action)
+
+        # Store mask in complementary data
+        complementary_data = new_transition.get(TransitionKey.COMPLEMENTARY_DATA, {})
+        if complementary_data is None:
+            complementary_data = {}
+        complementary_data[ACTION_TOKEN_MASK] = mask
+        complementary_data[ACTION_TOKENS] = tokens
+        new_transition[TransitionKey.COMPLEMENTARY_DATA] = complementary_data
+        return new_transition
+
+    def _act_tokens_to_paligemma_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
+        """
+        Converts action tokens to PaliGemma tokens.
+        """
+        return self._paligemma_tokenizer.vocab_size - 1 - self.fast_skip_tokens - tokens
+
+    def _tokenize_action(self, action: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Tokenizes the action tensor and creates a mask.
+
+        Args:
+            action: The input action tensor to tokenize. Shape: (B, H, action_dim) or (H, action_dim,)
+
+        Returns:
+            A tuple of (tokens, mask) where:
+            - tokens: Tensor of token IDs with shape (B, max_action_tokens)
+            - mask: Boolean mask with shape (B, max_action_tokens), True for real tokens, False for padding
+        """
+        if action is None:
+            raise ValueError("Action cannot be None")
+
+        # Get the device and dtype of the input action
+        device = action.device if isinstance(action, torch.Tensor) else None
+
+        # Handle single sample (add batch dimension)
+        single_sample = action.dim() == 1
+        if single_sample:
+            action = action.unsqueeze(0)
+
+        batch_size = action.shape[0]
+
+        # Tokenize the action batch
+        # The fast tokenizer expects action data and returns token IDs
+        tokens_list = []
+        masks_list = []
+
+        for i in range(batch_size):
+            # Tokenize single action (move to CPU first as tokenizer uses scipy which requires numpy)
+            action_cpu = action[i : i + 1].cpu()
+            tokens = self.action_tokenizer(action_cpu)
+
+            # Convert to numpy array if it's a list
+            if isinstance(tokens, list) or not isinstance(tokens, torch.Tensor):
+                tokens = torch.tensor(tokens, dtype=torch.long, device=action.device)
+            else:
+                # Move tokens back to the same device as input action
+                tokens = tokens.to(device=action.device)
+
+            # Flatten to 1D if needed
+            if tokens.dim() > 1:
+                tokens = tokens.flatten()
+
+            bos_id = self._paligemma_tokenizer.bos_token_id
+            # add bos
+            tokens = torch.cat(
+                [
+                    torch.tensor([bos_id], device=action.device),
+                    torch.tensor(
+                        self._paligemma_tokenizer.encode("Action: ", add_special_tokens=False),
+                        device=action.device,
+                    ),
+                    self._act_tokens_to_paligemma_tokens(tokens),
+                    torch.tensor(self._paligemma_tokenizer.encode("|"), device=action.device),
+                ]
+            )
+
+            # Truncate or pad to max_action_tokens
+            if len(tokens) > self.max_action_tokens:
+                logging.warning(
+                    f"Token length ({len(tokens)}) exceeds max length ({self.max_action_tokens}), truncating. "
+                    "Consider increasing the `max_action_tokens` in your model config if this happens frequently."
+                )
+                tokens = tokens[: self.max_action_tokens]
+                mask = torch.ones(self.max_action_tokens, dtype=torch.bool, device=action.device)
+            else:
+                mask = torch.cat(
+                    [
+                        torch.ones(len(tokens), dtype=torch.bool, device=action.device),
+                        torch.zeros(
+                            self.max_action_tokens - len(tokens), dtype=torch.bool, device=action.device
+                        ),
+                    ]
+                )
+                # Pad tokens with zeros
+                tokens = torch.nn.functional.pad(tokens, (0, self.max_action_tokens - len(tokens)), value=0)
+
+            tokens_list.append(tokens)
+            masks_list.append(mask)
+
+        # Stack into batched tensors
+        tokens_batch = torch.stack(tokens_list, dim=0)  # (B, max_action_tokens)
+        masks_batch = torch.stack(masks_list, dim=0)  # (B, max_action_tokens)
+
+        # Remove batch dimension if input was single sample
+        if single_sample:
+            tokens_batch = tokens_batch.squeeze(0)
+            masks_batch = masks_batch.squeeze(0)
+
+        # Move to the same device as the input
+        if device is not None:
+            tokens_batch = tokens_batch.to(device)
+            masks_batch = masks_batch.to(device)
+
+        return tokens_batch, masks_batch
+
+    def action(self, action: torch.Tensor) -> torch.Tensor:
+        """
+        This method is not used since we override __call__.
+        Required by ActionProcessorStep ABC.
+        """
+        tokens, _ = self._tokenize_action(action)
+        return tokens
+
+    def get_config(self) -> dict[str, Any]:
+        """
+        Returns the serializable configuration of the processor.
+
+        Note: The tokenizer object itself is not serialized. If the processor was initialized
+        with a tokenizer name, that name will be included in the config.
+
+        Returns:
+            A dictionary with the processor's configuration parameters.
+        """
+        config = {
+            "trust_remote_code": self.trust_remote_code,
+            "max_action_tokens": self.max_action_tokens,
+        }
+
+        # Only save tokenizer_name if it was used to create the tokenizer
+        if self.action_tokenizer_name is not None and self.action_tokenizer_input_object is None:
+            config["action_tokenizer_name"] = self.action_tokenizer_name
+
+        return config
+
+    def transform_features(
+        self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
+    ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
+        """
+        Updates feature definitions to reflect tokenized actions.
+
+        This updates the policy features dictionary to indicate that the action
+        has been tokenized into a sequence of token IDs with shape (max_action_tokens,).
+
+        Args:
+            features: The dictionary of existing policy features.
+
+        Returns:
+            The updated dictionary of policy features.
+        """
         return features

@@ -16,9 +16,9 @@
 
 from dataclasses import dataclass
 
-from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
+from lerobot.configs import FeatureType, PipelineFeatureType, PolicyFeature
+from lerobot.types import PolicyAction, RobotAction
 
-from .core import PolicyAction, RobotAction
 from .pipeline import ActionProcessorStep, ProcessorStepRegistry, RobotActionProcessorStep
 
 
@@ -26,13 +26,15 @@ from .pipeline import ActionProcessorStep, ProcessorStepRegistry, RobotActionPro
 @dataclass
 class MapTensorToDeltaActionDictStep(ActionProcessorStep):
     """
-    将策略的扁平动作张量映射到结构化的增量动作字典。
+    Maps a flat action tensor from a policy to a structured delta action dictionary.
 
-    此步骤通常在策略输出连续动作向量后使用。
-    它将向量分解为末端执行器（x, y, z）的增量移动命名组件，以及可选的夹爪。
+    This step is typically used after a policy outputs a continuous action vector.
+    It decomposes the vector into named components for delta movements of the
+    end-effector (x, y, z) and optionally the gripper.
 
-    属性：
-        use_gripper: 如果为 True，则假设张量的第 4 个元素是夹爪动作。
+    Attributes:
+        use_gripper: If True, assumes the 4th element of the tensor is the
+                     gripper action.
     """
 
     use_gripper: bool = True
@@ -44,7 +46,7 @@ class MapTensorToDeltaActionDictStep(ActionProcessorStep):
         if action.dim() > 1:
             action = action.squeeze(0)
 
-        # TODO (maractingi): 添加旋转
+        # TODO (maractingi): add rotation
         delta_action = {
             "delta_x": action[0].item(),
             "delta_y": action[1].item(),
@@ -73,47 +75,47 @@ class MapTensorToDeltaActionDictStep(ActionProcessorStep):
 @dataclass
 class MapDeltaActionToRobotActionStep(RobotActionProcessorStep):
     """
-    将遥操作设备的增量动作映射到机器人目标动作以进行逆运动学计算。
+    Maps delta actions from teleoperators to robot target actions for inverse kinematics.
 
-    此步骤将增量移动字典（例如，来自游戏手柄）转换为目标动作格式，
-    该格式包括"enabled"标志和目标末端执行器位置。它还处理缩放和噪声过滤。
+    This step converts a dictionary of delta movements (e.g., from a gamepad)
+    into a target action format that includes an "enabled" flag and target
+    end-effector positions. It also handles scaling and noise filtering.
 
-    属性：
-        position_scale: 用于缩放增量位置输入的因子。
-        rotation_scale: 用于缩放增量旋转输入的因子（当前未使用）。
-        noise_threshold: 低于此幅度的增量输入被视为噪声，不会触发"enabled"状态。
+    Attributes:
+        position_scale: A factor to scale the delta position inputs.
+        noise_threshold: The magnitude below which delta inputs are considered noise
+                         and do not trigger an "enabled" state.
     """
 
-    # 增量移动的缩放因子
+    # Scale factors for delta movements
     position_scale: float = 1.0
-    rotation_scale: float = 0.0  # 游戏手柄/键盘无旋转增量
-    noise_threshold: float = 1e-3  # 1 毫米阈值以过滤噪声
+    noise_threshold: float = 1e-3  # 1 mm threshold to filter out noise
 
     def action(self, action: RobotAction) -> RobotAction:
-        # 注意 (maractingi): 动作可以是来自 teleop_devices 的字典或来自策略的张量
-        # TODO (maractingi): 从 teleop_devices 更改此 target_xyz 命名约定
+        # NOTE (maractingi): Action can be a dict from the teleop_devices or a tensor from the policy
+        # TODO (maractingi): changing this target_xyz naming convention from the teleop_devices
         delta_x = action.pop("delta_x")
         delta_y = action.pop("delta_y")
         delta_z = action.pop("delta_z")
         gripper = action.pop("gripper")
 
-        # 确定遥控设备是否正在主动提供输入
-        # 如果检测到任何显著的移动增量，则视为启用
-        position_magnitude = (delta_x**2 + delta_y**2 + delta_z**2) ** 0.5  # 使用欧几里得范数表示位置
-        enabled = position_magnitude > self.noise_threshold  # 小阈值以避免噪声
+        # Determine if the teleoperator is actively providing input
+        # Consider enabled if any significant movement delta is detected
+        position_magnitude = (delta_x**2 + delta_y**2 + delta_z**2) ** 0.5  # Use Euclidean norm for position
+        enabled = position_magnitude > self.noise_threshold  # Small threshold to avoid noise
 
-        # 适当地缩放增量
+        # Scale the deltas appropriately
         scaled_delta_x = delta_x * self.position_scale
         scaled_delta_y = delta_y * self.position_scale
         scaled_delta_z = delta_z * self.position_scale
 
-        # 对于游戏手柄/键盘，我们没有旋转输入，因此设置为 0
-        # 未来可以为更复杂的遥控设备扩展这些
+        # For gamepad/keyboard, we don't have rotation input, so set to 0
+        # These could be extended in the future for more sophisticated teleoperators
         target_wx = 0.0
         target_wy = 0.0
         target_wz = 0.0
 
-        # 使用机器人目标格式更新动作
+        # Update action with robot target format
         action = {
             "enabled": enabled,
             "target_x": scaled_delta_x,

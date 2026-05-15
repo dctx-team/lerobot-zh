@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# TODO(Steven): 考虑执行以下操作：
+# TODO(Steven): Consider doing the following:
 # from enum import Enum
 # class MyControlTableKey(Enum):
 #   ID = "ID"
@@ -24,16 +24,16 @@
 #   MyControlTableKey.GOAL_SPEED.value: (46, 2)
 #   ...
 # }
-# 这允许我执行：
+# This allows me do to:
 # bus.write(MyControlTableKey.GOAL_SPEED, ...)
-# 而不是：
+# Instead of:
 # bus.write("Goal_Speed", ...)
-# 这很重要，原因有两个：
-# 1. 如果我尝试使用无效的键，linter会告诉我，而不是在我收到RuntimeError时才意识到。
-# 2. 我们可以更改MyControlTableKey枚举的值，而不影响客户端代码。
+# This is important for two reasons:
+# 1. The linter will tell me if I'm trying to use an invalid key, instead of me realizing when I get the RunTimeError
+# 2. We can change the value of the MyControlTableKey enums without impacting the client code
 
 
-# {data_name: (地址, 字节大小)}
+# {data_name: (address, size_byte)}
 # https://emanual.robotis.com/docs/en/dxl/x/{MODEL}/#control-table
 X_SERIES_CONTROL_TABLE = {
     "Model_Number": (0, 2),
@@ -101,7 +101,7 @@ X_SERIES_BAUDRATE_TABLE = {
     4_000_000: 6,
 }
 
-# {data_name: 字节大小}
+# {data_name: size_byte}
 X_SERIES_ENCODINGS_TABLE = {
     "Homing_Offset": X_SERIES_CONTROL_TABLE["Homing_Offset"][1],
     "Goal_PWM": X_SERIES_CONTROL_TABLE["Goal_PWM"][1],
@@ -124,7 +124,7 @@ MODEL_ENCODING_TABLE = {
     "xc430-w150": X_SERIES_ENCODINGS_TABLE,
 }
 
-# {型号: 型号分辨率}
+# {model: model_resolution}
 # https://emanual.robotis.com/docs/en/dxl/x/{MODEL}/#specifications
 MODEL_RESOLUTION = {
     "x_series": 4096,
@@ -136,7 +136,7 @@ MODEL_RESOLUTION = {
     "xc430-w150": 4096,
 }
 
-# {型号: 型号编号}
+# {model: model_number}
 # https://emanual.robotis.com/docs/en/dxl/x/{MODEL}/#control-table-of-eeprom-area
 MODEL_NUMBER_TABLE = {
     "xl330-m077": 1190,
@@ -147,7 +147,7 @@ MODEL_NUMBER_TABLE = {
     "xc430-w150": 1070,
 }
 
-# {型号: 可用的工作模式}
+# {model: available_operating_modes}
 # https://emanual.robotis.com/docs/en/dxl/x/{MODEL}/#operating-mode11
 MODEL_OPERATING_MODES = {
     "xl330-m077": [0, 1, 3, 4, 5, 16],

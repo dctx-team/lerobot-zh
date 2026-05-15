@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-提供使用 OpenCV 从相机捕获帧的 OpenCVCamera 类。
+Provides the OpenCVCamera class for capturing frames from cameras using OpenCV.
 """
 
 import logging
@@ -25,23 +25,25 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Any
 
-# 在导入 cv2 之前修复 Windows 的 MSMF 硬件转换兼容性问题
+from numpy.typing import NDArray  # type: ignore  # TODO: add type stubs for numpy.typing
+
+# Fix MSMF hardware transform compatibility for Windows before importing cv2
 if platform.system() == "Windows" and "OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS" not in os.environ:
     os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
-import cv2
-import numpy as np
+import cv2  # type: ignore  # TODO: add type stubs for OpenCV
 
-from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
+from lerobot.utils.errors import DeviceNotConnectedError
 
 from ..camera import Camera
-from ..utils import get_cv2_backend, get_cv2_rotation
+from ..utils import get_cv2_rotation
 from .configuration_opencv import ColorMode, OpenCVCameraConfig
 
-# 注意(Steven): OpenCV 设备索引的最大值取决于您的操作系统。例如，
-# 如果您有 3 个相机，它们应该关联到索引 0、1 和 2。这在
-# MacOS 上是这样的。但是，在 Ubuntu 上，索引是不同的，比如 6、16、23。
-# 当您更换 USB 端口或重启计算机时，操作系统可能会
-# 将相同的相机视为新设备。因此我们选择一个较高的上限来搜索索引。
+# NOTE(Steven): The maximum opencv device index depends on your operating system. For instance,
+# if you have 3 cameras, they should be associated to index 0, 1, and 2. This is the case
+# on MacOS. However, on Ubuntu, the indices are different like 6, 16, 23.
+# When you change the USB port or reboot the computer, the operating system might
+# treat the same cameras as new devices. Thus we select a higher bound to search indices.
 MAX_OPENCV_INDEX = 60
 
 logger = logging.getLogger(__name__)
@@ -49,62 +51,53 @@ logger = logging.getLogger(__name__)
 
 class OpenCVCamera(Camera):
     """
-    使用 OpenCV 管理相机交互以实现高效的帧录制。
+    Manages camera interactions using OpenCV for efficient frame recording.
 
-    此类提供了一个高级接口，用于连接、配置和读取
-    兼容 OpenCV 的 VideoCapture 的相机的帧。它同时支持
-    同步和异步帧读取。
+    This class provides a high-level interface to connect to, configure, and read
+    frames from cameras compatible with OpenCV's VideoCapture. It supports both
+    synchronous and asynchronous frame reading.
 
-    OpenCVCamera 实例需要一个相机索引（例如 0）或设备路径
-    （例如 Linux 上的 '/dev/video0'）。相机索引可能在重启或
-    端口更改时不稳定，尤其是在 Linux 上。使用提供的实用脚本来查找
-    可用的相机索引或路径：
+    An OpenCVCamera instance requires a camera index (e.g., 0) or a device path
+    (e.g., '/dev/video0' on Linux). Camera indices can be unstable across reboots
+    or port changes, especially on Linux. Use the provided utility script to find
+    available camera indices or paths:
     ```bash
     lerobot-find-cameras opencv
     ```
 
-    除非在配置中覆盖，否则使用相机的默认设置（FPS、分辨率、颜色模式）。
+    The camera's default settings (FPS, resolution, color mode) are used unless
+    overridden in the configuration.
 
-    示例：
+    Example:
         ```python
         from lerobot.cameras.opencv import OpenCVCamera
-        from lerobot.cameras.configuration_opencv import OpenCVCameraConfig, ColorMode, Cv2Rotation
+        from lerobot.cameras.configuration_opencv import OpenCVCameraConfig
 
-        # 使用相机索引 0 的基本用法
+        # Basic usage with camera index 0
         config = OpenCVCameraConfig(index_or_path=0)
         camera = OpenCVCamera(config)
         camera.connect()
 
-        # 同步读取 1 帧
+        # Read 1 frame synchronously (blocking)
         color_image = camera.read()
-        print(color_image.shape)
 
-        # 异步读取 1 帧
+        # Read 1 frame asynchronously (waits for new frame with a timeout)
         async_image = camera.async_read()
 
-        # 完成后，正确断开相机连接
-        camera.disconnect()
+        # Get the latest frame immediately (no wait, returns timestamp)
+        latest_image, timestamp = camera.read_latest()
 
-        # 使用自定义设置的示例
-        custom_config = OpenCVCameraConfig(
-            index_or_path='/dev/video0', # 或使用索引
-            fps=30,
-            width=1280,
-            height=720,
-            color_mode=ColorMode.RGB,
-            rotation=Cv2Rotation.ROTATE_90
-        )
-        custom_camera = OpenCVCamera(custom_config)
-        # ... 连接、读取、断开连接 ...
+        # When done, properly disconnect the camera using
+        camera.disconnect()
         ```
     """
 
     def __init__(self, config: OpenCVCameraConfig):
         """
-        初始化 OpenCVCamera 实例。
+        Initializes the OpenCVCamera instance.
 
-        参数：
-            config: 相机的配置设置。
+        Args:
+            config: The configuration settings for the camera.
         """
         super().__init__(config)
 
@@ -120,11 +113,12 @@ class OpenCVCamera(Camera):
         self.thread: Thread | None = None
         self.stop_event: Event | None = None
         self.frame_lock: Lock = Lock()
-        self.latest_frame: np.ndarray | None = None
+        self.latest_frame: NDArray[Any] | None = None
+        self.latest_timestamp: float | None = None
         self.new_frame_event: Event = Event()
 
         self.rotation: int | None = get_cv2_rotation(config.rotation)
-        self.backend: int = get_cv2_backend()
+        self.backend: int = config.backend
 
         if self.height and self.width:
             self.capture_width, self.capture_height = self.width, self.height
@@ -136,26 +130,29 @@ class OpenCVCamera(Camera):
 
     @property
     def is_connected(self) -> bool:
-        """检查相机当前是否已连接并打开。"""
+        """Checks if the camera is currently connected and opened."""
         return isinstance(self.videocapture, cv2.VideoCapture) and self.videocapture.isOpened()
 
-    def connect(self, warmup: bool = True):
+    @check_if_already_connected
+    def connect(self, warmup: bool = True) -> None:
         """
-        连接到配置中指定的 OpenCV 相机。
+        Connects to the OpenCV camera specified in the configuration.
 
-        初始化 OpenCV VideoCapture 对象，设置所需的相机属性
-        (FPS、宽度、高度)，并执行初始检查。
+        Initializes the OpenCV VideoCapture object, sets desired camera properties
+        (FPS, width, height), starts the background reading thread and performs initial checks.
 
-        异常：
-            DeviceAlreadyConnectedError: 如果相机已连接。
-            ConnectionError: 如果未找到指定的相机索引/路径，或找到相机但无法打开。
-            RuntimeError: 如果相机打开但未能应用请求的 FPS/分辨率设置。
+        Args:
+            warmup (bool): If True, waits at connect() time until at least one valid frame
+                           has been captured by the background thread. Defaults to True.
+
+        Raises:
+            DeviceAlreadyConnectedError: If the camera is already connected.
+            ConnectionError: If the specified camera index/path is not found or fails to open.
+            RuntimeError: If the camera opens but fails to apply requested settings.
         """
-        if self.is_connected:
-            raise DeviceAlreadyConnectedError(f"{self} is already connected.")
 
-        # 为 OpenCV 操作使用 1 个线程以避免潜在的冲突或
-        # 多线程应用中的阻塞，尤其是在数据收集期间。
+        # Use 1 thread for OpenCV operations to avoid potential conflicts or
+        # blocking in multi-threaded applications, especially during data collection.
         cv2.setNumThreads(1)
 
         self.videocapture = cv2.VideoCapture(self.index_or_path, self.backend)
@@ -168,40 +165,45 @@ class OpenCVCamera(Camera):
             )
 
         self._configure_capture_settings()
+        self._start_read_thread()
 
-        if warmup:
+        if warmup and self.warmup_s > 0:
             start_time = time.time()
             while time.time() - start_time < self.warmup_s:
-                self.read()
+                self.async_read(timeout_ms=self.warmup_s * 1000)
                 time.sleep(0.1)
+            with self.frame_lock:
+                if self.latest_frame is None:
+                    raise ConnectionError(f"{self} failed to capture frames during warmup.")
 
         logger.info(f"{self} connected.")
 
+    @check_if_not_connected
     def _configure_capture_settings(self) -> None:
         """
-        将指定的 FPS、宽度和高度设置应用到已连接的相机。
+        Applies the specified FOURCC, FPS, width, and height settings to the connected camera.
 
-        此方法尝试通过 OpenCV 设置相机属性。它检查
-        相机是否成功应用了设置，如果没有则引发错误。
+        This method attempts to set the camera properties via OpenCV. It checks if
+        the camera successfully applied the settings and raises an error if not.
+        FOURCC is set first (if specified) as it can affect the available FPS and resolution options.
 
-        参数：
-            fps: 所需的每秒帧数。如果为 None，则跳过该设置。
-            width: 所需的捕获宽度。如果为 None，则跳过该设置。
-            height: 所需的捕获高度。如果为 None，则跳过该设置。
+        Args:
+            fourcc: The desired FOURCC code (e.g., "MJPG", "YUYV"). If None, auto-detect.
+            fps: The desired frames per second. If None, the setting is skipped.
+            width: The desired capture width. If None, the setting is skipped.
+            height: The desired capture height. If None, the setting is skipped.
 
-        异常：
-            RuntimeError: 如果相机未能将任何指定属性设置为
-                          请求的值。
-            DeviceNotConnectedError: 如果在尝试配置设置时
-                                     相机未连接。
+        Raises:
+            RuntimeError: If the camera fails to set any of the specified properties
+                          to the requested value.
+            DeviceNotConnectedError: If the camera is not connected.
         """
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"Cannot configure settings for {self} as it is not connected.")
 
-        if self.fps is None:
-            self.fps = self.videocapture.get(cv2.CAP_PROP_FPS)
-        else:
-            self._validate_fps()
+        # Set FOURCC first (if specified) as it can affect available FPS/resolution options
+        if self.config.fourcc is not None:
+            self._validate_fourcc()
+        if self.videocapture is None:
+            raise DeviceNotConnectedError(f"{self} videocapture is not initialized")
 
         default_width = int(round(self.videocapture.get(cv2.CAP_PROP_FRAME_WIDTH)))
         default_height = int(round(self.videocapture.get(cv2.CAP_PROP_FRAME_HEIGHT)))
@@ -215,17 +217,55 @@ class OpenCVCamera(Camera):
         else:
             self._validate_width_and_height()
 
+        if self.fps is None:
+            self.fps = self.videocapture.get(cv2.CAP_PROP_FPS)
+        else:
+            self._validate_fps()
+
     def _validate_fps(self) -> None:
-        """验证并设置相机的每秒帧数（FPS）。"""
+        """Validates and sets the camera's frames per second (FPS)."""
+
+        if self.videocapture is None:
+            raise DeviceNotConnectedError(f"{self} videocapture is not initialized")
+
+        if self.fps is None:
+            raise ValueError(f"{self} FPS is not set")
 
         success = self.videocapture.set(cv2.CAP_PROP_FPS, float(self.fps))
         actual_fps = self.videocapture.get(cv2.CAP_PROP_FPS)
-        # 使用 math.isclose 进行稳健的浮点数比较
+        # Use math.isclose for robust float comparison
         if not success or not math.isclose(self.fps, actual_fps, rel_tol=1e-3):
             raise RuntimeError(f"{self} failed to set fps={self.fps} ({actual_fps=}).")
 
+    def _validate_fourcc(self) -> None:
+        """Validates and sets the camera's FOURCC code."""
+
+        fourcc_code = cv2.VideoWriter_fourcc(*self.config.fourcc)
+
+        if self.videocapture is None:
+            raise DeviceNotConnectedError(f"{self} videocapture is not initialized")
+
+        success = self.videocapture.set(cv2.CAP_PROP_FOURCC, fourcc_code)
+        actual_fourcc_code = self.videocapture.get(cv2.CAP_PROP_FOURCC)
+
+        # Convert actual FOURCC code back to string for comparison
+        actual_fourcc_code_int = int(actual_fourcc_code)
+        actual_fourcc = "".join([chr((actual_fourcc_code_int >> 8 * i) & 0xFF) for i in range(4)])
+
+        if not success or actual_fourcc != self.config.fourcc:
+            logger.warning(
+                f"{self} failed to set fourcc={self.config.fourcc} (actual={actual_fourcc}, success={success}). "
+                f"Continuing with default format."
+            )
+
     def _validate_width_and_height(self) -> None:
-        """验证并设置相机的帧捕获宽度和高度。"""
+        """Validates and sets the camera's frame capture width and height."""
+
+        if self.videocapture is None:
+            raise DeviceNotConnectedError(f"{self} videocapture is not initialized")
+
+        if self.capture_width is None or self.capture_height is None:
+            raise ValueError(f"{self} capture_width or capture_height is not set")
 
         width_success = self.videocapture.set(cv2.CAP_PROP_FRAME_WIDTH, float(self.capture_width))
         height_success = self.videocapture.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self.capture_height))
@@ -245,23 +285,24 @@ class OpenCVCamera(Camera):
     @staticmethod
     def find_cameras() -> list[dict[str, Any]]:
         """
-        检测连接到系统的可用 OpenCV 相机。
+        Detects available OpenCV cameras connected to the system.
 
-        在 Linux 上，它扫描 '/dev/video*' 路径。在其他系统（如 macOS、Windows）上，
-        它检查从 0 到 `MAX_OPENCV_INDEX` 的索引。
+        On Linux, it scans '/dev/video*' paths. On other systems (like macOS, Windows),
+        it checks indices from 0 up to `MAX_OPENCV_INDEX`.
 
-        返回：
-            List[Dict[str, Any]]: 字典列表，
-            其中每个字典包含 'type'、'id'（端口索引或路径）
-            以及默认配置文件属性（宽度、高度、fps、格式）。
+        Returns:
+            List[Dict[str, Any]]: A list of dictionaries,
+            where each dictionary contains 'type', 'id' (port index or path),
+            and the default profile properties (width, height, fps, format).
         """
         found_cameras_info = []
 
+        targets_to_scan: list[str | int]
         if platform.system() == "Linux":
             possible_paths = sorted(Path("/dev").glob("video*"), key=lambda p: p.name)
             targets_to_scan = [str(p) for p in possible_paths]
         else:
-            targets_to_scan = list(range(MAX_OPENCV_INDEX))
+            targets_to_scan = [int(i) for i in range(MAX_OPENCV_INDEX)]
 
         for target in targets_to_scan:
             camera = cv2.VideoCapture(target)
@@ -270,6 +311,12 @@ class OpenCVCamera(Camera):
                 default_height = int(camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
                 default_fps = camera.get(cv2.CAP_PROP_FPS)
                 default_format = camera.get(cv2.CAP_PROP_FORMAT)
+
+                # Get FOURCC code and convert to string
+                default_fourcc_code = camera.get(cv2.CAP_PROP_FOURCC)
+                default_fourcc_code_int = int(default_fourcc_code)
+                default_fourcc = "".join([chr((default_fourcc_code_int >> 8 * i) & 0xFF) for i in range(4)])
+
                 camera_info = {
                     "name": f"OpenCV Camera @ {target}",
                     "type": "OpenCV",
@@ -277,6 +324,7 @@ class OpenCVCamera(Camera):
                     "backend_api": camera.getBackendName(),
                     "default_stream_profile": {
                         "format": default_format,
+                        "fourcc": default_fourcc,
                         "width": default_width,
                         "height": default_height,
                         "fps": default_fps,
@@ -288,68 +336,74 @@ class OpenCVCamera(Camera):
 
         return found_cameras_info
 
-    def read(self, color_mode: ColorMode | None = None) -> np.ndarray:
-        """
-        从相机同步读取单帧。
-
-        这是一个阻塞调用。它等待相机硬件通过 OpenCV 提供的
-        下一个可用帧。
-
-        参数：
-            color_mode (Optional[ColorMode]): 如果指定，将覆盖此读取操作的
-                默认颜色模式（`self.color_mode`）（例如，
-                即使默认为 BGR 也请求 RGB）。
-
-        返回：
-            np.ndarray: 捕获的帧作为 NumPy 数组，格式为
-                       (height, width, channels)，使用指定或默认的
-                       颜色模式并应用任何配置的旋转。
-
-        异常：
-            DeviceNotConnectedError: 如果相机未连接。
-            RuntimeError: 如果从相机读取帧失败，或如果
-                          接收到的帧尺寸在旋转前不匹配预期。
-            ValueError: 如果请求的 `color_mode` 无效。
-        """
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-
-        start_time = time.perf_counter()
+    def _read_from_hardware(self) -> NDArray[Any]:
+        if self.videocapture is None:
+            raise DeviceNotConnectedError(f"{self} videocapture is not initialized")
 
         ret, frame = self.videocapture.read()
 
-        if not ret or frame is None:
+        if not ret:
             raise RuntimeError(f"{self} read failed (status={ret}).")
 
-        processed_frame = self._postprocess_image(frame, color_mode)
+        return frame
+
+    @check_if_not_connected
+    def read(self, color_mode: ColorMode | None = None) -> NDArray[Any]:
+        """
+        Reads a single frame synchronously from the camera.
+
+        This is a blocking call. It waits for the next available frame from the
+        camera hardware via OpenCV.
+
+        Returns:
+            np.ndarray: The captured frame as a NumPy array in the format
+                       (height, width, channels), using the specified or default
+                       color mode and applying any configured rotation.
+
+        Raises:
+            DeviceNotConnectedError: If the camera is not connected.
+            RuntimeError: If reading the frame from the camera fails or if the
+                          received frame dimensions don't match expectations before rotation.
+            ValueError: If an invalid `color_mode` is requested.
+        """
+
+        start_time = time.perf_counter()
+
+        if color_mode is not None:
+            logger.warning(
+                f"{self} read() color_mode parameter is deprecated and will be removed in future versions."
+            )
+
+        if self.thread is None or not self.thread.is_alive():
+            raise RuntimeError(f"{self} read thread is not running.")
+
+        self.new_frame_event.clear()
+        frame = self.async_read(timeout_ms=10000)
 
         read_duration_ms = (time.perf_counter() - start_time) * 1e3
         logger.debug(f"{self} read took: {read_duration_ms:.1f}ms")
 
-        return processed_frame
+        return frame
 
-    def _postprocess_image(self, image: np.ndarray, color_mode: ColorMode | None = None) -> np.ndarray:
+    def _postprocess_image(self, image: NDArray[Any]) -> NDArray[Any]:
         """
-        对原始帧应用颜色转换、尺寸验证和旋转。
+        Applies color conversion, dimension validation, and rotation to a raw frame.
 
-        参数：
-            image (np.ndarray): 原始图像帧（预期从 OpenCV 获得的 BGR 格式）。
-            color_mode (Optional[ColorMode]): 目标颜色模式（RGB 或 BGR）。如果为 None，
-                                             使用实例的默认 `self.color_mode`。
+        Args:
+            image (np.ndarray): The raw image frame (expected BGR format from OpenCV).
 
-        返回：
-            np.ndarray: 处理后的图像帧。
+        Returns:
+            np.ndarray: The processed image frame.
 
-        异常：
-            ValueError: 如果请求的 `color_mode` 无效。
-            RuntimeError: 如果原始帧尺寸与配置的
-                          `width` 和 `height` 不匹配。
+        Raises:
+            ValueError: If the requested `color_mode` is invalid.
+            RuntimeError: If the raw frame dimensions do not match the configured
+                          `width` and `height`.
         """
-        requested_color_mode = self.color_mode if color_mode is None else color_mode
 
-        if requested_color_mode not in (ColorMode.RGB, ColorMode.BGR):
+        if self.color_mode not in (ColorMode.RGB, ColorMode.BGR):
             raise ValueError(
-                f"Invalid color mode '{requested_color_mode}'. Expected {ColorMode.RGB} or {ColorMode.BGR}."
+                f"Invalid color mode '{self.color_mode}'. Expected {ColorMode.RGB} or {ColorMode.BGR}."
             )
 
         h, w, c = image.shape
@@ -363,7 +417,7 @@ class OpenCVCamera(Camera):
             raise RuntimeError(f"{self} frame channels={c} do not match expected 3 channels (RGB/BGR).")
 
         processed_image = image
-        if requested_color_mode == ColorMode.RGB:
+        if self.color_mode == ColorMode.RGB:
             processed_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
         if self.rotation in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE, cv2.ROTATE_180]:
@@ -371,44 +425,54 @@ class OpenCVCamera(Camera):
 
         return processed_image
 
-    def _read_loop(self):
+    def _read_loop(self) -> None:
         """
-        后台线程运行的异步读取内部循环。
+        Internal loop run by the background thread for asynchronous reading.
 
-        在每次迭代中：
-        1. 读取一个彩色帧
-        2. 将结果存储在 latest_frame 中（线程安全）
-        3. 设置 new_frame_event 以通知监听器
+        On each iteration:
+        1. Reads a color frame
+        2. Stores result in latest_frame and updates timestamp (thread-safe)
+        3. Sets new_frame_event to notify listeners
 
-        在 DeviceNotConnectedError 时停止，记录其他错误并继续。
+        Stops on DeviceNotConnectedError, logs other errors and continues.
         """
+        if self.stop_event is None:
+            raise RuntimeError(f"{self}: stop_event is not initialized before starting read loop.")
+
+        failure_count = 0
         while not self.stop_event.is_set():
             try:
-                color_image = self.read()
+                raw_frame = self._read_from_hardware()
+                processed_frame = self._postprocess_image(raw_frame)
+                capture_time = time.perf_counter()
 
                 with self.frame_lock:
-                    self.latest_frame = color_image
+                    self.latest_frame = processed_frame
+                    self.latest_timestamp = capture_time
                 self.new_frame_event.set()
+                failure_count = 0
 
             except DeviceNotConnectedError:
                 break
             except Exception as e:
-                logger.warning(f"Error reading frame in background thread for {self}: {e}")
+                if failure_count <= 10:
+                    failure_count += 1
+                    logger.warning(f"Error reading frame in background thread for {self}: {e}")
+                else:
+                    raise RuntimeError(f"{self} exceeded maximum consecutive read failures.") from e
 
     def _start_read_thread(self) -> None:
-        """如果后台读取线程未运行，则启动或重启它。"""
-        if self.thread is not None and self.thread.is_alive():
-            self.thread.join(timeout=0.1)
-        if self.stop_event is not None:
-            self.stop_event.set()
+        """Starts or restarts the background read thread if it's not running."""
+        self._stop_read_thread()
 
         self.stop_event = Event()
         self.thread = Thread(target=self._read_loop, args=(), name=f"{self}_read_loop")
         self.thread.daemon = True
         self.thread.start()
+        time.sleep(0.1)
 
     def _stop_read_thread(self) -> None:
-        """向后台读取线程发出停止信号并等待其加入。"""
+        """Signals the background read thread to stop and waits for it to join."""
         if self.stop_event is not None:
             self.stop_event.set()
 
@@ -418,38 +482,42 @@ class OpenCVCamera(Camera):
         self.thread = None
         self.stop_event = None
 
-    def async_read(self, timeout_ms: float = 200) -> np.ndarray:
+        with self.frame_lock:
+            self.latest_frame = None
+            self.latest_timestamp = None
+            self.new_frame_event.clear()
+
+    @check_if_not_connected
+    def async_read(self, timeout_ms: float = 200) -> NDArray[Any]:
         """
-        异步读取最新可用的帧。
+        Reads the latest available frame asynchronously.
 
-        此方法检索后台读取线程捕获的最新帧。
-        它不会直接阻塞等待相机硬件，
-        但可能会等待最多 timeout_ms 以便后台线程提供一个帧。
+        This method retrieves the most recent frame captured by the background
+        read thread. It does not block waiting for the camera hardware directly,
+        but may wait up to timeout_ms for the background thread to provide a frame.
+        It is “best effort” under high FPS.
 
-        参数：
-            timeout_ms (float): 等待帧变为可用的最大时间（毫秒）。
-                默认为 200ms（0.2 秒）。
+        Args:
+            timeout_ms (float): Maximum time in milliseconds to wait for a frame
+                to become available. Defaults to 200ms (0.2 seconds).
 
-        返回：
-            np.ndarray: 最新捕获的帧作为 NumPy 数组，格式为
-                       (height, width, channels)，根据配置处理。
+        Returns:
+            np.ndarray: The latest captured frame as a NumPy array in the format
+                       (height, width, channels), processed according to configuration.
 
-        异常：
-            DeviceNotConnectedError: 如果相机未连接。
-            TimeoutError: 如果在指定的超时时间内没有帧可用。
-            RuntimeError: 如果发生意外错误。
+        Raises:
+            DeviceNotConnectedError: If the camera is not connected.
+            TimeoutError: If no frame becomes available within the specified timeout.
+            RuntimeError: If an unexpected error occurs.
         """
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
 
         if self.thread is None or not self.thread.is_alive():
-            self._start_read_thread()
+            raise RuntimeError(f"{self} read thread is not running.")
 
         if not self.new_frame_event.wait(timeout=timeout_ms / 1000.0):
-            thread_alive = self.thread is not None and self.thread.is_alive()
             raise TimeoutError(
                 f"Timed out waiting for frame from camera {self} after {timeout_ms} ms. "
-                f"Read thread alive: {thread_alive}."
+                f"Read thread alive: {self.thread.is_alive()}."
             )
 
         with self.frame_lock:
@@ -461,15 +529,50 @@ class OpenCVCamera(Camera):
 
         return frame
 
-    def disconnect(self):
+    @check_if_not_connected
+    def read_latest(self, max_age_ms: int = 500) -> NDArray[Any]:
+        """Return the most recent frame captured immediately (Peeking).
+
+        This method is non-blocking and returns whatever is currently in the
+        memory buffer. The frame may be stale,
+        meaning it could have been captured a while ago (hanging camera scenario e.g.).
+
+        Returns:
+            NDArray[Any]: The frame image (numpy array).
+
+        Raises:
+            TimeoutError: If the latest frame is older than `max_age_ms`.
+            DeviceNotConnectedError: If the camera is not connected.
+            RuntimeError: If the camera is connected but has not captured any frames yet.
         """
-        断开与相机的连接并清理资源。
 
-        停止后台读取线程（如果正在运行）并释放 OpenCV
-        VideoCapture 对象。
+        if self.thread is None or not self.thread.is_alive():
+            raise RuntimeError(f"{self} read thread is not running.")
 
-        异常：
-            DeviceNotConnectedError: 如果相机已断开连接。
+        with self.frame_lock:
+            frame = self.latest_frame
+            timestamp = self.latest_timestamp
+
+        if frame is None or timestamp is None:
+            raise RuntimeError(f"{self} has not captured any frames yet.")
+
+        age_ms = (time.perf_counter() - timestamp) * 1e3
+        if age_ms > max_age_ms:
+            raise TimeoutError(
+                f"{self} latest frame is too old: {age_ms:.1f} ms (max allowed: {max_age_ms} ms)."
+            )
+
+        return frame
+
+    def disconnect(self) -> None:
+        """
+        Disconnects from the camera and cleans up resources.
+
+        Stops the background read thread (if running) and releases the OpenCV
+        VideoCapture object.
+
+        Raises:
+            DeviceNotConnectedError: If the camera is already disconnected.
         """
         if not self.is_connected and self.thread is None:
             raise DeviceNotConnectedError(f"{self} not connected.")
@@ -480,5 +583,10 @@ class OpenCVCamera(Camera):
         if self.videocapture is not None:
             self.videocapture.release()
             self.videocapture = None
+
+        with self.frame_lock:
+            self.latest_frame = None
+            self.latest_timestamp = None
+            self.new_frame_event.clear()
 
         logger.info(f"{self} disconnected.")

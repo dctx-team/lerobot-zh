@@ -17,7 +17,6 @@ from typing import Any
 
 import torch
 
-from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.processor import (
     AddBatchDimensionProcessorStep,
     DeviceProcessorStep,
@@ -26,9 +25,12 @@ from lerobot.processor import (
     PolicyProcessorPipeline,
     RenameObservationsProcessorStep,
     UnnormalizerProcessorStep,
+    policy_action_to_transition,
+    transition_to_policy_action,
 )
-from lerobot.processor.converters import policy_action_to_transition, transition_to_policy_action
 from lerobot.utils.constants import POLICY_POSTPROCESSOR_DEFAULT_NAME, POLICY_PREPROCESSOR_DEFAULT_NAME
+
+from .configuration_act import ACTConfig
 
 
 def make_act_pre_post_processors(
@@ -38,19 +40,19 @@ def make_act_pre_post_processors(
     PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
     PolicyProcessorPipeline[PolicyAction, PolicyAction],
 ]:
-    """为ACT策略创建预处理和后处理管道。
+    """Creates the pre- and post-processing pipelines for the ACT policy.
 
-    预处理管道处理模型输入的归一化、批处理和设备放置。
-    后处理管道处理反归一化并将模型输出移回CPU。
+    The pre-processing pipeline handles normalization, batching, and device placement for the model inputs.
+    The post-processing pipeline handles unnormalization and moves the model outputs back to the CPU.
 
     Args:
-        config (ACTConfig): ACT策略配置对象。
-        dataset_stats (dict[str, dict[str, torch.Tensor]] | None): 包含用于归一化的数据集
-            统计信息（例如均值和标准差）的字典。默认为None。
+        config (ACTConfig): The ACT policy configuration object.
+        dataset_stats (dict[str, dict[str, torch.Tensor]] | None): A dictionary containing dataset
+            statistics (e.g., mean and std) used for normalization. Defaults to None.
 
     Returns:
-        tuple[PolicyProcessorPipeline[dict[str, Any], dict[str, Any]], PolicyProcessorPipeline[PolicyAction, PolicyAction]]: 包含
-        预处理管道和后处理管道的元组。
+        tuple[PolicyProcessorPipeline[dict[str, Any], dict[str, Any]], PolicyProcessorPipeline[PolicyAction, PolicyAction]]: A tuple containing the
+        pre-processor pipeline and the post-processor pipeline.
     """
 
     input_steps = [

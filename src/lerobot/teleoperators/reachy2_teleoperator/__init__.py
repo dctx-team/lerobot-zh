@@ -14,12 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Reachy2 遥操作模块
-
-该模块提供 Reachy2 机器人的遥操作功能，支持双臂、颈部和天线关节的控制。
-"""
-
 from .config_reachy2_teleoperator import Reachy2TeleoperatorConfig
 from .reachy2_teleoperator import (
     REACHY2_ANTENNAS_JOINTS,
@@ -29,3 +23,13 @@ from .reachy2_teleoperator import (
     REACHY2_VEL,
     Reachy2Teleoperator,
 )
+
+__all__ = [
+    "REACHY2_ANTENNAS_JOINTS",
+    "REACHY2_L_ARM_JOINTS",
+    "REACHY2_NECK_JOINTS",
+    "REACHY2_R_ARM_JOINTS",
+    "REACHY2_VEL",
+    "Reachy2Teleoperator",
+    "Reachy2TeleoperatorConfig",
+]

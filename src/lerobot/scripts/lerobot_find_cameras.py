@@ -15,17 +15,17 @@
 # limitations under the License.
 
 """
-帮助查找系统中可用的摄像头设备。
+Helper to find the camera devices available in your system.
 
-示例:
+Example:
 
 ```shell
 lerobot-find-cameras
 ```
 """
 
-# 注意(Steven): RealSense 也可以被识别/作为 OpenCV 摄像头打开。如果你知道摄像头是 RealSense，请使用 `lerobot-find-cameras realsense` 标志以避免混淆。
-# 注意(Steven): macOS 摄像头有时在初始化时报告不同的 FPS，这在这里不是问题，因为我们在打开摄像头时不指定 FPS，但显示的信息可能不准确。
+# NOTE(Steven): RealSense can also be identified/opened as OpenCV cameras. If you know the camera is a RealSense, use the `lerobot-find-cameras realsense` flag to avoid confusion.
+# NOTE(Steven): macOS cameras sometimes report different FPS at init time, not an issue here as we don't specify FPS when opening the cameras, but the information displayed might not be truthful.
 
 import argparse
 import concurrent.futures
@@ -37,67 +37,65 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
-from lerobot.cameras.configs import ColorMode
-from lerobot.cameras.opencv.camera_opencv import OpenCVCamera
-from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
-from lerobot.cameras.realsense.camera_realsense import RealSenseCamera
-from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
+from lerobot.cameras import ColorMode
+from lerobot.cameras.opencv import OpenCVCamera, OpenCVCameraConfig
+from lerobot.cameras.realsense import RealSenseCamera, RealSenseCameraConfig
 
 logger = logging.getLogger(__name__)
 
 
 def find_all_opencv_cameras() -> list[dict[str, Any]]:
     """
-    查找所有连接到系统的可用 OpenCV 摄像头。
+    Finds all available OpenCV cameras plugged into the system.
 
-    返回:
-        包含所有可用 OpenCV 摄像头及其元数据的列表。
+    Returns:
+        A list of all available OpenCV cameras with their metadata.
     """
     all_opencv_cameras_info: list[dict[str, Any]] = []
-    logger.info("正在搜索 OpenCV 摄像头...")
+    logger.info("Searching for OpenCV cameras...")
     try:
         opencv_cameras = OpenCVCamera.find_cameras()
         for cam_info in opencv_cameras:
             all_opencv_cameras_info.append(cam_info)
-        logger.info(f"找到 {len(opencv_cameras)} 个 OpenCV 摄像头。")
+        logger.info(f"Found {len(opencv_cameras)} OpenCV cameras.")
     except Exception as e:
-        logger.error(f"查找 OpenCV 摄像头时出错: {e}")
+        logger.error(f"Error finding OpenCV cameras: {e}")
 
     return all_opencv_cameras_info
 
 
 def find_all_realsense_cameras() -> list[dict[str, Any]]:
     """
-    查找所有连接到系统的可用 RealSense 摄像头。
+    Finds all available RealSense cameras plugged into the system.
 
-    返回:
-        包含所有可用 RealSense 摄像头及其元数据的列表。
+    Returns:
+        A list of all available RealSense cameras with their metadata.
     """
     all_realsense_cameras_info: list[dict[str, Any]] = []
-    logger.info("正在搜索 RealSense 摄像头...")
+    logger.info("Searching for RealSense cameras...")
     try:
         realsense_cameras = RealSenseCamera.find_cameras()
         for cam_info in realsense_cameras:
             all_realsense_cameras_info.append(cam_info)
-        logger.info(f"找到 {len(realsense_cameras)} 个 RealSense 摄像头。")
+        logger.info(f"Found {len(realsense_cameras)} RealSense cameras.")
     except ImportError:
-        logger.warning("跳过 RealSense 摄像头搜索: 未找到或无法导入 pyrealsense2 库。")
+        logger.warning("Skipping RealSense camera search: pyrealsense2 library not found or not importable.")
     except Exception as e:
-        logger.error(f"查找 RealSense 摄像头时出错: {e}")
+        logger.error(f"Error finding RealSense cameras: {e}")
 
     return all_realsense_cameras_info
 
 
 def find_and_print_cameras(camera_type_filter: str | None = None) -> list[dict[str, Any]]:
     """
-    根据可选过滤器查找可用摄像头并打印其信息。
+    Finds available cameras based on an optional filter and prints their information.
 
-    参数:
-        camera_type_filter: 可选字符串，用于过滤摄像头("realsense" 或 "opencv")。
-                            如果为 None，则列出所有摄像头。
+    Args:
+        camera_type_filter: Optional string to filter cameras ("realsense" or "opencv").
+                            If None, lists all cameras.
 
-    返回:
-        包含所有匹配过滤器的可用摄像头及其元数据的列表。
+    Returns:
+        A list of all available cameras matching the filter, with their metadata.
     """
     all_cameras_info: list[dict[str, Any]] = []
 
@@ -111,13 +109,13 @@ def find_and_print_cameras(camera_type_filter: str | None = None) -> list[dict[s
 
     if not all_cameras_info:
         if camera_type_filter:
-            logger.warning(f"未检测到 {camera_type_filter} 摄像头。")
+            logger.warning(f"No {camera_type_filter} cameras were detected.")
         else:
-            logger.warning("未检测到摄像头(OpenCV 或 RealSense)。")
+            logger.warning("No cameras (OpenCV or RealSense) were detected.")
     else:
-        print("\n--- 检测到的摄像头 ---")
+        print("\n--- Detected Cameras ---")
         for i, cam_info in enumerate(all_cameras_info):
-            print(f"摄像头 #{i}:")
+            print(f"Camera #{i}:")
             for key, value in cam_info.items():
                 if key == "default_stream_profile" and isinstance(value, dict):
                     print(f"  {key.replace('_', ' ').capitalize()}:")
@@ -136,7 +134,7 @@ def save_image(
     camera_type: str,
 ):
     """
-    使用 Pillow 将单张图像保存到磁盘。必要时处理颜色转换。
+    Saves a single image to disk using Pillow. Handles color conversion if necessary.
     """
     try:
         img = Image.fromarray(img_array, mode="RGB")
@@ -148,18 +146,18 @@ def save_image(
         path = images_dir / filename
         path.parent.mkdir(parents=True, exist_ok=True)
         img.save(str(path))
-        logger.info(f"已保存图像: {path}")
+        logger.info(f"Saved image: {path}")
     except Exception as e:
-        logger.error(f"保存摄像头 {camera_identifier} (类型 {camera_type}) 的图像失败: {e}")
+        logger.error(f"Failed to save image for camera {camera_identifier} (type {camera_type}): {e}")
 
 
 def create_camera_instance(cam_meta: dict[str, Any]) -> dict[str, Any] | None:
-    """根据元数据创建并连接到摄像头实例。"""
+    """Create and connect to a camera instance based on metadata."""
     cam_type = cam_meta.get("type")
     cam_id = cam_meta.get("id")
     instance = None
 
-    logger.info(f"正在准备 {cam_type} ID {cam_id} (使用默认配置)")
+    logger.info(f"Preparing {cam_type} ID {cam_id} with default profile")
 
     try:
         if cam_type == "OpenCV":
@@ -175,15 +173,15 @@ def create_camera_instance(cam_meta: dict[str, Any]) -> dict[str, Any] | None:
             )
             instance = RealSenseCamera(rs_config)
         else:
-            logger.warning(f"未知的摄像头类型: {cam_type} (ID {cam_id})。跳过。")
+            logger.warning(f"Unknown camera type: {cam_type} for ID {cam_id}. Skipping.")
             return None
 
         if instance:
-            logger.info(f"正在连接到 {cam_type} 摄像头: {cam_id}...")
-            instance.connect(warmup=False)
+            logger.info(f"Connecting to {cam_type} camera: {cam_id}...")
+            instance.connect(warmup=True)
             return {"instance": instance, "meta": cam_meta}
     except Exception as e:
-        logger.error(f"连接或配置 {cam_type} 摄像头 {cam_id} 失败: {e}")
+        logger.error(f"Failed to connect or configure {cam_type} camera {cam_id}: {e}")
         if instance and instance.is_connected:
             instance.disconnect()
         return None
@@ -192,7 +190,7 @@ def create_camera_instance(cam_meta: dict[str, Any]) -> dict[str, Any] | None:
 def process_camera_image(
     cam_dict: dict[str, Any], output_dir: Path, current_time: float
 ) -> concurrent.futures.Future | None:
-    """从单个摄像头捕获并处理图像。"""
+    """Capture and process an image from a single camera."""
     cam = cam_dict["instance"]
     meta = cam_dict["meta"]
     cam_type_str = str(meta.get("type", "unknown"))
@@ -209,22 +207,22 @@ def process_camera_image(
         )
     except TimeoutError:
         logger.warning(
-            f"从 {cam_type_str} 摄像头 {cam_id_str} 读取超时 (时间 {current_time:.2f}秒)。"
+            f"Timeout reading from {cam_type_str} camera {cam_id_str} at time {current_time:.2f}s."
         )
     except Exception as e:
-        logger.error(f"从 {cam_type_str} 摄像头 {cam_id_str} 读取时出错: {e}")
+        logger.error(f"Error reading from {cam_type_str} camera {cam_id_str}: {e}")
     return None
 
 
 def cleanup_cameras(cameras_to_use: list[dict[str, Any]]):
-    """断开所有摄像头连接。"""
-    logger.info(f"正在断开 {len(cameras_to_use)} 个摄像头的连接...")
+    """Disconnect all cameras."""
+    logger.info(f"Disconnecting {len(cameras_to_use)} cameras...")
     for cam_dict in cameras_to_use:
         try:
             if cam_dict["instance"] and cam_dict["instance"].is_connected:
                 cam_dict["instance"].disconnect()
         except Exception as e:
-            logger.error(f"断开摄像头 {cam_dict['meta'].get('id')} 的连接时出错: {e}")
+            logger.error(f"Error disconnecting camera {cam_dict['meta'].get('id')}: {e}")
 
 
 def save_images_from_all_cameras(
@@ -233,21 +231,21 @@ def save_images_from_all_cameras(
     camera_type: str | None = None,
 ):
     """
-    连接到检测到的摄像头(可选按类型过滤)并保存每个摄像头的图像。
-    使用默认的流配置文件设置宽度、高度和 FPS。
+    Connects to detected cameras (optionally filtered by type) and saves images from each.
+    Uses default stream profiles for width, height, and FPS.
 
-    参数:
-        output_dir: 保存图像的目录。
-        record_time_s: 录制图像的持续时间(秒)。
-        camera_type: 可选字符串，用于过滤摄像头("realsense" 或 "opencv")。
-                            如果为 None，则使用所有检测到的摄像头。
+    Args:
+        output_dir: Directory to save images.
+        record_time_s: Duration in seconds to record images.
+        camera_type: Optional string to filter cameras ("realsense" or "opencv").
+                            If None, uses all detected cameras.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"正在将图像保存到 {output_dir}")
+    logger.info(f"Saving images to {output_dir}")
     all_camera_metadata = find_and_print_cameras(camera_type_filter=camera_type)
 
     if not all_camera_metadata:
-        logger.warning("未检测到符合条件的摄像头。无法保存图像。")
+        logger.warning("No cameras detected matching the criteria. Cannot save images.")
         return
 
     cameras_to_use = []
@@ -257,10 +255,10 @@ def save_images_from_all_cameras(
             cameras_to_use.append(camera_instance)
 
     if not cameras_to_use:
-        logger.warning("无法连接任何摄像头。终止图像保存。")
+        logger.warning("No cameras could be connected. Aborting image save.")
         return
 
-    logger.info(f"开始从 {len(cameras_to_use)} 个摄像头捕获图像，持续 {record_time_s} 秒。")
+    logger.info(f"Starting image capture for {record_time_s} seconds from {len(cameras_to_use)} cameras.")
     start_time = time.perf_counter()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(cameras_to_use) * 2) as executor:
@@ -278,17 +276,17 @@ def save_images_from_all_cameras(
                     concurrent.futures.wait(futures)
 
         except KeyboardInterrupt:
-            logger.info("捕获被用户中断。")
+            logger.info("Capture interrupted by user.")
         finally:
-            print("\n正在完成图像保存...")
+            print("\nFinalizing image saving...")
             executor.shutdown(wait=True)
             cleanup_cameras(cameras_to_use)
-            print(f"图像捕获完成。图像已保存到 {output_dir}")
+            print(f"Image capture finished. Images saved to {output_dir}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="用于列出摄像头和捕获图像的统一摄像头工具脚本。"
+        description="Unified camera utility script for listing cameras and capturing images."
     )
 
     parser.add_argument(
@@ -297,19 +295,19 @@ def main():
         nargs="?",
         default=None,
         choices=["realsense", "opencv"],
-        help="指定要捕获的摄像头类型(例如 'realsense'、'opencv')。如果省略则从所有摄像头捕获。",
+        help="Specify camera type to capture from (e.g., 'realsense', 'opencv'). Captures from all if omitted.",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
         default="outputs/captured_images",
-        help="保存图像的目录。默认: outputs/captured_images",
+        help="Directory to save images. Default: outputs/captured_images",
     )
     parser.add_argument(
         "--record-time-s",
         type=float,
         default=6.0,
-        help="尝试捕获帧的持续时间。默认: 6 秒。",
+        help="Time duration to attempt capturing frames. Default: 6 seconds.",
     )
     args = parser.parse_args()
     save_images_from_all_cameras(**vars(args))

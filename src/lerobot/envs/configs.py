@@ -1,41 +1,59 @@
-# 版权所有 2024 HuggingFace Inc. 团队。保留所有权利。
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
-# 根据 Apache 许可证 2.0 版本（"许可证"）获得许可；
-# 除非遵守许可证，否则你不得使用此文件。
-# 你可以在以下地址获得许可证副本：
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 #
-# 除非适用法律要求或书面同意，否则根据许可证分发的软件
-# 是按"原样"分发的，不附带任何明示或暗示的担保或条件。
-# 请参阅许可证以了解许可证下的特定语言权限和
-# 限制。
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from __future__ import annotations
 
 import abc
-from dataclasses import dataclass, field
+import importlib
+from dataclasses import dataclass, field, fields
 from typing import Any
 
 import draccus
+import gymnasium as gym
+from gymnasium.envs.registration import registry as gym_registry
 
-from lerobot.configs.types import FeatureType, PolicyFeature
+from lerobot.configs import FeatureType, PolicyFeature
+from lerobot.processor import IsaaclabArenaProcessorStep, LiberoProcessorStep, PolicyProcessorPipeline
 from lerobot.robots import RobotConfig
 from lerobot.teleoperators.config import TeleoperatorConfig
-from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGE, OBS_IMAGES, OBS_STATE
+from lerobot.utils.constants import (
+    ACTION,
+    LIBERO_KEY_EEF_MAT,
+    LIBERO_KEY_EEF_POS,
+    LIBERO_KEY_EEF_QUAT,
+    LIBERO_KEY_GRIPPER_QPOS,
+    LIBERO_KEY_GRIPPER_QVEL,
+    LIBERO_KEY_JOINTS_POS,
+    LIBERO_KEY_JOINTS_VEL,
+    LIBERO_KEY_PIXELS_AGENTVIEW,
+    LIBERO_KEY_PIXELS_EYE_IN_HAND,
+    OBS_ENV_STATE,
+    OBS_IMAGE,
+    OBS_IMAGES,
+    OBS_STATE,
+)
+
+
+def _make_vec_env_cls(use_async: bool, n_envs: int):
+    """Return the right VectorEnv constructor."""
+    if use_async and n_envs > 1:
+        return gym.vector.AsyncVectorEnv
+    return gym.vector.SyncVectorEnv
 
 
 @dataclass
 class EnvConfig(draccus.ChoiceRegistry, abc.ABC):
-    """环境配置基类。
-
-    Args:
-        task: 任务名称，如果为 None 则使用默认任务。
-        fps: 环境帧率（每秒帧数）。
-        features: 策略特征字典，将特征名称映射到 PolicyFeature 对象。
-        features_map: 环境键到策略键的映射。
-        max_parallel_tasks: 最大并行任务数。
-        disable_env_checker: 是否禁用环境检查器。
-    """
-
     task: str | None = None
     fps: int = 30
     features: dict[str, PolicyFeature] = field(default_factory=dict)
@@ -45,24 +63,96 @@ class EnvConfig(draccus.ChoiceRegistry, abc.ABC):
 
     @property
     def type(self) -> str:
-        """获取环境配置类型。"""
         return self.get_choice_name(self.__class__)
+
+    @property
+    def package_name(self) -> str:
+        """Package name to import if environment not found in gym registry"""
+        return f"gym_{self.type}"
+
+    @property
+    def gym_id(self) -> str:
+        """ID string used in gym.make() to instantiate the environment"""
+        return f"{self.package_name}/{self.task}"
 
     @property
     @abc.abstractmethod
     def gym_kwargs(self) -> dict:
-        """返回创建 Gym 环境所需的参数字典。"""
         raise NotImplementedError()
+
+    def create_envs(
+        self,
+        n_envs: int,
+        use_async_envs: bool = False,
+    ) -> dict[str, dict[int, gym.vector.VectorEnv]]:
+        """Create {suite: {task_id: VectorEnv}}.
+
+        Default: single-task env via gym.make(). Multi-task benchmarks override.
+        AsyncVectorEnv is the default for n_envs > 1; auto-downgraded to Sync for n_envs=1.
+        """
+        env_cls = gym.vector.AsyncVectorEnv if (use_async_envs and n_envs > 1) else gym.vector.SyncVectorEnv
+
+        if self.gym_id not in gym_registry:
+            print(f"gym id '{self.gym_id}' not found, attempting to import '{self.package_name}'...")
+            try:
+                importlib.import_module(self.package_name)
+            except ModuleNotFoundError as e:
+                raise ModuleNotFoundError(
+                    f"Package '{self.package_name}' required for env '{self.type}' not found. "
+                    f"Please install it or check PYTHONPATH."
+                ) from e
+
+            if self.gym_id not in gym_registry:
+                raise gym.error.NameNotFound(
+                    f"Environment '{self.gym_id}' not registered even after importing '{self.package_name}'."
+                )
+
+        def _make_one():
+            return gym.make(self.gym_id, disable_env_checker=self.disable_env_checker, **self.gym_kwargs)
+
+        extra_kwargs: dict = {}
+        if env_cls is gym.vector.AsyncVectorEnv:
+            extra_kwargs["context"] = "forkserver"
+        try:
+            from gymnasium.vector import AutoresetMode
+
+            vec = env_cls(
+                [_make_one for _ in range(n_envs)], autoreset_mode=AutoresetMode.SAME_STEP, **extra_kwargs
+            )
+        except ImportError:
+            vec = env_cls([_make_one for _ in range(n_envs)], **extra_kwargs)
+        return {self.type: {0: vec}}
+
+    def get_env_processors(self):
+        """Return (preprocessor, postprocessor) for this env. Default: identity."""
+        return PolicyProcessorPipeline(steps=[]), PolicyProcessorPipeline(steps=[])
+
+
+@dataclass
+class HubEnvConfig(EnvConfig):
+    """Base class for environments that delegate creation to a hub-hosted make_env.
+
+    Hub environments download and execute remote code from the HF Hub.
+    The hub_path points to a repository containing an env.py with a make_env function.
+    """
+
+    hub_path: str | None = None  # required: e.g., "username/repo" or "username/repo@branch:file.py"
+
+    @property
+    def gym_kwargs(self) -> dict:
+        # Not used for hub environments - the hub's make_env handles everything
+        return {}
 
 
 @EnvConfig.register_subclass("aloha")
 @dataclass
 class AlohaEnv(EnvConfig):
-    """Aloha 环境配置。"""
     task: str | None = "AlohaInsertion-v0"
     fps: int = 50
     episode_length: int = 400
     obs_type: str = "pixels_agent_pos"
+    observation_height: int = 480
+    observation_width: int = 640
     render_mode: str = "rgb_array"
     features: dict[str, PolicyFeature] = field(
         default_factory=lambda: {
@@ -80,10 +170,14 @@ class AlohaEnv(EnvConfig):
 
     def __post_init__(self):
         if self.obs_type == "pixels":
-            self.features["top"] = PolicyFeature(type=FeatureType.VISUAL, shape=(480, 640, 3))
+            self.features["top"] = PolicyFeature(
+                type=FeatureType.VISUAL, shape=(self.observation_height, self.observation_width, 3)
+            )
         elif self.obs_type == "pixels_agent_pos":
             self.features["agent_pos"] = PolicyFeature(type=FeatureType.STATE, shape=(14,))
-            self.features["pixels/top"] = PolicyFeature(type=FeatureType.VISUAL, shape=(480, 640, 3))
+            self.features["pixels/top"] = PolicyFeature(
+                type=FeatureType.VISUAL, shape=(self.observation_height, self.observation_width, 3)
+            )
 
     @property
     def gym_kwargs(self) -> dict:
@@ -97,7 +191,6 @@ class AlohaEnv(EnvConfig):
 @EnvConfig.register_subclass("pusht")
 @dataclass
 class PushtEnv(EnvConfig):
-    """PushT 环境配置。"""
     task: str | None = "PushT-v0"
     fps: int = 10
     episode_length: int = 300
@@ -105,6 +198,8 @@ class PushtEnv(EnvConfig):
     render_mode: str = "rgb_array"
     visualization_width: int = 384
     visualization_height: int = 384
+    observation_height: int = 384
+    observation_width: int = 384
     features: dict[str, PolicyFeature] = field(
         default_factory=lambda: {
             ACTION: PolicyFeature(type=FeatureType.ACTION, shape=(2,)),
@@ -122,7 +217,9 @@ class PushtEnv(EnvConfig):
 
     def __post_init__(self):
         if self.obs_type == "pixels_agent_pos":
-            self.features["pixels"] = PolicyFeature(type=FeatureType.VISUAL, shape=(384, 384, 3))
+            self.features["pixels"] = PolicyFeature(
+                type=FeatureType.VISUAL, shape=(self.observation_height, self.observation_width, 3)
+            )
         elif self.obs_type == "environment_state_agent_pos":
             self.features["environment_state"] = PolicyFeature(type=FeatureType.ENV, shape=(16,))
 
@@ -137,68 +234,15 @@ class PushtEnv(EnvConfig):
         }
 
 
-@EnvConfig.register_subclass("xarm")
-@dataclass
-class XarmEnv(EnvConfig):
-    """Xarm 机械臂环境配置。"""
-    task: str | None = "XarmLift-v0"
-    fps: int = 15
-    episode_length: int = 200
-    obs_type: str = "pixels_agent_pos"
-    render_mode: str = "rgb_array"
-    visualization_width: int = 384
-    visualization_height: int = 384
-    features: dict[str, PolicyFeature] = field(
-        default_factory=lambda: {
-            ACTION: PolicyFeature(type=FeatureType.ACTION, shape=(4,)),
-            "pixels": PolicyFeature(type=FeatureType.VISUAL, shape=(84, 84, 3)),
-        }
-    )
-    features_map: dict[str, str] = field(
-        default_factory=lambda: {
-            ACTION: ACTION,
-            "agent_pos": OBS_STATE,
-            "pixels": OBS_IMAGE,
-        }
-    )
-
-    def __post_init__(self):
-        if self.obs_type == "pixels_agent_pos":
-            self.features["agent_pos"] = PolicyFeature(type=FeatureType.STATE, shape=(4,))
-
-    @property
-    def gym_kwargs(self) -> dict:
-        return {
-            "obs_type": self.obs_type,
-            "render_mode": self.render_mode,
-            "visualization_width": self.visualization_width,
-            "visualization_height": self.visualization_height,
-            "max_episode_steps": self.episode_length,
-        }
-
-
 @dataclass
 class ImagePreprocessingConfig:
-    """图像预处理配置。
-
-    Args:
-        crop_params_dict: 每个相机的裁剪参数字典，格式为 {camera_name: (top, left, height, width)}。
-        resize_size: 调整大小后的目标尺寸，格式为 (height, width)。
-    """
-
     crop_params_dict: dict[str, tuple[int, int, int, int]] | None = None
     resize_size: tuple[int, int] | None = None
 
 
 @dataclass
 class RewardClassifierConfig:
-    """奖励分类器配置。
-
-    Args:
-        pretrained_path: 预训练模型路径。
-        success_threshold: 成功阈值。
-        success_reward: 成功奖励值。
-    """
+    """Configuration for reward classification."""
 
     pretrained_path: str | None = None
     success_threshold: float = 0.5
@@ -207,14 +251,7 @@ class RewardClassifierConfig:
 
 @dataclass
 class InverseKinematicsConfig:
-    """逆运动学处理配置。
-
-    Args:
-        urdf_path: URDF 模型文件路径。
-        target_frame_name: 目标坐标系名称。
-        end_effector_bounds: 末端执行器的边界约束。
-        end_effector_step_sizes: 末端执行器的步长大小。
-    """
+    """Configuration for inverse kinematics processing."""
 
     urdf_path: str | None = None
     target_frame_name: str | None = None
@@ -224,14 +261,7 @@ class InverseKinematicsConfig:
 
 @dataclass
 class ObservationConfig:
-    """观察值处理配置。
-
-    Args:
-        add_joint_velocity_to_observation: 是否将关节速度添加到观察值中。
-        add_current_to_observation: 是否将电流值添加到观察值中。
-        add_ee_pose_to_observation: 是否将末端执行器位姿添加到观察值中。
-        display_cameras: 是否显示相机图像。
-    """
+    """Configuration for observation processing."""
 
     add_joint_velocity_to_observation: bool = False
     add_current_to_observation: bool = False
@@ -241,29 +271,15 @@ class ObservationConfig:
 
 @dataclass
 class GripperConfig:
-    """夹爪控制和惩罚配置。
-
-    Args:
-        use_gripper: 是否使用夹爪。
-        gripper_penalty: 夹爪惩罚值。
-        gripper_penalty_in_reward: 是否将夹爪惩罚计入奖励。
-    """
+    """Configuration for gripper control and penalties."""
 
     use_gripper: bool = True
     gripper_penalty: float = 0.0
-    gripper_penalty_in_reward: bool = False
 
 
 @dataclass
 class ResetConfig:
-    """环境重置行为配置。
-
-    Args:
-        fixed_reset_joint_positions: 固定的重置关节位置。
-        reset_time_s: 重置时间（秒）。
-        control_time_s: 控制时间（秒）。
-        terminate_on_success: 是否在成功时终止。
-    """
+    """Configuration for environment reset behavior."""
 
     fixed_reset_joint_positions: Any | None = None
     reset_time_s: float = 5.0
@@ -273,18 +289,7 @@ class ResetConfig:
 
 @dataclass
 class HILSerlProcessorConfig:
-    """环境处理流水线配置。
-
-    Args:
-        control_mode: 控制模式（例如 "gamepad"）。
-        observation: 观察值处理配置。
-        image_preprocessing: 图像预处理配置。
-        gripper: 夹爪配置。
-        reset: 重置配置。
-        inverse_kinematics: 逆运动学配置。
-        reward_classifier: 奖励分类器配置。
-        max_gripper_pos: 最大夹爪位置。
-    """
+    """Configuration for environment processing pipeline."""
 
     control_mode: str = "gamepad"
     observation: ObservationConfig | None = None
@@ -299,14 +304,7 @@ class HILSerlProcessorConfig:
 @EnvConfig.register_subclass(name="gym_manipulator")
 @dataclass
 class HILSerlRobotEnvConfig(EnvConfig):
-    """HILSerl 机器人环境配置。
-
-    Args:
-        robot: 机器人配置。
-        teleop: 远程操作配置。
-        processor: 处理器配置。
-        name: 环境名称。
-    """
+    """Configuration for the HILSerlRobotEnv environment."""
 
     robot: RobotConfig | None = None
     teleop: TeleoperatorConfig | None = None
@@ -316,22 +314,276 @@ class HILSerlRobotEnvConfig(EnvConfig):
 
     @property
     def gym_kwargs(self) -> dict:
-        """返回创建 Gym 环境所需的参数字典。"""
         return {}
 
 
 @EnvConfig.register_subclass("libero")
 @dataclass
 class LiberoEnv(EnvConfig):
-    """LIBERO 基准测试环境配置。"""
-    task: str = "libero_10"  # 也可以选择 libero_spatial、libero_object 等
+    task: str = "libero_10"  # can also choose libero_spatial, libero_object, etc.
+    task_ids: list[int] | None = None
     fps: int = 30
-    episode_length: int = 520
+    episode_length: int | None = None
     obs_type: str = "pixels_agent_pos"
     render_mode: str = "rgb_array"
     camera_name: str = "agentview_image,robot0_eye_in_hand_image"
     init_states: bool = True
-    camera_name_mapping: dict[str, str] | None = (None,)
+    camera_name_mapping: dict[str, str] | None = None
+    observation_height: int = 360
+    observation_width: int = 360
+    is_libero_plus: bool = False
+    features: dict[str, PolicyFeature] = field(
+        default_factory=lambda: {
+            ACTION: PolicyFeature(type=FeatureType.ACTION, shape=(7,)),
+        }
+    )
+    features_map: dict[str, str] = field(
+        default_factory=lambda: {
+            ACTION: ACTION,
+            LIBERO_KEY_EEF_POS: f"{OBS_STATE}.eef_pos",
+            LIBERO_KEY_EEF_QUAT: f"{OBS_STATE}.eef_quat",
+            LIBERO_KEY_EEF_MAT: f"{OBS_STATE}.eef_mat",
+            LIBERO_KEY_GRIPPER_QPOS: f"{OBS_STATE}.gripper_qpos",
+            LIBERO_KEY_GRIPPER_QVEL: f"{OBS_STATE}.gripper_qvel",
+            LIBERO_KEY_JOINTS_POS: f"{OBS_STATE}.joint_pos",
+            LIBERO_KEY_JOINTS_VEL: f"{OBS_STATE}.joint_vel",
+            LIBERO_KEY_PIXELS_AGENTVIEW: f"{OBS_IMAGES}.image",
+            LIBERO_KEY_PIXELS_EYE_IN_HAND: f"{OBS_IMAGES}.image2",
+        }
+    )
+    control_mode: str = "relative"  # or "absolute"
+
+    def __post_init__(self):
+        if self.obs_type == "pixels":
+            self.features[LIBERO_KEY_PIXELS_AGENTVIEW] = PolicyFeature(
+                type=FeatureType.VISUAL, shape=(self.observation_height, self.observation_width, 3)
+            )
+            self.features[LIBERO_KEY_PIXELS_EYE_IN_HAND] = PolicyFeature(
+                type=FeatureType.VISUAL, shape=(self.observation_height, self.observation_width, 3)
+            )
+        elif self.obs_type == "pixels_agent_pos":
+            self.features[LIBERO_KEY_PIXELS_AGENTVIEW] = PolicyFeature(
+                type=FeatureType.VISUAL, shape=(self.observation_height, self.observation_width, 3)
+            )
+            self.features[LIBERO_KEY_PIXELS_EYE_IN_HAND] = PolicyFeature(
+                type=FeatureType.VISUAL, shape=(self.observation_height, self.observation_width, 3)
+            )
+            self.features[LIBERO_KEY_EEF_POS] = PolicyFeature(
+                type=FeatureType.STATE,
+                shape=(3,),
+            )
+            self.features[LIBERO_KEY_EEF_QUAT] = PolicyFeature(
+                type=FeatureType.STATE,
+                shape=(4,),
+            )
+            self.features[LIBERO_KEY_EEF_MAT] = PolicyFeature(
+                type=FeatureType.STATE,
+                shape=(3, 3),
+            )
+            self.features[LIBERO_KEY_GRIPPER_QPOS] = PolicyFeature(
+                type=FeatureType.STATE,
+                shape=(2,),
+            )
+            self.features[LIBERO_KEY_GRIPPER_QVEL] = PolicyFeature(
+                type=FeatureType.STATE,
+                shape=(2,),
+            )
+            self.features[LIBERO_KEY_JOINTS_POS] = PolicyFeature(
+                type=FeatureType.STATE,
+                shape=(7,),
+            )
+            self.features[LIBERO_KEY_JOINTS_VEL] = PolicyFeature(
+                type=FeatureType.STATE,
+                shape=(7,),
+            )
+        else:
+            raise ValueError(f"Unsupported obs_type: {self.obs_type}")
+
+        if self.camera_name_mapping is not None:
+            mapped_agentview = self.camera_name_mapping.get("agentview_image", "image")
+            mapped_eye_in_hand = self.camera_name_mapping.get("robot0_eye_in_hand_image", "image2")
+            self.features_map[LIBERO_KEY_PIXELS_AGENTVIEW] = f"{OBS_IMAGES}.{mapped_agentview}"
+            self.features_map[LIBERO_KEY_PIXELS_EYE_IN_HAND] = f"{OBS_IMAGES}.{mapped_eye_in_hand}"
+
+    @property
+    def gym_kwargs(self) -> dict:
+        kwargs: dict[str, Any] = {
+            "obs_type": self.obs_type,
+            "render_mode": self.render_mode,
+            "observation_height": self.observation_height,
+            "observation_width": self.observation_width,
+        }
+        if self.task_ids is not None:
+            kwargs["task_ids"] = self.task_ids
+        return kwargs
+
+    def create_envs(self, n_envs: int, use_async_envs: bool = False):
+        from .libero import create_libero_envs
+
+        if self.task is None:
+            raise ValueError("LiberoEnv requires a task to be specified")
+        env_cls = _make_vec_env_cls(use_async_envs, n_envs)
+        return create_libero_envs(
+            task=self.task,
+            n_envs=n_envs,
+            camera_name=self.camera_name,
+            init_states=self.init_states,
+            gym_kwargs=self.gym_kwargs,
+            env_cls=env_cls,
+            control_mode=self.control_mode,
+            episode_length=self.episode_length,
+            camera_name_mapping=self.camera_name_mapping,
+            is_libero_plus=self.is_libero_plus,
+        )
+
+    def get_env_processors(self):
+        return (
+            PolicyProcessorPipeline(steps=[LiberoProcessorStep()]),
+            PolicyProcessorPipeline(steps=[]),
+        )
+
+
+@EnvConfig.register_subclass("metaworld")
+@dataclass
+class MetaworldEnv(EnvConfig):
+    task: str = "metaworld-push-v2"  # add all tasks
+    fps: int = 80
+    episode_length: int = 400
+    obs_type: str = "pixels_agent_pos"
+    render_mode: str = "rgb_array"
+    multitask_eval: bool = True
+    features: dict[str, PolicyFeature] = field(
+        default_factory=lambda: {
+            "action": PolicyFeature(type=FeatureType.ACTION, shape=(4,)),
+        }
+    )
+    features_map: dict[str, str] = field(
+        default_factory=lambda: {
+            "action": ACTION,
+            "agent_pos": OBS_STATE,
+            "top": f"{OBS_IMAGE}",
+            "pixels/top": f"{OBS_IMAGE}",
+        }
+    )
+
+    def __post_init__(self):
+        if self.obs_type == "pixels":
+            self.features["top"] = PolicyFeature(type=FeatureType.VISUAL, shape=(480, 480, 3))
+
+        elif self.obs_type == "pixels_agent_pos":
+            self.features["agent_pos"] = PolicyFeature(type=FeatureType.STATE, shape=(4,))
+            self.features["pixels/top"] = PolicyFeature(type=FeatureType.VISUAL, shape=(480, 480, 3))
+
+        else:
+            raise ValueError(f"Unsupported obs_type: {self.obs_type}")
+
+    @property
+    def gym_kwargs(self) -> dict:
+        return {
+            "obs_type": self.obs_type,
+            "render_mode": self.render_mode,
+        }
+
+    def create_envs(self, n_envs: int, use_async_envs: bool = False):
+        from .metaworld import create_metaworld_envs
+
+        if self.task is None:
+            raise ValueError("MetaWorld requires a task to be specified")
+        env_cls = _make_vec_env_cls(use_async_envs, n_envs)
+        return create_metaworld_envs(
+            task=self.task,
+            n_envs=n_envs,
+            gym_kwargs=self.gym_kwargs,
+            env_cls=env_cls,
+        )
+
+
+@EnvConfig.register_subclass("robocasa")
+@dataclass
+class RoboCasaEnv(EnvConfig):
+    task: str = "CloseFridge"
+    fps: int = 20
+    episode_length: int = 1000
+    obs_type: str = "pixels_agent_pos"
+    render_mode: str = "rgb_array"
+    camera_name: str = "robot0_agentview_left,robot0_eye_in_hand,robot0_agentview_right"
+    observation_height: int = 256
+    observation_width: int = 256
+    visualization_height: int = 512
+    visualization_width: int = 512
+    split: str | None = None
+    # Object-mesh registries to sample from. Upstream default is
+    # ("objaverse", "lightwheel"), but objaverse is ~30GB and the CI image
+    # only ships the lightwheel pack. Override to include objaverse once
+    # you've run `python -m robocasa.scripts.download_kitchen_assets
+    # --type objaverse` locally.
+    obj_registries: list[str] = field(default_factory=lambda: ["lightwheel"])
+    features: dict[str, PolicyFeature] = field(
+        default_factory=lambda: {ACTION: PolicyFeature(type=FeatureType.ACTION, shape=(12,))}
+    )
+    features_map: dict[str, str] = field(default_factory=lambda: {ACTION: ACTION, "agent_pos": OBS_STATE})
+
+    def __post_init__(self):
+        if self.obs_type not in ("pixels", "pixels_agent_pos"):
+            raise ValueError(f"Unsupported obs_type: {self.obs_type}")
+
+        # Preserve raw RoboCasa camera names end-to-end (e.g.
+        # `observation.images.robot0_agentview_left`). This matches the
+        # naming convention used by the RoboCasa datasets on the Hub, so
+        # trained policies don't need a `--rename_map` at eval time.
+        cams = [c.strip() for c in self.camera_name.split(",") if c.strip()]
+        for cam in cams:
+            self.features[f"pixels/{cam}"] = PolicyFeature(
+                type=FeatureType.VISUAL,
+                shape=(self.observation_height, self.observation_width, 3),
+            )
+            self.features_map[f"pixels/{cam}"] = f"{OBS_IMAGES}.{cam}"
+
+        if self.obs_type == "pixels_agent_pos":
+            self.features["agent_pos"] = PolicyFeature(type=FeatureType.STATE, shape=(16,))
+
+    @property
+    def gym_kwargs(self) -> dict:
+        kwargs: dict[str, Any] = {
+            "obs_type": self.obs_type,
+            "render_mode": self.render_mode,
+            "observation_height": self.observation_height,
+            "observation_width": self.observation_width,
+            "visualization_height": self.visualization_height,
+            "visualization_width": self.visualization_width,
+        }
+        if self.split is not None:
+            kwargs["split"] = self.split
+        return kwargs
+
+    def create_envs(self, n_envs: int, use_async_envs: bool = False):
+        from .robocasa import create_robocasa_envs
+
+        if self.task is None:
+            raise ValueError("RoboCasaEnv requires a task to be specified")
+        env_cls = _make_vec_env_cls(use_async_envs, n_envs)
+        return create_robocasa_envs(
+            task=self.task,
+            n_envs=n_envs,
+            camera_name=self.camera_name,
+            gym_kwargs=self.gym_kwargs,
+            env_cls=env_cls,
+            episode_length=self.episode_length,
+            obj_registries=tuple(self.obj_registries),
+        )
+
+
+@EnvConfig.register_subclass("vlabench")
+@dataclass
+class VLABenchEnv(EnvConfig):
+    task: str = "select_fruit"
+    fps: int = 10
+    episode_length: int = 500
+    obs_type: str = "pixels_agent_pos"
+    render_mode: str = "rgb_array"
+    render_resolution: tuple[int, int] = (480, 480)
+    robot: str = "franka"
+    action_mode: str = "eef"
     features: dict[str, PolicyFeature] = field(
         default_factory=lambda: {
             ACTION: PolicyFeature(type=FeatureType.ACTION, shape=(7,)),
@@ -341,33 +593,294 @@ class LiberoEnv(EnvConfig):
         default_factory=lambda: {
             ACTION: ACTION,
             "agent_pos": OBS_STATE,
-            "pixels/agentview_image": f"{OBS_IMAGES}.image",
-            "pixels/robot0_eye_in_hand_image": f"{OBS_IMAGES}.image2",
+            "pixels/image": f"{OBS_IMAGES}.image",
+            "pixels/second_image": f"{OBS_IMAGES}.second_image",
+            "pixels/wrist_image": f"{OBS_IMAGES}.wrist_image",
         }
     )
 
     def __post_init__(self):
+        h, w = self.render_resolution
         if self.obs_type == "pixels":
-            self.features["pixels/agentview_image"] = PolicyFeature(
-                type=FeatureType.VISUAL, shape=(360, 360, 3)
-            )
-            self.features["pixels/robot0_eye_in_hand_image"] = PolicyFeature(
-                type=FeatureType.VISUAL, shape=(360, 360, 3)
-            )
+            self.features["pixels/image"] = PolicyFeature(type=FeatureType.VISUAL, shape=(h, w, 3))
+            self.features["pixels/second_image"] = PolicyFeature(type=FeatureType.VISUAL, shape=(h, w, 3))
+            self.features["pixels/wrist_image"] = PolicyFeature(type=FeatureType.VISUAL, shape=(h, w, 3))
         elif self.obs_type == "pixels_agent_pos":
-            self.features["agent_pos"] = PolicyFeature(type=FeatureType.STATE, shape=(8,))
-            self.features["pixels/agentview_image"] = PolicyFeature(
-                type=FeatureType.VISUAL, shape=(360, 360, 3)
-            )
-            self.features["pixels/robot0_eye_in_hand_image"] = PolicyFeature(
-                type=FeatureType.VISUAL, shape=(360, 360, 3)
-            )
+            self.features["pixels/image"] = PolicyFeature(type=FeatureType.VISUAL, shape=(h, w, 3))
+            self.features["pixels/second_image"] = PolicyFeature(type=FeatureType.VISUAL, shape=(h, w, 3))
+            self.features["pixels/wrist_image"] = PolicyFeature(type=FeatureType.VISUAL, shape=(h, w, 3))
+            self.features["agent_pos"] = PolicyFeature(type=FeatureType.STATE, shape=(7,))
         else:
-            raise ValueError(f"不支持的观察类型：{self.obs_type}")
+            raise ValueError(f"Unsupported obs_type: {self.obs_type}")
 
     @property
     def gym_kwargs(self) -> dict:
         return {
             "obs_type": self.obs_type,
             "render_mode": self.render_mode,
+            "render_resolution": self.render_resolution,
+            "robot": self.robot,
+            "max_episode_steps": self.episode_length,
+            "action_mode": self.action_mode,
         }
+
+    def create_envs(self, n_envs: int, use_async_envs: bool = False):
+        from .vlabench import create_vlabench_envs
+
+        if self.task is None:
+            raise ValueError("VLABenchEnv requires a task to be specified")
+        env_cls = _make_vec_env_cls(use_async_envs, n_envs)
+        return create_vlabench_envs(
+            task=self.task,
+            n_envs=n_envs,
+            gym_kwargs=self.gym_kwargs,
+            env_cls=env_cls,
+        )
+
+
+@EnvConfig.register_subclass("isaaclab_arena")
+@dataclass
+class IsaaclabArenaEnv(HubEnvConfig):
+    hub_path: str = "nvidia/isaaclab-arena-envs"
+    episode_length: int = 300
+    num_envs: int = 1
+    embodiment: str | None = "gr1_pink"
+    object: str | None = "power_drill"
+    mimic: bool = False
+    teleop_device: str | None = None
+    seed: int | None = 42
+    device: str | None = "cuda:0"
+    disable_fabric: bool = False
+    enable_cameras: bool = False
+    headless: bool = False
+    enable_pinocchio: bool = True
+    environment: str | None = "gr1_microwave"
+    task: str | None = "Reach out to the microwave and open it."
+    state_dim: int = 54
+    action_dim: int = 36
+    camera_height: int = 512
+    camera_width: int = 512
+    video: bool = False
+    video_length: int = 100
+    video_interval: int = 200
+    # Comma-separated keys, e.g., "robot_joint_pos,left_eef_pos"
+    state_keys: str = "robot_joint_pos"
+    # Comma-separated keys, e.g., "robot_pov_cam_rgb,front_cam_rgb"
+    # Set to None or "" for environments without cameras
+    camera_keys: str | None = None
+    features: dict[str, PolicyFeature] = field(default_factory=dict)
+    features_map: dict[str, str] = field(default_factory=dict)
+    kwargs: dict | None = None
+
+    def __post_init__(self):
+        if self.kwargs:
+            # dynamically convert kwargs to fields in the dataclass
+            # NOTE! the new fields will not bee seen by the dataclass repr
+            field_names = {f.name for f in fields(self)}
+            for key, value in self.kwargs.items():
+                if key not in field_names and key != "kwargs":
+                    setattr(self, key, value)
+            self.kwargs = None
+
+        # Set action feature
+        self.features[ACTION] = PolicyFeature(type=FeatureType.ACTION, shape=(self.action_dim,))
+        self.features_map[ACTION] = ACTION
+
+        # Set state feature
+        self.features[OBS_STATE] = PolicyFeature(type=FeatureType.STATE, shape=(self.state_dim,))
+        self.features_map[OBS_STATE] = OBS_STATE
+
+        # Add camera features for each camera key
+        if self.enable_cameras and self.camera_keys:
+            for cam_key in self.camera_keys.split(","):
+                cam_key = cam_key.strip()
+                if cam_key:
+                    self.features[cam_key] = PolicyFeature(
+                        type=FeatureType.VISUAL,
+                        shape=(self.camera_height, self.camera_width, 3),
+                    )
+                    self.features_map[cam_key] = f"{OBS_IMAGES}.{cam_key}"
+
+    @property
+    def gym_kwargs(self) -> dict:
+        return {}
+
+    def get_env_processors(self):
+        state_keys = tuple(k.strip() for k in (self.state_keys or "").split(",") if k.strip())
+        camera_keys = tuple(k.strip() for k in (self.camera_keys or "").split(",") if k.strip())
+        if not state_keys and not camera_keys:
+            raise ValueError("At least one of state_keys or camera_keys must be specified.")
+        return (
+            PolicyProcessorPipeline(
+                steps=[IsaaclabArenaProcessorStep(state_keys=state_keys, camera_keys=camera_keys)]
+            ),
+            PolicyProcessorPipeline(steps=[]),
+        )
+
+
+@EnvConfig.register_subclass("libero_plus")
+@dataclass
+class LiberoPlusEnv(LiberoEnv):
+    """Config for LIBERO-plus robustness benchmark evaluation.
+
+    LIBERO-plus extends LIBERO with 7 perturbation dimensions (camera viewpoints,
+    object layouts, robot initial states, language instructions, lighting, background
+    textures, sensor noise) producing ~10k task variants.
+
+    The gym interface is identical to LIBERO so this class reuses ``LiberoEnv``
+    entirely — only the registered name and default task suite differ.
+
+    Install: see docker/Dockerfile.benchmark.libero_plus — LIBERO-plus ships
+    as a namespace package from a git fork and must be cloned + PYTHONPATH'd
+    rather than installed as a pyproject extra.
+
+    See Also:
+        https://github.com/sylvestf/LIBERO-plus
+    """
+
+    task: str = "libero_spatial"
+    is_libero_plus: bool = True
+
+
+@EnvConfig.register_subclass("robotwin")
+@dataclass
+class RoboTwinEnvConfig(EnvConfig):
+    """Configuration for RoboTwin 2.0 benchmark environments.
+
+    RoboTwin 2.0 is a dual-arm manipulation benchmark with 50 tasks built on the
+    SAPIEN simulator. The robot is an Aloha-AgileX bimanual platform with 14 DOF
+    (7 per arm). All three cameras are enabled by default.
+
+    See: https://robotwin-platform.github.io
+    Dataset: https://huggingface.co/datasets/lerobot/robotwin_unified
+    """
+
+    task: str = "beat_block_hammer"  # single task or comma-separated list
+    fps: int = 25
+    episode_length: int = 300
+    obs_type: str = "pixels_agent_pos"
+    render_mode: str = "rgb_array"
+    # Available cameras from RoboTwin's aloha-agilex embodiment: head_camera
+    # (torso-mounted) + left_camera / right_camera (wrists).
+    camera_names: str = "head_camera,left_camera,right_camera"
+    # Match the D435 dims in task_config/demo_clean.yml (_camera_config.yml).
+    # Gym's vector-env concatenate pre-allocates buffers of this shape, so it
+    # must equal what SAPIEN actually renders.
+    observation_height: int = 240
+    observation_width: int = 320
+    features: dict[str, PolicyFeature] = field(
+        default_factory=lambda: {
+            ACTION: PolicyFeature(type=FeatureType.ACTION, shape=(14,)),
+        }
+    )
+    features_map: dict[str, str] = field(
+        default_factory=lambda: {
+            ACTION: ACTION,
+            "pixels/head_camera": f"{OBS_IMAGES}.head_camera",
+            "pixels/left_camera": f"{OBS_IMAGES}.left_camera",
+            "pixels/right_camera": f"{OBS_IMAGES}.right_camera",
+            "agent_pos": OBS_STATE,
+        }
+    )
+
+    def __post_init__(self):
+        cam_list = [c.strip() for c in self.camera_names.split(",") if c.strip()]
+        for cam in cam_list:
+            self.features[f"pixels/{cam}"] = PolicyFeature(
+                type=FeatureType.VISUAL,
+                shape=(self.observation_height, self.observation_width, 3),
+            )
+            # Keep features_map entry if already set (default_factory); add if missing.
+            key = f"pixels/{cam}"
+            if key not in self.features_map:
+                self.features_map[key] = f"{OBS_IMAGES}.{cam}"
+
+        if self.obs_type == "pixels_agent_pos":
+            self.features["agent_pos"] = PolicyFeature(
+                type=FeatureType.STATE,
+                shape=(14,),  # 14 DOF: 7 per arm
+            )
+        elif self.obs_type != "pixels":
+            raise ValueError(
+                f"Unsupported obs_type '{self.obs_type}'. "
+                "RoboTwinEnvConfig supports 'pixels' and 'pixels_agent_pos'."
+            )
+
+    @property
+    def gym_kwargs(self) -> dict:
+        return {}
+
+    def create_envs(self, n_envs: int, use_async_envs: bool = True):
+        from lerobot.envs.robotwin import create_robotwin_envs
+
+        if not self.task:
+            raise ValueError("RoboTwinEnvConfig requires `task` to be specified.")
+
+        env_cls = _make_vec_env_cls(use_async_envs, n_envs)
+        cam_list = [c.strip() for c in self.camera_names.split(",") if c.strip()]
+        return create_robotwin_envs(
+            task=self.task,
+            n_envs=n_envs,
+            env_cls=env_cls,
+            camera_names=cam_list,
+            observation_height=self.observation_height,
+            observation_width=self.observation_width,
+            episode_length=self.episode_length,
+        )
+
+
+@EnvConfig.register_subclass("robomme")
+@dataclass
+class RoboMMEEnv(EnvConfig):
+    """RoboMME memory-augmented manipulation benchmark (ManiSkill/SAPIEN).
+
+    16 tasks across 4 suites: Counting, Permanence, Reference, Imitation.
+    Dataset: lerobot/robomme (LeRobot v3.0, 1,600 episodes).
+    Benchmark: https://github.com/RoboMME/robomme_benchmark
+
+    Requires the `robomme` git package installed separately (Linux only);
+    see docker/Dockerfile.benchmark.robomme for the canonical install.
+    """
+
+    task: str = "PickXtimes"
+    fps: int = 10
+    episode_length: int = 300
+    action_space: str = "joint_angle"  # or "ee_pose" (7-D)
+    dataset_split: str = "test"  # "train" | "val" | "test"
+    task_ids: list[int] | None = None
+    features: dict[str, PolicyFeature] = field(default_factory=dict)
+    features_map: dict[str, str] = field(
+        default_factory=lambda: {
+            ACTION: ACTION,
+            "pixels/image": f"{OBS_IMAGES}.image",
+            "pixels/wrist_image": f"{OBS_IMAGES}.wrist_image",
+            "agent_pos": OBS_STATE,
+        }
+    )
+
+    def __post_init__(self):
+        action_dim = 8 if self.action_space == "joint_angle" else 7
+        self.features = {
+            ACTION: PolicyFeature(type=FeatureType.ACTION, shape=(action_dim,)),
+            "pixels/image": PolicyFeature(type=FeatureType.VISUAL, shape=(256, 256, 3)),
+            "pixels/wrist_image": PolicyFeature(type=FeatureType.VISUAL, shape=(256, 256, 3)),
+            "agent_pos": PolicyFeature(type=FeatureType.STATE, shape=(8,)),
+        }
+
+    @property
+    def gym_kwargs(self) -> dict:
+        return {}
+
+    def create_envs(self, n_envs: int, use_async_envs: bool = True):
+        from lerobot.envs.robomme import create_robomme_envs
+
+        env_cls = _make_vec_env_cls(use_async_envs, n_envs)
+        return create_robomme_envs(
+            task=self.task,
+            n_envs=n_envs,
+            action_space_type=self.action_space,
+            dataset=self.dataset_split,
+            episode_length=self.episode_length,
+            task_ids=self.task_ids,
+            env_cls=env_cls,
+        )

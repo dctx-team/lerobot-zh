@@ -24,8 +24,8 @@ from ..config import RobotConfig
 @RobotConfig.register_subclass("hope_jr_hand")
 @dataclass
 class HopeJrHandConfig(RobotConfig):
-    port: str  # 连接到灵巧手的端口
-    side: str  # "left" / "right" (左手/右手)
+    port: str  # Port to connect to the hand
+    side: str  # "left" / "right"
 
     disable_torque_on_disconnect: bool = True
 
@@ -40,11 +40,12 @@ class HopeJrHandConfig(RobotConfig):
 @RobotConfig.register_subclass("hope_jr_arm")
 @dataclass
 class HopeJrArmConfig(RobotConfig):
-    port: str  # 连接到机械臂的端口
+    port: str  # Port to connect to the hand
     disable_torque_on_disconnect: bool = True
 
-    # `max_relative_target` 为了安全起见，限制相对位置目标向量的幅度。
-    # 将此设置为正标量值以对所有电机使用相同的值，或设置为将电机名称映射到该电机的 max_relative_target 值的字典。
+    # `max_relative_target` limits the magnitude of the relative positional target vector for safety purposes.
+    # Set this to a positive scalar to have the same value for all motors, or a dictionary that maps motor
+    # names to the max_relative_target value for that motor.
     max_relative_target: float | dict[str, float] | None = None
 
     cameras: dict[str, CameraConfig] = field(default_factory=dict)

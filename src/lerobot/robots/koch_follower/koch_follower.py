@@ -17,15 +17,15 @@
 import logging
 import time
 from functools import cached_property
-from typing import Any
 
-from lerobot.cameras.utils import make_cameras_from_configs
+from lerobot.cameras import make_cameras_from_configs
 from lerobot.motors import Motor, MotorCalibration, MotorNormMode
 from lerobot.motors.dynamixel import (
     DynamixelMotorsBus,
     OperatingMode,
 )
-from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+from lerobot.types import RobotAction, RobotObservation
+from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
 from ..robot import Robot
 from ..utils import ensure_safe_goal_position
@@ -36,9 +36,9 @@ logger = logging.getLogger(__name__)
 
 class KochFollower(Robot):
     """
-    - [Koch v1.0](https://github.com/AlexanderKoch-Koch/low_cost_robot)，有/无腕部到肘部
-        扩展，由 [Tau Robotics](https://tau-robotics.com) 的 Alexander Koch 开发
-    - [Koch v1.1](https://github.com/jess-moss/koch-v1-1) 由 Jess Moss 开发
+    - [Koch v1.0](https://github.com/AlexanderKoch-Koch/low_cost_robot), with and without the wrist-to-elbow
+        expansion, developed by Alexander Koch from [Tau Robotics](https://tau-robotics.com)
+    - [Koch v1.1](https://github.com/jess-moss/koch-v1-1) developed by Jess Moss
     """
 
     config_class = KochFollowerConfig
@@ -84,13 +84,12 @@ class KochFollower(Robot):
     def is_connected(self) -> bool:
         return self.bus.is_connected and all(cam.is_connected for cam in self.cameras.values())
 
+    @check_if_already_connected
     def connect(self, calibrate: bool = True) -> None:
         """
-        我们假设在连接时，机械臂处于静止位置，
-        并且可以安全地禁用扭矩以运行校准。
+        We assume that at connection time, arm is in a rest position,
+        and torque can be safely disabled to run calibration.
         """
-        if self.is_connected:
-            raise DeviceAlreadyConnectedError(f"{self} already connected")
 
         self.bus.connect()
         if not self.is_calibrated and calibrate:
@@ -112,7 +111,7 @@ class KochFollower(Robot):
     def calibrate(self) -> None:
         self.bus.disable_torque()
         if self.calibration:
-            # 校准文件存在，询问用户是使用它还是运行新校准
+            # Calibration file exists, ask user whether to use it or run new calibration
             user_input = input(
                 f"Press ENTER to use provided calibration file associated with the id {self.id}, or type 'c' and press ENTER to run calibration: "
             )
@@ -155,22 +154,23 @@ class KochFollower(Robot):
     def configure(self) -> None:
         with self.bus.torque_disabled():
             self.bus.configure_motors()
-            # 对除夹爪外的所有电机使用"扩展位置模式"，因为在关节模式下舵机
-            # 无法旋转超过 360 度（从 0 到 4095），并且在组装
-            # 机械臂时可能会出现一些错误，您可能会在关键点得到位置为 0 或 4095 的舵机
+            # Use 'extended position mode' for all motors except gripper, because in joint mode the servos
+            # can't rotate more than 360 degrees (from 0 to 4095) And some mistake can happen while assembling
+            # the arm, you could end up with a servo with a position 0 or 4095 at a crucial point
             for motor in self.bus.motors:
                 if motor != "gripper":
                     self.bus.write("Operating_Mode", motor, OperatingMode.EXTENDED_POSITION.value)
 
-            # 对夹爪使用"基于电流的位置控制"以受电流限制的限制。对于
-            # 跟随夹爪，这意味着即使其目标位置是完全抓取
-            # （两个夹爪手指被命令合拢并触碰），它也可以抓住物体而不会施加太大的力。
-            # 对于主导夹爪，这意味着我们可以将其用作物理触发器，因为我们可以用
-            # 手指施加力使其移动，当我们松开力时，它会回到其原始目标位置。
+            # Use 'position control current based' for gripper to be limited by the limit of the current. For
+            # the follower gripper, it means it can grasp an object without forcing too much even tho, its
+            # goal position is a complete grasp (both gripper fingers are ordered to join and reach a touch).
+            # For the leader gripper, it means we can use it as a physical trigger, since we can force with
+            # our finger to make it move, and it will move back to its original target position when we
+            # release the force.
             self.bus.write("Operating_Mode", "gripper", OperatingMode.CURRENT_POSITION.value)
 
-            # 设置更好的 PID 值以缩小记录状态和动作之间的差距
-            # TODO(rcadene): 实现自动程序以为每个电机设置最佳 PID 值
+            # Set better PID values to close the gap between recorded states and actions
+            # TODO(rcadene): Implement an automatic procedure to set optimal PID values for each motor
             self.bus.write("Position_P_Gain", "elbow_flex", 1500)
             self.bus.write("Position_I_Gain", "elbow_flex", 0)
             self.bus.write("Position_D_Gain", "elbow_flex", 600)
@@ -181,59 +181,54 @@ class KochFollower(Robot):
             self.bus.setup_motor(motor)
             print(f"'{motor}' motor id set to {self.bus.motors[motor].id}")
 
-    def get_observation(self) -> dict[str, Any]:
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-
-        # 读取机械臂位置
+    @check_if_not_connected
+    def get_observation(self) -> RobotObservation:
+        # Read arm position
         start = time.perf_counter()
         obs_dict = self.bus.sync_read("Present_Position")
         obs_dict = {f"{motor}.pos": val for motor, val in obs_dict.items()}
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
 
-        # 从相机捕获图像
+        # Capture images from cameras
         for cam_key, cam in self.cameras.items():
             start = time.perf_counter()
-            obs_dict[cam_key] = cam.async_read()
+            obs_dict[cam_key] = cam.read_latest()
             dt_ms = (time.perf_counter() - start) * 1e3
             logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
 
         return obs_dict
 
-    def send_action(self, action: dict[str, float]) -> dict[str, float]:
-        """命令机械臂移动到目标关节配置。
+    @check_if_not_connected
+    def send_action(self, action: RobotAction) -> RobotAction:
+        """Command arm to move to a target joint configuration.
 
-        根据配置参数 `max_relative_target`，相对动作幅度可能会被裁剪。
-        在这种情况下，发送的动作与原始动作不同。
-        因此，此函数始终返回实际发送的动作。
+        The relative action magnitude may be clipped depending on the configuration parameter
+        `max_relative_target`. In this case, the action sent differs from original action.
+        Thus, this function always returns the action actually sent.
 
-        参数:
-            action (dict[str, float]): 电机的目标位置。
+        Args:
+            action (RobotAction): The goal positions for the motors.
 
-        返回:
-            dict[str, float]: 发送到电机的动作，可能被裁剪。
+        Returns:
+            RobotAction: The action sent to the motors, potentially clipped.
         """
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
 
         goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
 
-        # 当目标位置距离当前位置太远时，限制目标位置。
-        # /!\ 由于需要从跟随臂读取数据，预计会降低 fps。
+        # Cap goal position when too far away from present position.
+        # /!\ Slower fps expected due to reading from the follower.
         if self.config.max_relative_target is not None:
             present_pos = self.bus.sync_read("Present_Position")
             goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
             goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
-        # 将目标位置发送到机械臂
+        # Send goal position to the arm
         self.bus.sync_write("Goal_Position", goal_pos)
         return {f"{motor}.pos": val for motor, val in goal_pos.items()}
 
+    @check_if_not_connected
     def disconnect(self):
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-
         self.bus.disconnect(self.config.disable_torque_on_disconnect)
         for cam in self.cameras.values():
             cam.disconnect()

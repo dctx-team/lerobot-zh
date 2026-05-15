@@ -12,56 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# 食指展开系数
 INDEX_SPLAY = 0.3
-# 中指展开系数
 MIDDLE_SPLAY = 0.3
-# 无名指展开系数
 RING_SPLAY = 0.3
-# 小指展开系数
 PINKY_SPLAY = 0.5
 
 
 def get_ulnar_flexion(flexion: float, abduction: float, splay: float):
-    """获取尺侧屈曲值。
-
-    Args:
-        flexion: 屈曲角度
-        abduction: 外展角度
-        splay: 展开系数
-
-    Returns:
-        尺侧屈曲值
-    """
     return -abduction * splay + flexion * (1 - splay)
 
 
 def get_radial_flexion(flexion: float, abduction: float, splay: float):
-    """获取桡侧屈曲值。
-
-    Args:
-        flexion: 屈曲角度
-        abduction: 外展角度
-        splay: 展开系数
-
-    Returns:
-        桡侧屈曲值
-    """
     return abduction * splay + flexion * (1 - splay)
 
 
 def homunculus_glove_to_hope_jr_hand(glove_action: dict[str, float]) -> dict[str, float]:
-    """将 Homunculus 手套动作转换为 Hope Jr 机械手动作。
-
-    该函数将手套传感器的原始数据转换为机械手的关节位置命令。
-    对于每个手指，它将屈曲和外展动作转换为机械手的桡侧和尺侧屈肌控制。
-
-    Args:
-        glove_action: 包含手套传感器数据的字典，键为关节名称，值为位置
-
-    Returns:
-        包含机械手关节位置命令的字典
-    """
     return {
         "thumb_cmc.pos": glove_action["thumb_cmc.pos"],
         "thumb_mcp.pos": glove_action["thumb_mcp.pos"],

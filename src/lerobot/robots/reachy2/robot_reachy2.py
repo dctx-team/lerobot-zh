@@ -13,20 +13,25 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import numpy as np
-from reachy2_sdk import ReachySDK
-
-from lerobot.cameras.utils import make_cameras_from_configs
+from lerobot.cameras import make_cameras_from_configs
+from lerobot.types import RobotAction, RobotObservation
+from lerobot.utils.import_utils import _reachy2_sdk_available, require_package
 
 from ..robot import Robot
 from ..utils import ensure_safe_goal_position
 from .configuration_reachy2 import Reachy2RobotConfig
 
-# {lerobot键: reachy2_sdk键}
+if TYPE_CHECKING or _reachy2_sdk_available:
+    from reachy2_sdk import ReachySDK
+else:
+    ReachySDK = None
+
+# {lerobot_keys: reachy2_sdk_keys}
 REACHY2_NECK_JOINTS = {
     "neck_yaw.pos": "head.neck.yaw",
     "neck_pitch.pos": "head.neck.pitch",
@@ -69,13 +74,14 @@ REACHY2_VEL = {
 
 class Reachy2Robot(Robot):
     """
-    [Reachy 2](https://www.pollen-robotics.com/reachy/)，由 Pollen Robotics 开发。
+    [Reachy 2](https://www.pollen-robotics.com/reachy/), by Pollen Robotics.
     """
 
     config_class = Reachy2RobotConfig
     name = "reachy2"
 
     def __init__(self, config: Reachy2RobotConfig):
+        require_package("reachy2_sdk", extra="reachy2")
         super().__init__(config)
 
         self.config = config
@@ -165,21 +171,21 @@ class Reachy2Robot(Robot):
         else:
             return {}
 
-    def get_observation(self) -> dict[str, np.ndarray]:
-        obs_dict: dict[str, Any] = {}
+    def get_observation(self) -> RobotObservation:
+        obs_dict: RobotObservation = {}
 
-        # 读取 Reachy 2 状态
+        # Read Reachy 2 state
         before_read_t = time.perf_counter()
         obs_dict.update(self._get_state())
         self.logs["read_pos_dt_s"] = time.perf_counter() - before_read_t
 
-        # 从相机捕获图像
+        # Capture images from cameras
         for cam_key, cam in self.cameras.items():
-            obs_dict[cam_key] = cam.async_read()
+            obs_dict[cam_key] = cam.read_latest()
 
         return obs_dict
 
-    def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
+    def send_action(self, action: RobotAction) -> RobotAction:
         if self.reachy is not None:
             if not self.is_connected:
                 raise ConnectionError()
@@ -212,7 +218,7 @@ class Reachy2Robot(Robot):
             if self.config.with_mobile_base:
                 self.reachy.mobile_base.set_goal_speed(vel["vx"], vel["vy"], vel["vtheta"])
 
-            # 如果我们外部控制 Reachy 2，则不发送目标位置
+            # We don't send the goal positions if we control Reachy 2 externally
             if not self.use_external_commands:
                 self.reachy.send_goal_positions()
                 if self.config.with_mobile_base:

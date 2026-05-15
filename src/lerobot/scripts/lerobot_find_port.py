@@ -13,9 +13,9 @@
 # limitations under the License.
 
 """
-帮助查找与你的 MotorsBus 关联的 USB 端口的工具。
+Helper to find the USB port associated with your MotorsBus.
 
-示例：
+Example:
 
 ```shell
 lerobot-find-port
@@ -28,37 +28,40 @@ from pathlib import Path
 
 
 def find_available_ports():
-    from serial.tools import list_ports  # pyserial 库的一部分
+    from lerobot.utils.import_utils import require_package
+
+    require_package("pyserial", extra="hardware", import_name="serial")
+    from serial.tools import list_ports
 
     if platform.system() == "Windows":
-        # 使用 pyserial 列出 COM 端口
+        # List COM ports using pyserial
         ports = [port.device for port in list_ports.comports()]
     else:  # Linux/macOS
-        # 在基于 Unix 的系统上列出 /dev/tty* 端口
+        # List /dev/tty* ports for Unix-based systems
         ports = [str(path) for path in Path("/dev").glob("tty*")]
     return ports
 
 
 def find_port():
-    print("正在查找 MotorsBus 的所有可用端口。")
+    print("Finding all available ports for the MotorsBus.")
     ports_before = find_available_ports()
-    print("断开连接前的端口:", ports_before)
+    print("Ports before disconnecting:", ports_before)
 
-    print("从你的 MotorsBus 上拔下 USB 线缆，完成后按 Enter 键。")
-    input()  # 等待用户断开设备连接
+    print("Remove the USB cable from your MotorsBus and press Enter when done.")
+    input()  # Wait for user to disconnect the device
 
-    time.sleep(0.5)  # 留出一些时间以释放端口
+    time.sleep(0.5)  # Allow some time for port to be released
     ports_after = find_available_ports()
     ports_diff = list(set(ports_before) - set(ports_after))
 
     if len(ports_diff) == 1:
         port = ports_diff[0]
-        print(f"此 MotorsBus 的端口是 '{port}'")
-        print("重新连接 USB 线缆。")
+        print(f"The port of this MotorsBus is '{port}'")
+        print("Reconnect the USB cable.")
     elif len(ports_diff) == 0:
-        raise OSError(f"无法检测到端口。未发现差异 ({ports_diff})。")
+        raise OSError(f"Could not detect the port. No difference was found ({ports_diff}).")
     else:
-        raise OSError(f"无法检测到端口。发现了多个端口 ({ports_diff})。")
+        raise OSError(f"Could not detect the port. More than one port was found ({ports_diff}).")
 
 
 def main():

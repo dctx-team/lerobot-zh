@@ -18,9 +18,9 @@ from typing import Any
 
 import torch
 
-from lerobot.configs.types import PipelineFeatureType, PolicyFeature
-from lerobot.policies.pi0.configuration_pi0 import PI0Config
+from lerobot.configs import PipelineFeatureType, PolicyFeature
 from lerobot.processor import (
+    AbsoluteActionsProcessorStep,
     AddBatchDimensionProcessorStep,
     ComplementaryDataProcessorStep,
     DeviceProcessorStep,
@@ -29,33 +29,38 @@ from lerobot.processor import (
     PolicyProcessorPipeline,
     ProcessorStep,
     ProcessorStepRegistry,
+    RelativeActionsProcessorStep,
     RenameObservationsProcessorStep,
     TokenizerProcessorStep,
     UnnormalizerProcessorStep,
+    policy_action_to_transition,
+    transition_to_policy_action,
 )
-from lerobot.processor.converters import policy_action_to_transition, transition_to_policy_action
 from lerobot.utils.constants import POLICY_POSTPROCESSOR_DEFAULT_NAME, POLICY_PREPROCESSOR_DEFAULT_NAME
+
+from .configuration_pi0 import PI0Config
 
 
 @ProcessorStepRegistry.register(name="pi0_new_line_processor")
 class Pi0NewLineProcessor(ComplementaryDataProcessorStep):
     """
-    确保任务描述字符串以换行符结尾。
+    Ensures that the task description string ends with a newline character.
 
-    此处理步骤是为了与 PaliGemma 分词器兼容而必需的，
-    该分词器期望文本提示符的末尾有一个换行符。它处理补充数据中
-    'task' 键的单个字符串和字符串列表。
+    This processing step is required for compatibility with the PaliGemma tokenizer,
+    which expects a newline at the end of the text prompt. It handles both single
+    strings and lists of strings for the 'task' key in complementary data.
     """
 
     def complementary_data(self, complementary_data):
         """
-        如果 'task' 字段尚未包含换行符，则添加换行符。
+        Adds a newline to the 'task' field if it doesn't already have one.
 
         Args:
-            complementary_data: 可能包含 'task' 键的字典，其值为字符串或字符串列表。
+            complementary_data: A dictionary that may contain a 'task' key with a
+                                string or list of strings.
 
         Returns:
-            包含修改后的 'task' 字段的新字典。
+            A new dictionary with the modified 'task' field.
         """
         if "task" not in complementary_data:
             return complementary_data
@@ -66,15 +71,15 @@ class Pi0NewLineProcessor(ComplementaryDataProcessorStep):
 
         new_complementary_data = dict(complementary_data)
 
-        # 处理字符串和字符串列表
+        # Handle both string and list of strings
         if isinstance(task, str):
-            # 单个字符串：如果不存在则添加换行符
+            # Single string: add newline if not present
             if not task.endswith("\n"):
                 new_complementary_data["task"] = f"{task}\n"
         elif isinstance(task, list) and all(isinstance(t, str) for t in task):
-            # 字符串列表：如果不存在则为每个字符串添加换行符
+            # List of strings: add newline to each if not present
             new_complementary_data["task"] = [t if t.endswith("\n") else f"{t}\n" for t in task]
-        # 如果 task 既不是字符串也不是字符串列表，则保持不变
+        # If task is neither string nor list of strings, leave unchanged
 
         return new_complementary_data
 
@@ -82,13 +87,13 @@ class Pi0NewLineProcessor(ComplementaryDataProcessorStep):
         self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
     ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
         """
-        此步骤不会更改特征定义。
+        This step does not alter the feature definitions.
 
         Args:
-            features: 输入特征字典。
+            features: The input feature dictionary.
 
         Returns:
-            未更改的特征字典。
+            The unchanged feature dictionary.
         """
         return features
 
@@ -101,35 +106,41 @@ def make_pi0_pre_post_processors(
     PolicyProcessorPipeline[PolicyAction, PolicyAction],
 ]:
     """
-    构建 PI0 策略的预处理器和后处理器管道。
+    Constructs pre-processor and post-processor pipelines for the PI0 policy.
 
-    预处理管道通过以下步骤为模型准备输入数据：
-    1. 重命名特征以匹配预训练配置。
-    2. 基于数据集统计信息对输入和输出特征进行归一化。
-    3. 添加批次维度。
-    4. 为分词器兼容性在任务描述末尾添加换行符。
-    5. 使用 PaliGemma 分词器对文本提示进行分词。
-    6. 将所有数据移动到指定设备。
+    The pre-processing pipeline prepares input data for the model by:
+    1. Renaming features to match pretrained configurations.
+    2. Normalizing input and output features based on dataset statistics.
+    3. Adding a batch dimension.
+    4. Appending a newline character to the task description for tokenizer compatibility.
+    5. Tokenizing the text prompt using the PaliGemma tokenizer.
+    6. Moving all data to the specified device.
 
-    后处理管道通过以下步骤处理模型的输出：
-    1. 将数据移动到 CPU。
-    2. 对输出特征进行反归一化以恢复其原始尺度。
+    The post-processing pipeline handles the model's output by:
+    1. Moving data to the CPU.
+    2. Unnormalizing the output features to their original scale.
 
     Args:
-        config: PI0 策略的配置对象。
-        dataset_stats: 用于归一化的统计信息字典。
-        preprocessor_kwargs: 预处理器管道的额外参数。
-        postprocessor_kwargs: 后处理器管道的额外参数。
+        config: The configuration object for the PI0 policy.
+        dataset_stats: A dictionary of statistics for normalization.
+        preprocessor_kwargs: Additional arguments for the pre-processor pipeline.
+        postprocessor_kwargs: Additional arguments for the post-processor pipeline.
 
     Returns:
-        包含已配置的预处理器和后处理器管道的元组。
+        A tuple containing the configured pre-processor and post-processor pipelines.
     """
 
-    # 添加其余的处理器
+    relative_step = RelativeActionsProcessorStep(
+        enabled=config.use_relative_actions,
+        exclude_joints=getattr(config, "relative_exclude_joints", []),
+        action_names=getattr(config, "action_feature_names", None),
+    )
+
+    # OpenPI order: raw → relative → normalize → model → unnormalize → absolute
     input_steps: list[ProcessorStep] = [
-        RenameObservationsProcessorStep(rename_map={}),  # 模仿与预训练相同的处理器
+        RenameObservationsProcessorStep(rename_map={}),  # To mimic the same processor as pretrained one
         AddBatchDimensionProcessorStep(),
-        Pi0NewLineProcessor(),  # 在 PaliGemma 分词之前添加换行符
+        Pi0NewLineProcessor(),  # Add newlines before tokenization for PaliGemma
         TokenizerProcessorStep(
             tokenizer_name="google/paligemma-3b-pt-224",
             max_length=config.tokenizer_max_length,
@@ -137,6 +148,7 @@ def make_pi0_pre_post_processors(
             padding="max_length",
         ),
         DeviceProcessorStep(device=config.device),
+        relative_step,
         NormalizerProcessorStep(
             features={**config.input_features, **config.output_features},
             norm_map=config.normalization_mapping,
@@ -148,6 +160,7 @@ def make_pi0_pre_post_processors(
         UnnormalizerProcessorStep(
             features=config.output_features, norm_map=config.normalization_mapping, stats=dataset_stats
         ),
+        AbsoluteActionsProcessorStep(enabled=config.use_relative_actions, relative_step=relative_step),
         DeviceProcessorStep(device="cpu"),
     ]
 

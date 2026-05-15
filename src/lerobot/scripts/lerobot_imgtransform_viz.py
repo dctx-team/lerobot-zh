@@ -13,12 +13,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" 为给定配置可视化图像变换的效果。
+""" Visualize effects of image transforms for a given configuration.
 
-此脚本将生成经过变换的图像示例，这些图像由 LeRobot 数据集输出。
-此外，每个单独的变换可以单独可视化，以及组合变换的示例
+This script will generate examples of transformed images as they are output by LeRobot dataset.
+Additionally, each individual transform can be visualized separately as well as examples of combined transforms
 
-示例：
+Example:
 ```bash
 lerobot-imgtransform-viz \
   --repo_id=lerobot/pusht \
@@ -35,9 +35,9 @@ from pathlib import Path
 import draccus
 from torchvision.transforms import ToPILImage
 
-from lerobot.configs.default import DatasetConfig
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.transforms import (
+from lerobot.configs import DatasetConfig
+from lerobot.datasets import LeRobotDataset
+from lerobot.transforms import (
     ImageTransforms,
     ImageTransformsConfig,
     make_transform_from_config,
@@ -48,7 +48,6 @@ to_pil = ToPILImage()
 
 
 def save_all_transforms(cfg: ImageTransformsConfig, original_frame, output_dir, n_examples):
-    """保存所有组合变换的示例。"""
     output_dir_all = output_dir / "all"
     output_dir_all.mkdir(parents=True, exist_ok=True)
 
@@ -57,21 +56,20 @@ def save_all_transforms(cfg: ImageTransformsConfig, original_frame, output_dir, 
         transformed_frame = tfs(original_frame)
         to_pil(transformed_frame).save(output_dir_all / f"{i}.png", quality=100)
 
-    print("组合变换示例已保存至：")
+    print("Combined transforms examples saved to:")
     print(f"    {output_dir_all}")
 
 
 def save_each_transform(cfg: ImageTransformsConfig, original_frame, output_dir, n_examples):
-    """分别保存每个单独变换的示例。"""
     if not cfg.enable:
         logging.warning(
-            "不会保存单个变换，因为 `image_transforms.enable=False`。要启用，请在 `ImageTransformsConfig` 中将 `enable` 设置为 True，或在命令行中使用 `--image_transforms.enable=True`。"
+            "No single transforms will be saved, because `image_transforms.enable=False`. To enable, set `enable` to True in `ImageTransformsConfig` or in the command line with `--image_transforms.enable=True`."
         )
         return
 
-    print("单个变换示例已保存至：")
+    print("Individual transforms examples saved to:")
     for tf_name, tf_cfg in cfg.tfs.items():
-        # 应用一些在 min_max 范围内具有随机值的变换
+        # Apply a few transformation with random value in min_max range
         output_dir_single = output_dir / tf_name
         output_dir_single.mkdir(parents=True, exist_ok=True)
 
@@ -80,7 +78,7 @@ def save_each_transform(cfg: ImageTransformsConfig, original_frame, output_dir, 
             transformed_frame = tf(original_frame)
             to_pil(transformed_frame).save(output_dir_single / f"{i}.png", quality=100)
 
-        # 应用最小、最大、平均变换
+        # Apply min, max, average transformations
         tf_cfg_kwgs_min = deepcopy(tf_cfg.kwargs)
         tf_cfg_kwgs_max = deepcopy(tf_cfg.kwargs)
         tf_cfg_kwgs_avg = deepcopy(tf_cfg.kwargs)
@@ -108,13 +106,6 @@ def save_each_transform(cfg: ImageTransformsConfig, original_frame, output_dir, 
 
 @draccus.wrap()
 def visualize_image_transforms(cfg: DatasetConfig, output_dir: Path = OUTPUT_DIR, n_examples: int = 5):
-    """可视化给定配置的图像变换效果。
-
-    Args:
-        cfg: 数据集配置，包含图像变换设置。
-        output_dir: 保存可视化结果的输出目录。
-        n_examples: 要生成的变换示例数量。
-    """
     dataset = LeRobotDataset(
         repo_id=cfg.repo_id,
         episodes=cfg.episodes,
@@ -125,10 +116,10 @@ def visualize_image_transforms(cfg: DatasetConfig, output_dir: Path = OUTPUT_DIR
     output_dir = output_dir / cfg.repo_id.split("/")[-1]
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 从第 1 个片段的第 1 个相机获取第 1 帧
+    # Get 1st frame from 1st camera of 1st episode
     original_frame = dataset[0][dataset.meta.camera_keys[0]]
     to_pil(original_frame).save(output_dir / "original_frame.png", quality=100)
-    print("\n原始帧已保存至：")
+    print("\nOriginal frame saved to:")
     print(f"    {output_dir / 'original_frame.png'}.")
 
     save_all_transforms(cfg.image_transforms, original_frame, output_dir, n_examples)

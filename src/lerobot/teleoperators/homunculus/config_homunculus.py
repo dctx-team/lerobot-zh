@@ -22,17 +22,11 @@ from ..config import TeleoperatorConfig
 @TeleoperatorConfig.register_subclass("homunculus_glove")
 @dataclass
 class HomunculusGloveConfig(TeleoperatorConfig):
-    """Homunculus 手套配置。
-
-    该配置类用于设置 Homunculus 遥操作手套的连接参数。
-    """
-
-    port: str  # 连接手套的端口
-    side: str  # "left" / "right" (左/右)
-    baud_rate: int = 115_200  # 波特率，默认 115200
+    port: str  # Port to connect to the glove
+    side: str  # "left" / "right"
+    baud_rate: int = 115_200
 
     def __post_init__(self):
-        """初始化后验证参数。"""
         if self.side not in ["right", "left"]:
             raise ValueError(self.side)
 
@@ -40,10 +34,5 @@ class HomunculusGloveConfig(TeleoperatorConfig):
 @TeleoperatorConfig.register_subclass("homunculus_arm")
 @dataclass
 class HomunculusArmConfig(TeleoperatorConfig):
-    """Homunculus 机械臂配置。
-
-    该配置类用于设置 Homunculus 遥操作机械臂的连接参数。
-    """
-
-    port: str  # 连接机械臂的端口
-    baud_rate: int = 115_200  # 波特率，默认 115200
+    port: str  # Port to connect to the arm
+    baud_rate: int = 115_200

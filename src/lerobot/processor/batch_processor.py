@@ -15,20 +15,19 @@
 # limitations under the License.
 
 """
-此脚本定义了用于向环境转换的各个组件添加批次维度的处理器步骤。
+This script defines processor steps for adding a batch dimension to various components of an environment transition.
 
-这些步骤旨在处理动作、观测和补充数据，通过添加前导维度使它们适合批处理。
-这是将数据输入神经网络模型之前的常见要求。
+These steps are designed to process actions, observations, and complementary data, making them suitable for batch processing by adding a leading dimension. This is a common requirement before feeding data into a neural network model.
 """
 
 from dataclasses import dataclass, field
 
 from torch import Tensor
 
-from lerobot.configs.types import PipelineFeatureType, PolicyFeature
+from lerobot.configs import PipelineFeatureType, PolicyFeature
+from lerobot.types import EnvTransition, PolicyAction
 from lerobot.utils.constants import OBS_ENV_STATE, OBS_IMAGE, OBS_IMAGES, OBS_STATE
 
-from .core import EnvTransition, PolicyAction
 from .pipeline import (
     ComplementaryDataProcessorStep,
     ObservationProcessorStep,
@@ -43,20 +42,20 @@ from .pipeline import (
 @ProcessorStepRegistry.register(name="to_batch_processor_action")
 class AddBatchDimensionActionStep(PolicyActionProcessorStep):
     """
-    处理器步骤：向一维张量动作添加批次维度。
+    Processor step to add a batch dimension to a 1D tensor action.
 
-    这对于从单个动作样本创建大小为1的批次很有用。
+    This is useful for creating a batch of size 1 from a single action sample.
     """
 
     def action(self, action: PolicyAction) -> PolicyAction:
         """
-        如果动作是一维张量，则添加批次维度。
+        Adds a batch dimension to the action if it's a 1D tensor.
 
         Args:
-            action: 动作张量。
+            action: The action tensor.
 
         Returns:
-            添加了批次维度的动作张量。
+            The action tensor with an added batch dimension.
         """
         if action.dim() != 1:
             return action
@@ -66,15 +65,15 @@ class AddBatchDimensionActionStep(PolicyActionProcessorStep):
         self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
     ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
         """
-        返回未更改的输入特征。
+        Returns the input features unchanged.
 
-        添加批次维度不会改变特征定义。
+        Adding a batch dimension does not alter the feature definition.
 
         Args:
-            features: 策略特征字典。
+            features: A dictionary of policy features.
 
         Returns:
-            原始的策略特征字典。
+            The original dictionary of policy features.
         """
         return features
 
@@ -83,38 +82,38 @@ class AddBatchDimensionActionStep(PolicyActionProcessorStep):
 @ProcessorStepRegistry.register(name="to_batch_processor_observation")
 class AddBatchDimensionObservationStep(ObservationProcessorStep):
     """
-    处理器步骤：向观测添加批次维度。
+    Processor step to add a batch dimension to observations.
 
-    它处理不同类型的观测：
-    - 状态向量（一维张量）。
-    - 单个图像（三维张量）。
-    - 多个图像的字典（三维张量）。
+    It handles different types of observations:
+    - State vectors (1D tensors).
+    - Single images (3D tensors).
+    - Dictionaries of multiple images (3D tensors).
     """
 
     def observation(self, observation: dict[str, Tensor]) -> dict[str, Tensor]:
         """
-        向观测字典中基于张量的观测添加批次维度。
+        Adds a batch dimension to tensor-based observations in the observation dictionary.
 
         Args:
-            observation: 观测字典。
+            observation: The observation dictionary.
 
         Returns:
-            张量已添加批次维度的观测字典。
+            The observation dictionary with batch dimensions added to tensors.
         """
-        # 处理状态观测 - 如果是 1D，则添加批次维度
+        # Process state observations - add batch dim if 1D
         for state_key in [OBS_STATE, OBS_ENV_STATE]:
             if state_key in observation:
                 state_value = observation[state_key]
                 if isinstance(state_value, Tensor) and state_value.dim() == 1:
                     observation[state_key] = state_value.unsqueeze(0)
 
-        # 处理单个图像观测 - 如果是 3D，则添加批次维度
+        # Process single image observation - add batch dim if 3D
         if OBS_IMAGE in observation:
             image_value = observation[OBS_IMAGE]
             if isinstance(image_value, Tensor) and image_value.dim() == 3:
                 observation[OBS_IMAGE] = image_value.unsqueeze(0)
 
-        # 处理多个图像观测 - 如果是 3D，则添加批次维度
+        # Process multiple image observations - add batch dim if 3D
         for key, value in observation.items():
             if key.startswith(f"{OBS_IMAGES}.") and isinstance(value, Tensor) and value.dim() == 3:
                 observation[key] = value.unsqueeze(0)
@@ -124,15 +123,15 @@ class AddBatchDimensionObservationStep(ObservationProcessorStep):
         self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
     ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
         """
-        返回未更改的输入特征。
+        Returns the input features unchanged.
 
-        添加批次维度不会改变特征定义。
+        Adding a batch dimension does not alter the feature definition.
 
         Args:
-            features: 策略特征字典。
+            features: A dictionary of policy features.
 
         Returns:
-            原始的策略特征字典。
+            The original dictionary of policy features.
         """
         return features
 
@@ -141,36 +140,36 @@ class AddBatchDimensionObservationStep(ObservationProcessorStep):
 @ProcessorStepRegistry.register(name="to_batch_processor_complementary_data")
 class AddBatchDimensionComplementaryDataStep(ComplementaryDataProcessorStep):
     """
-    处理器步骤：向补充数据字段添加批次维度。
+    Processor step to add a batch dimension to complementary data fields.
 
-    处理特定的键，如'task'、'index'和'task_index'，使它们成为批处理的。
-    - 'task'（字符串）包装在列表中。
-    - 'index'和'task_index'（零维张量）获得批次维度。
+    Handles specific keys like 'task', 'index', and 'task_index' to make them batched.
+    - 'task' (str) is wrapped in a list.
+    - 'index' and 'task_index' (0D tensors) get a batch dimension.
     """
 
     def complementary_data(self, complementary_data: dict) -> dict:
         """
-        向补充数据字典中的特定字段添加批次维度。
+        Adds a batch dimension to specific fields in the complementary data dictionary.
 
         Args:
-            complementary_data: 补充数据字典。
+            complementary_data: The complementary data dictionary.
 
         Returns:
-            已添加批次维度的补充数据字典。
+            The complementary data dictionary with batch dimensions added.
         """
-        # 处理任务字段 - 将字符串包装在列表中以添加批次维度
+        # Process task field - wrap string in list to add batch dimension
         if "task" in complementary_data:
             task_value = complementary_data["task"]
             if isinstance(task_value, str):
                 complementary_data["task"] = [task_value]
 
-        # 处理索引字段 - 如果是 0D，则添加批次维度
+        # Process index field - add batch dim if 0D
         if "index" in complementary_data:
             index_value = complementary_data["index"]
             if isinstance(index_value, Tensor) and index_value.dim() == 0:
                 complementary_data["index"] = index_value.unsqueeze(0)
 
-        # 处理 task_index 字段 - 如果是 0D，则添加批次维度
+        # Process task_index field - add batch dim if 0D
         if "task_index" in complementary_data:
             task_index_value = complementary_data["task_index"]
             if isinstance(task_index_value, Tensor) and task_index_value.dim() == 0:
@@ -181,15 +180,15 @@ class AddBatchDimensionComplementaryDataStep(ComplementaryDataProcessorStep):
         self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
     ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
         """
-        返回未更改的输入特征。
+        Returns the input features unchanged.
 
-        添加批次维度不会改变特征定义。
+        Adding a batch dimension does not alter the feature definition.
 
         Args:
-            features: 策略特征字典。
+            features: A dictionary of policy features.
 
         Returns:
-            原始的策略特征字典。
+            The original dictionary of policy features.
         """
         return features
 
@@ -198,15 +197,15 @@ class AddBatchDimensionComplementaryDataStep(ComplementaryDataProcessorStep):
 @ProcessorStepRegistry.register(name="to_batch_processor")
 class AddBatchDimensionProcessorStep(ProcessorStep):
     """
-    一个复合处理器步骤，向整个环境转换添加批次维度。
+    A composite processor step that adds a batch dimension to the entire environment transition.
 
-    此步骤结合了动作、观测和补充数据的各个处理器，
-    从单实例转换创建批处理转换（批次大小为1）。
+    This step combines individual processors for actions, observations, and complementary data
+    to create a batched transition (batch size 1) from a single-instance transition.
 
     Attributes:
-        to_batch_action_processor: 动作组件的处理器。
-        to_batch_observation_processor: 观测组件的处理器。
-        to_batch_complementary_data_processor: 补充数据组件的处理器。
+        to_batch_action_processor: Processor for the action component.
+        to_batch_observation_processor: Processor for the observation component.
+        to_batch_complementary_data_processor: Processor for the complementary data component.
     """
 
     to_batch_action_processor: AddBatchDimensionActionStep = field(
@@ -221,13 +220,13 @@ class AddBatchDimensionProcessorStep(ProcessorStep):
 
     def __call__(self, transition: EnvTransition) -> EnvTransition:
         """
-        将批处理过程应用于环境转换的所有相关部分。
+        Applies the batching process to all relevant parts of an environment transition.
 
         Args:
-            transition: 要处理的环境转换。
+            transition: The environment transition to process.
 
         Returns:
-            已添加批次维度的环境转换。
+            The environment transition with a batch dimension added.
         """
         if transition[TransitionKey.ACTION] is not None:
             transition = self.to_batch_action_processor(transition)
@@ -241,15 +240,15 @@ class AddBatchDimensionProcessorStep(ProcessorStep):
         self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
     ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
         """
-        返回未更改的输入特征。
+        Returns the input features unchanged.
 
-        添加批次维度不会改变特征定义。
+        Adding a batch dimension does not alter the feature definition.
 
         Args:
-            features: 策略特征字典。
+            features: A dictionary of policy features.
 
         Returns:
-            原始的策略特征字典。
+            The original dictionary of policy features.
         """
-        # 注意：在转换特征时，我们忽略批次维度
+        # NOTE: We ignore the batch dimension when transforming features
         return features

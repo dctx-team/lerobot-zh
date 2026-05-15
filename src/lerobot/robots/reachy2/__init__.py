@@ -14,20 +14,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Reachy2机器人模块
-
-该模块提供了Reachy2类人机器人的配置类和控制接口。
-Reachy2是一款具有双臂、颈部和天线的表达性人形机器人平台。
-导出包括关节组定义（左臂、右臂、颈部、天线）和速度配置。
-"""
-
 from .configuration_reachy2 import Reachy2RobotConfig
 from .robot_reachy2 import (
-    REACHY2_ANTENNAS_JOINTS,  # Reachy2天线关节
-    REACHY2_L_ARM_JOINTS,     # Reachy2左臂关节
-    REACHY2_NECK_JOINTS,      # Reachy2颈部关节
-    REACHY2_R_ARM_JOINTS,     # Reachy2右臂关节
-    REACHY2_VEL,              # Reachy2速度配置
+    REACHY2_ANTENNAS_JOINTS,
+    REACHY2_L_ARM_JOINTS,
+    REACHY2_NECK_JOINTS,
+    REACHY2_R_ARM_JOINTS,
+    REACHY2_VEL,
     Reachy2Robot,
 )
+
+__all__ = [
+    "REACHY2_ANTENNAS_JOINTS",
+    "REACHY2_L_ARM_JOINTS",
+    "REACHY2_NECK_JOINTS",
+    "REACHY2_R_ARM_JOINTS",
+    "REACHY2_VEL",
+    "Reachy2Robot",
+    "Reachy2RobotConfig",
+]

@@ -1,25 +1,20 @@
 #!/usr/bin/env python
 
-# 版权所有 2025 HuggingFace Inc. 团队。保留所有权利。
+# Copyright 2025 The HuggingFace Inc. team. All rights reserved.
 #
-# 根据 Apache 许可证 2.0 版本（"许可证"）授权；
-# 除非遵守许可证，否则您不得使用此文件。
-# 您可以在以下位置获取许可证副本：
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 #
-# 除非适用法律要求或书面同意，根据许可证分发的软件
-# 是按"原样"分发的，不附带任何明示或暗示的担保或条件。
-# 请参阅许可证以了解许可证下的特定语言权限和
-# 限制。
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-from .batch_processor import AddBatchDimensionProcessorStep
-from .converters import (
-    batch_to_transition,
-    create_transition,
-    transition_to_batch,
-)
-from .core import (
+from lerobot.types import (
     EnvAction,
     EnvTransition,
     PolicyAction,
@@ -27,8 +22,25 @@ from .core import (
     RobotObservation,
     TransitionKey,
 )
+
+from .batch_processor import AddBatchDimensionProcessorStep
+from .converters import (
+    batch_to_transition,
+    create_transition,
+    from_tensor_to_numpy,
+    identity_transition,
+    observation_to_transition,
+    policy_action_to_transition,
+    robot_action_observation_to_transition,
+    robot_action_to_transition,
+    transition_to_batch,
+    transition_to_observation,
+    transition_to_policy_action,
+    transition_to_robot_action,
+)
 from .delta_action_processor import MapDeltaActionToRobotActionStep, MapTensorToDeltaActionDictStep
 from .device_processor import DeviceProcessorStep
+from .env_processor import IsaaclabArenaProcessorStep, LiberoProcessorStep
 from .factory import (
     make_default_processors,
     make_default_robot_action_processor,
@@ -43,12 +55,13 @@ from .hil_processor import (
     AddTeleopActionAsComplimentaryDataStep,
     AddTeleopEventsAsInfoStep,
     GripperPenaltyProcessorStep,
+    GymHILAdapterProcessorStep,
     ImageCropResizeProcessorStep,
     InterventionActionProcessorStep,
     RewardClassifierProcessorStep,
     TimeLimitProcessorStep,
 )
-from .joint_observations_processor import JointVelocityProcessorStep, MotorCurrentProcessorStep
+from .newline_task_processor import NewLineTaskProcessorStep
 from .normalize_processor import NormalizerProcessorStep, UnnormalizerProcessorStep, hotswap_stats
 from .observation_processor import VanillaObservationProcessorStep
 from .pipeline import (
@@ -73,8 +86,14 @@ from .policy_robot_bridge import (
     PolicyActionToRobotActionProcessorStep,
     RobotActionToPolicyActionProcessorStep,
 )
-from .rename_processor import RenameObservationsProcessorStep
-from .tokenizer_processor import TokenizerProcessorStep
+from .relative_action_processor import (
+    AbsoluteActionsProcessorStep,
+    RelativeActionsProcessorStep,
+    to_absolute_actions,
+    to_relative_actions,
+)
+from .rename_processor import RenameObservationsProcessorStep, rename_stats
+from .tokenizer_processor import ActionTokenizerProcessorStep, TokenizerProcessorStep
 
 __all__ = [
     "ActionProcessorStep",
@@ -83,24 +102,35 @@ __all__ = [
     "ComplementaryDataProcessorStep",
     "batch_to_transition",
     "create_transition",
+    "from_tensor_to_numpy",
+    "identity_transition",
+    "observation_to_transition",
+    "policy_action_to_transition",
+    "robot_action_observation_to_transition",
+    "robot_action_to_transition",
+    "transition_to_observation",
+    "transition_to_policy_action",
+    "transition_to_robot_action",
     "DeviceProcessorStep",
     "DoneProcessorStep",
     "EnvAction",
     "EnvTransition",
+    "GymHILAdapterProcessorStep",
     "GripperPenaltyProcessorStep",
     "hotswap_stats",
     "IdentityProcessorStep",
     "ImageCropResizeProcessorStep",
     "InfoProcessorStep",
     "InterventionActionProcessorStep",
-    "JointVelocityProcessorStep",
     "make_default_processors",
     "make_default_teleop_action_processor",
     "make_default_robot_action_processor",
     "make_default_robot_observation_processor",
+    "AbsoluteActionsProcessorStep",
+    "RelativeActionsProcessorStep",
     "MapDeltaActionToRobotActionStep",
     "MapTensorToDeltaActionDictStep",
-    "MotorCurrentProcessorStep",
+    "NewLineTaskProcessorStep",
     "NormalizerProcessorStep",
     "Numpy2TorchActionProcessorStep",
     "ObservationProcessorStep",
@@ -113,20 +143,26 @@ __all__ = [
     "RobotAction",
     "RobotActionProcessorStep",
     "RobotObservation",
+    "rename_stats",
     "RenameObservationsProcessorStep",
     "RewardClassifierProcessorStep",
     "RewardProcessorStep",
     "DataProcessorPipeline",
+    "IsaaclabArenaProcessorStep",
+    "LiberoProcessorStep",
     "TimeLimitProcessorStep",
     "AddBatchDimensionProcessorStep",
     "RobotProcessorPipeline",
     "TokenizerProcessorStep",
+    "ActionTokenizerProcessorStep",
     "Torch2NumpyActionProcessorStep",
     "RobotActionToPolicyActionProcessorStep",
     "PolicyActionToRobotActionProcessorStep",
     "transition_to_batch",
     "TransitionKey",
     "TruncatedProcessorStep",
+    "to_absolute_actions",
+    "to_relative_actions",
     "UnnormalizerProcessorStep",
     "VanillaObservationProcessorStep",
 ]

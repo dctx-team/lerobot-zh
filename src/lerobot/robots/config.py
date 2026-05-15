@@ -21,25 +21,12 @@ import draccus
 
 @dataclass(kw_only=True)
 class RobotConfig(draccus.ChoiceRegistry, abc.ABC):
-    """机器人配置基类。
-
-    用于定义机器人配置的抽象基类，包含通用的配置字段。
-    """
     # Allows to distinguish between different robots of the same type
-    # 用于区分同一类型的不同机器人
     id: str | None = None
     # Directory to store calibration file
-    # 存储校准文件的目录
     calibration_dir: Path | None = None
 
     def __post_init__(self):
-        """初始化后验证配置。
-
-        验证相机配置中的必需属性（宽度、高度、帧率）是否已设置。
-
-        Raises:
-            ValueError: 如果相机配置缺少必需的属性。
-        """
         if hasattr(self, "cameras") and self.cameras:
             for _, config in self.cameras.items():
                 for attr in ["width", "height", "fps"]:
@@ -50,9 +37,4 @@ class RobotConfig(draccus.ChoiceRegistry, abc.ABC):
 
     @property
     def type(self) -> str:
-        """获取机器人配置的类型名称。
-
-        Returns:
-            str: 机器人配置的类型标识符。
-        """
         return self.get_choice_name(self.__class__)

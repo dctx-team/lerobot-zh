@@ -1,37 +1,37 @@
-# 机器人与遥操作的 Processor
+# Processors for Robots and Teleoperators
 
-本指南展示如何构建和修改连接遥操作器（例如手机）到机器人和数据集的处理管道。Pipeline 标准化不同 action/observation 空间之间的转换，因此您可以交换遥操作器和机器人而无需重写粘合代码。
+This guide shows how to build and modify processing pipelines that connect teleoperators (e.g., phone) to robots and datasets. Pipelines standardize conversions between different action/observation spaces so you can swap teleops and robots without rewriting glue code.
 
-我们使用手机到 SO-100 follower 的示例来说明，但相同的模式适用于其他机器人。
+We use the Phone to SO‑100 follower examples for concreteness, but the same patterns apply to other robots.
 
-**您将学到什么**
+**What you'll learn**
 
-- 绝对 vs. 相对 EE 控制：每种的含义、权衡以及如何为您的任务选择。
-- 三管道模式：如何映射 遥操作 action → 数据集 action → 机器人命令，以及 机器人 observation → 数据集 observation。
-- 适配器（`to_transition` / `to_output`）：这些如何将原始字典转换为 `EnvTransition` 并返回以减少样板代码。
-- 数据集特征契约：步骤如何通过 `transform_features(...)` 声明特征，以及如何聚合/合并它们以进行记录。
-- 选择表示：何时存储关节、绝对 EE 姿态或相对 EE 增量——以及这如何影响训练。
-- Pipeline 自定义指导：如何安全地交换机器人/URDF，并调整边界、步长和选项（如 IK 初始化）。
+- Absolute vs. relative EE control: What each means, trade‑offs, and how to choose for your task.
+- Three-pipeline pattern: How to map teleop actions → dataset actions → robot commands, and robot observations → dataset observations.
+- Adapters (`to_transition` / `to_output`): How these convert raw dicts to `EnvTransition` and back to reduce boilerplate.
+- Dataset feature contracts: How steps declare features via `transform_features(...)`, and how to aggregate/merge them for recording.
+- Choosing a representation: When to store joints, absolute EE poses, or relative EE deltas—and how that affects training.
+- Pipeline customization guidance: How to swap robots/URDFs safely and tune bounds, step sizes, and options like IK initialization.
 
-### 绝对 vs 相对 EE 控制
+### Absolute vs relative EE control
 
-本指南中的示例使用绝对末端执行器（EE）姿态，因为它们易于理解。在实践中，相对 EE 增量或关节位置通常作为学习特征更受欢迎。
+The examples in this guide use absolute end effector (EE) poses because they are easy to reason about. In practice, relative EE deltas or joint position are often preferred as learning features.
 
-使用 processor，您可以选择要用于策略的学习特征。这可以是关节位置/速度、绝对 EE 或相对 EE 位置。您还可以选择存储其他特征，例如关节扭矩、电机电流等。
+With processors, you choose the learning features you want to use for your policy. This could be joints positions/velocities, absolute EE, or relative EE positions. You can also choose to store other features, such as joint torques, motor currents, etc.
 
-## 三个 Pipeline
+## Three pipelines
 
-我们经常组合三个 pipeline。根据您的设置，如果 action 和 observation 空间已经匹配，某些可以为空。
-这些 pipeline 中的每一个都处理不同 action 和 observation 空间之间的不同转换。以下是每个 pipeline 的快速说明。
+We often compose three pipelines. Depending on your setup, some can be empty if action and observation spaces already match.
+Each of these pipelines handle different conversions between different action and observation spaces. Below is a quick explanation of each pipeline.
 
-1. Pipeline 1：遥操作 action 空间 → 数据集 action 空间（手机姿态 → EE 目标）
-2. Pipeline 2：数据集 action 空间 → 机器人命令空间（EE 目标 → 关节）
-3. Pipeline 3：机器人 observation 空间 → 数据集 observation 空间（关节 → EE 姿态）
+1. Pipeline 1: Teleop action space → dataset action space (phone pose → EE targets)
+2. Pipeline 2: Dataset action space → robot command space (EE targets → joints)
+3. Pipeline 3: Robot observation space → dataset observation space (joints → EE pose)
 
-以下是我们在手机到 SO-100 follower 示例中使用的三个 pipeline 的示例：
+Below is an example of the three pipelines that we use in the phone to SO-100 follower examples:
 
 ```python
-phone_to_robot_ee_pose_processor = RobotProcessorPipeline[RobotAction, RobotAction]( # 遥操作 -> 数据集 action
+phone_to_robot_ee_pose_processor = RobotProcessorPipeline[RobotAction, RobotAction]( # teleop -> dataset action
     steps=[
         MapPhoneActionToRobotAction(platform=teleop_config.phone_os),
         EEReferenceAndDelta(
@@ -46,7 +46,7 @@ phone_to_robot_ee_pose_processor = RobotProcessorPipeline[RobotAction, RobotActi
     to_output=transition_to_robot_action,
 )
 
-robot_ee_to_joints_processor = RobotProcessorPipeline[RobotAction, RobotAction]( # 数据集 action -> 机器人
+robot_ee_to_joints_processor = RobotProcessorPipeline[RobotAction, RobotAction]( # dataset action -> robot
     steps=[
         InverseKinematicsEEToJoints(
             kinematics=kinematics_solver, motor_names=list(robot.bus.motors.keys()), initial_guess_current_joints=True,
@@ -56,7 +56,7 @@ robot_ee_to_joints_processor = RobotProcessorPipeline[RobotAction, RobotAction](
     to_output=transition_to_robot_action,
 )
 
-robot_joints_to_ee_pose = RobotProcessorPipeline[RobotObservation, RobotObservation]( # 机器人 obs -> 数据集 obs
+robot_joints_to_ee_pose = RobotProcessorPipeline[RobotObservation, RobotObservation]( # robot obs -> dataset obs
     steps=[
         ForwardKinematicsJointsToEE(kinematics=kinematics_solver, motor_names=list(robot.bus.motors.keys()))
     ],
@@ -65,86 +65,87 @@ robot_joints_to_ee_pose = RobotProcessorPipeline[RobotObservation, RobotObservat
 )
 ```
 
-## 为什么使用 to_transition / to_output
+## Why to_transition / to_output
 
-要从机器人/遥操作器转换到 pipeline 并返回，我们使用 `to_transition` 和 `to_output` pipeline 适配器。
-它们标准化转换以减少样板代码，并在机器人和遥操作器的原始字典与 pipeline 的 `EnvTransition` 格式之间架起桥梁。
-在手机到 SO-100 follower 示例中，我们使用以下适配器：
+To convert from robot/teleoperator to pipeline and back, we use the `to_transition` and `to_output` pipeline adapters.
+They standardize conversions to reduce boilerplate code, and form the bridge between the robot and teleoperators raw dictionaries and the pipeline’s `EnvTransition` format.
+In the phone to SO-100 follower examples we use the following adapters:
 
-- `robot_action_to_transition`：将遥操作 action 字典转换为 pipeline transition。
-- `transition_to_robot_action`：将 pipeline transition 转换为机器人 action 字典。
-- `observation_to_transition`：将机器人 observation 字典转换为 pipeline transition。
-- `transition_to_observation`：将 pipeline transition 转换为 observation 字典。
+- `robot_action_to_transition`: transforms the teleop action dict to a pipeline transition.
+- `transition_to_robot_action`: transforms the pipeline transition to a robot action dict.
+- `observation_to_transition`: transforms the robot observation dict to a pipeline transition.
+- `transition_to_observation`: transforms the pipeline transition to a observation dict.
 
-查看 [src/lerobot/processor/converters.py](https://github.com/huggingface/lerobot/blob/main/src/lerobot/processor/converters.py) 了解更多详细信息。
+Checkout [src/lerobot/processor/converters.py](https://github.com/huggingface/lerobot/blob/main/src/lerobot/processor/converters.py) for more details.
 
-## 数据集特征契约
+## Dataset feature contracts
 
-数据集特征由保存在数据集中的键确定。每个步骤都可以在名为 `transform_features(...)` 的契约中声明它修改的特征。一旦构建了处理器，处理器就可以使用 `aggregate_pipeline_dataset_features()` 聚合所有这些特征，并使用 `combine_feature_dicts(...)` 合并多个特征字典。
+Dataset features are determined by the keys saved in the dataset. Each step can declare what features it modifies in a contract called `transform_features(...)`. Once you build a processor, the processor can then aggregate all of these features with `aggregate_pipeline_dataset_features()` and merge multiple feature dicts with `combine_feature_dicts(...)`.
 
-以下是我们在手机到 SO-100 follower 示例中如何使用 `transform_features` 方法声明特征的示例：
+Below is and example of how we declare features with the `transform_features` method in the phone to SO-100 follower examples:
 
 ```python
-def transform_features(
-    self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
-) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
-    # 我们只在数据集中使用 ee 姿态，所以我们不需要关节位置
-    for n in self.motor_names:
-        features[PipelineFeatureType.ACTION].pop(f"{n}.pos", None)
-    # 我们指定此步骤的数据集特征，这些特征将存储在数据集中
-    for k in ["x", "y", "z", "wx", "wy", "wz", "gripper_pos"]:
-        features[PipelineFeatureType.ACTION][f"ee.{k}"] = PolicyFeature(
-            type=FeatureType.STATE, shape=(1,)
-        )
-    return features
+    def transform_features(
+        self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
+    ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
+        # We only use the ee pose in the dataset, so we don't need the joint positions
+        for n in self.motor_names:
+            features[PipelineFeatureType.ACTION].pop(f"{n}.pos", None)
+        # We specify the dataset features of this step that we want to be stored in the dataset
+        for k in ["x", "y", "z", "wx", "wy", "wz", "gripper_pos"]:
+            features[PipelineFeatureType.ACTION][f"ee.{k}"] = PolicyFeature(
+                type=FeatureType.STATE, shape=(1,)
+            )
+        return features
 ```
 
-在这里，我们声明在此步骤中修改的 PolicyFeature，因此当我们运行 processor 时，我们知道可以期望什么特征。然后可以聚合这些特征并用于创建数据集特征。
+Here we declare what PolicyFeatures we modify in this step, so we know what features we can expect when we run the processor. These features can then be aggregated and used to create the dataset features.
 
-以下是我们在手机到 SO-100 记录示例中如何聚合和合并特征的示例：
+Below is an example of how we aggregate and merge features in the phone to SO-100 record example:
 
 ```python
 features=combine_feature_dicts(
-    # 运行 pipeline 的特征契约
-    # 这告诉您在 pipeline 步骤之后特征会是什么样子
-    aggregate_pipeline_dataset_features(
-        pipeline=phone_to_robot_ee_pose_processor,
-        initial_features=create_initial_features(action=phone.action_features), # <- 我们可以期望的 Action 特征，这些来自我们的遥操作设备（手机）和 action processor
-        use_videos=True,
+        # Run the feature contract of the pipelines
+        # This tells you how the features would look like after the pipeline steps
+        aggregate_pipeline_dataset_features(
+            pipeline=phone_to_robot_ee_pose_processor,
+            initial_features=create_initial_features(action=phone.action_features), # <- Action features we can expect, these come from our teleop device (phone) and action processor
+            use_videos=True,
+        ),
+        aggregate_pipeline_dataset_features(
+            pipeline=robot_joints_to_ee_pose,
+            initial_features=create_initial_features(observation=robot.observation_features), # <- Observation features we can expect, these come from our robot and observation processor
+            use_videos=True,
+            patterns=["observation.state.ee"], # <- Here you could optionally filter the features we want to store in the dataset, with a specific pattern
+
+        ),
     ),
-    aggregate_pipeline_dataset_features(
-        pipeline=robot_joints_to_ee_pose,
-        initial_features=create_initial_features(observation=robot.observation_features), # <- 我们可以期望的 Observation 特征，这些来自我们的机器人和 observation processor
-        use_videos=True,
-        patterns=["observation.state.ee"], # <- 在这里，您可以选择性地过滤我们想要存储在数据集中的特征，使用特定模式
-    ),
-),
 ```
 
-工作原理：
+How it works:
 
-- `aggregate_pipeline_dataset_features(...)`：在 pipeline 中应用 `transform_features` 并按模式过滤（当 `use_videos=True` 时包括图像，当指定 `patterns` 时包括状态特征）。
-- `combine_feature_dicts(...)`：合并多个特征字典。
-- 使用 `record_loop(...)` 记录使用 `build_dataset_frame(...)` 构建与 `dataset.features` 一致的 frame，然后我们调用 `add_frame(...)` 将 frame 添加到数据集。
+- `aggregate_pipeline_dataset_features(...)`: applies `transform_features` across the pipeline and filters by patterns (images included when `use_videos=True`, and state features included when `patterns` is specified).
+- `combine_feature_dicts(...)`: combine multiple feature dicts.
+- Recording with `record_loop(...)` uses `build_dataset_frame(...)` to build frames consistent with `dataset.features` before we call `add_frame(...)` to add the frame to the dataset.
 
-## 自定义机器人 Pipeline 的指导
+## Guidance when customizing robot pipelines
 
-您可以存储以下任何特征作为您的 action/observation 空间：
+You can store any of the following features as your action/observation space:
 
-- 关节位置
-- 绝对 EE 姿态
-- 相对 EE 增量
-- 其他特征：关节速度、扭矩等
+- Joint positions
+- Absolute EE poses
+- Relative EE deltas
+- Other features: joint velocity, torques, etc.
 
-选择您想要用于策略 action 和 observation 空间的内容，并相应地配置/修改 pipeline 和步骤。
+Pick what you want to use for your policy action and observation space and configure/modify the pipelines and steps accordingly.
 
-### 不同的机器人
+### Different robots
 
-- 您可以轻松重用 pipeline，例如，要将另一个机器人与手机遥操作一起使用，修改示例并交换机器人 `RobotKinematics`（URDF）和 `motor_names` 以将您自己的机器人与手机遥操作一起使用。此外，您应该确保 `target_frame_name` 指向您的夹爪/手腕。
+- You can easily reuse pipelines, for example to use another robot with phone teleop, modify the examples and swap the robot `RobotKinematics` (URDF) and `motor_names` to use your own robot with Phone teleop. Additionally you should ensure `target_frame_name` points to your gripper/wrist.
 
-### 安全第一
+### Safety first
 
-- 更改 pipeline 时，从严格的边界开始，在使用真实机器人时实施安全步骤。
-- 建议首先从仿真开始，然后转到真实机器人。
+- When changing pipelines, start with tight bounds, implement safety steps when working with real robots.
+- Its advised to start with simulation first and then move to real robots.
 
-就是这样！我们希望本指南能帮助您开始自定义机器人 pipeline。如果您在任何时候遇到任何问题，请加入我们的 [Discord 社区](https://discord.com/invite/s3KuuzsPFb) 获取支持。
+Thats it! We hope this guide helps you get started with customizing your robot pipelines, If you run into any issues at any point, jump into our [Discord community](https://discord.com/invite/s3KuuzsPFb) for support.

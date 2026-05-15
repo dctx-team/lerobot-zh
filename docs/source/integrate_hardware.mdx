@@ -1,47 +1,43 @@
-# 集成您自己的硬件
+# Bring Your Own Hardware
 
-本教程将说明如何将您自己的机器人设计集成到 LeRobot 生态系统中，并使其能够访问我们的所有工具（数据收集、控制管道、策略训练和推理）。
+This tutorial will explain how to integrate your own robot design into the LeRobot ecosystem and have it access all of our tools (data collection, control pipelines, policy training and inference).
 
-为此，我们在 LeRobot 中提供了 [`Robot`](https://github.com/huggingface/lerobot/blob/main/src/lerobot/robots/robot.py) 基类，它为物理机器人集成指定了标准接口。让我们看看如何实现它。
+To that end, we provide the [`Robot`](https://github.com/huggingface/lerobot/blob/main/src/lerobot/robots/robot.py) base class in the LeRobot which specifies a standard interface for physical robot integration. Let's see how to implement it.
 
-## 前置条件
+## Prerequisites
 
-- 您自己的机器人，具有通信接口（例如串口、CAN、TCP）
-- 能够以编程方式读取传感器数据和发送电机命令的方法，例如制造商的 SDK 或 API，或您自己的协议实现。
-- 在您的环境中安装了 LeRobot。请参阅我们的[安装指南](./installation)。
+- Your own robot which exposes a communication interface (e.g. serial, CAN, TCP)
+- A way to read sensor data and send motor commands programmatically, e.g. manufacturer's SDK or API, or your own protocol implementation.
+- LeRobot installed in your environment. Follow our [Installation Guide](./installation).
 
-## 选择您的电机
+## Choose your motors
 
-如果您使用的是 Feetech 或 Dynamixel 电机，LeRobot 提供了内置的总线接口：
+If you're using Feetech or Dynamixel motors, LeRobot provides built-in bus interfaces:
 
-- [`FeetechMotorsBus`](https://github.com/huggingface/lerobot/blob/main/src/lerobot/motors/feetech/feetech.py) – 用于控制 Feetech 舵机
-- [`DynamixelMotorsBus`](https://github.com/huggingface/lerobot/blob/main/src/lerobot/motors/dynamixel/dynamixel.py) – 用于控制 Dynamixel 舵机
+- [`FeetechMotorsBus`](https://github.com/huggingface/lerobot/blob/main/src/lerobot/motors/feetech/feetech.py) – for controlling Feetech servos
+- [`DynamixelMotorsBus`](https://github.com/huggingface/lerobot/blob/main/src/lerobot/motors/dynamixel/dynamixel.py) – for controlling Dynamixel servos
 
-请参考 [`MotorsBus`](https://github.com/huggingface/lerobot/blob/main/src/lerobot/motors/motors_bus.py) 抽象类了解其 API。
-要了解如何使用它的良好示例，您可以查看我们自己的 [SO101 follower 实现](https://github.com/huggingface/lerobot/blob/main/src/lerobot/robots/so101_follower/so101_follower.py)
+Please refer to the [`MotorsBus`](https://github.com/huggingface/lerobot/blob/main/src/lerobot/motors/motors_bus.py) abstract class to learn about its API.
+For a good example of how it can be used, you can have a look at our own [SO101 follower implementation](https://github.com/huggingface/lerobot/blob/main/src/lerobot/robots/so_follower/so101_follower/so101_follower.py)
 
-如果兼容，请使用这些。否则，您需要找到或编写一个 Python 接口（本教程不涵盖）：
+Use these if compatible. Otherwise, you'll need to find or write a Python interface (not covered in this tutorial):
 
-- 找到 Python 中现有的 SDK（或使用 C/C++ 绑定）
-- 或实现基本的通信包装器（例如，通过 pyserial、socket 或 CANopen）
+- Find an existing SDK in Python (or use bindings to C/C++)
+- Or implement a basic communication wrapper (e.g., via pyserial, socket, or CANopen)
 
-您并不孤单——许多社区贡献使用自定义板或固件！
+You're not alone—many community contributions use custom boards or firmware!
 
-对于 Feetech 和 Dynamixel，我们目前支持这些舵机：
-- Feetech：
-  - STS & SMS 系列（协议 0）：`sts3215`、`sts3250`、`sm8512bl`
-  - SCS 系列（协议 1）：`scs0009`
-- Dynamixel（仅协议 2.0）：`xl330-m077`、`xl330-m288`、`xl430-w250`、`xm430-w350`、`xm540-w270`、`xc430-w150`
+For Feetech and Dynamixel, we currently support these servos: - Feetech: - STS & SMS series (protocol 0): `sts3215`, `sts3250`, `sm8512bl` - SCS series (protocol 1): `scs0009` - Dynamixel (protocol 2.0 only): `xl330-m077`, `xl330-m288`, `xl430-w250`, `xm430-w350`, `xm540-w270`, `xc430-w150`
 
-如果您使用的 Feetech 或 Dynamixel 舵机不在此列表中，您可以在 [Feetech 表](https://github.com/huggingface/lerobot/blob/main/src/lerobot/motors/feetech/tables.py)或 [Dynamixel 表](https://github.com/huggingface/lerobot/blob/main/src/lerobot/motors/dynamixel/tables.py)中添加它们。根据型号，这将需要您添加特定于型号的信息。但在大多数情况下，不应该有很多要添加的内容。
+If you are using Feetech or Dynamixel servos that are not in this list, you can add those in the [Feetech table](https://github.com/huggingface/lerobot/blob/main/src/lerobot/motors/feetech/tables.py) or [Dynamixel table](https://github.com/huggingface/lerobot/blob/main/src/lerobot/motors/dynamixel/tables.py). Depending on the model, this will require you to add model-specific information. In most cases though, there shouldn't be a lot of additions to do.
 
-在下一节中，我们将使用 `FeetechMotorsBus` 作为示例的电机接口。如有必要，请替换并适配您的电机。
+In the next sections, we'll use a `FeetechMotorsBus` as the motors interface for the examples. Replace it and adapt to your motors if necessary.
 
-## 步骤 1：继承 `Robot` 接口
+## Step 1: Subclass the `Robot` Interface
 
-您首先需要为机器人指定配置类和字符串标识符（`name`）。如果您的机器人有特殊需求，您希望能够轻松更改，应该在这里设置（例如端口/地址、波特率）。
+You’ll first need to specify the config class and a string identifier (`name`) for your robot. If your robot has special needs that you'd like to be able to change easily, it should go here (e.g. port/address, baudrate).
 
-在这里，我们将为机器人添加端口名称和默认的一个相机：
+Here, we'll add the port name and one camera by default for our robot:
 
 <!-- prettier-ignore-start -->
 ```python
@@ -69,11 +65,11 @@ class MyCoolRobotConfig(RobotConfig):
 ```
 <!-- prettier-ignore-end -->
 
-参阅[相机教程](./cameras)了解如何检测和添加相机。
+[Cameras tutorial](./cameras) to understand how to detect and add your camera.
 
-接下来，我们将创建实际的机器人类，它继承自 `Robot`。这个抽象类定义了一个契约，您必须遵循它才能使您的机器人可以与 LeRobot 工具的其余部分一起使用。
+Next, we'll create our actual robot class which inherits from `Robot`. This abstract class defines a contract you must follow for your robot to be usable with the rest of the LeRobot tools.
 
-在这里，我们将创建一个带有一个相机的简单 5 自由度机器人。它可以是一个简单的机械臂，但请注意，`Robot` 抽象类不对机器人的外形做任何假设。您可以在设计新机器人时放飞想象！
+Here we'll create a simple 5-DoF robot with one camera. It could be a simple arm but notice that the `Robot` abstract class does not assume anything on your robot's form factor. You can let you imagination run wild when designing new robots!
 
 <!-- prettier-ignore-start -->
 ```python
@@ -103,18 +99,18 @@ class MyCoolRobot(Robot):
 ```
 <!-- prettier-ignore-end -->
 
-## 步骤 2：定义观测和动作特征
+## Step 2: Define Observation and Action Features
 
-这两个属性定义了机器人与使用它的工具（如数据收集或学习管道）之间的_接口契约_。
+These two properties define the _interface contract_ between your robot and tools that consume it (such as data collection or learning pipelines).
 
 > [!WARNING]
-> 请注意，即使机器人尚未连接，这些属性也必须可调用，因此避免依赖运行时硬件状态来定义它们。
+> Note that these properties must be callable even if the robot is not yet connected, so avoid relying on runtime hardware state to define them.
 
 ### `observation_features`
 
-此属性应返回一个字典，描述机器人传感器输出的结构。键与 `get_observation()` 返回的内容匹配，值描述形状（用于数组/图像）或类型（用于简单值）。
+This property should return a dictionary describing the structure of sensor outputs from your robot. The keys match what `get_observation()` returns, and the values describe either the shape (for arrays/images) or the type (for simple values).
 
-我们带有一个相机的 5 自由度机械臂的示例：
+Example for our 5-DoF arm with one camera:
 
 <!-- prettier-ignore-start -->
 ```python
@@ -140,13 +136,13 @@ def observation_features(self) -> dict:
 ```
 <!-- prettier-ignore-end -->
 
-在这种情况下，观测由一个简单的字典组成，存储每个电机的位置和一个相机图像。
+In this case, observations consist of a simple dict storing each motor's position and a camera image.
 
 ### `action_features`
 
-此属性描述机器人通过 `send_action()` 期望的命令。同样，键必须与预期的输入格式匹配，值定义每个命令的形状/类型。
+This property describes the commands your robot expects via `send_action()`. Again, keys must match the expected input format, and values define the shape/type of each command.
 
-在这里，我们只是使用与 `observation_features` 相同的关节本体感觉特征（`self._motors_ft`）：发送的动作将只是每个电机的目标位置。
+Here, we simply use the same joints proprioceptive features (`self._motors_ft`) as with `observation_features`: the action sent will simply the goal position for each motor.
 
 <!-- prettier-ignore-start -->
 ```python
@@ -155,13 +151,13 @@ def action_features(self) -> dict:
 ```
 <!-- prettier-ignore-end -->
 
-## 步骤 3：处理连接和断开
+## Step 3: Handle Connection and Disconnection
 
-这些方法应处理与硬件的通信的打开和关闭（例如串口、CAN 接口、USB 设备、相机）。
+These methods should handle opening and closing communication with your hardware (e.g. serial ports, CAN interfaces, USB devices, cameras).
 
 ### `is_connected`
 
-此属性应简单地反映与机器人硬件的通信已建立。当此属性为 `True` 时，应该可以使用 `get_observation()` 和 `send_action()` 读取和写入硬件。
+This property should simply reflect that communication with the robot's hardware is established. When this property is `True`, it should be possible to read and write to the hardware using `get_observation()` and `send_action()`.
 
 <!-- prettier-ignore-start -->
 ```python
@@ -173,7 +169,7 @@ def is_connected(self) -> bool:
 
 ### `connect()`
 
-此方法应与硬件建立通信。此外，如果您的机器人需要校准且尚未校准，它应该默认启动校准过程。如果您的机器人需要一些特定的配置，也应该在这里调用。
+This method should establish communication with the hardware. Moreover, if your robot needs calibration and is not calibrated, it should start a calibration procedure by default. If your robot needs some specific configuration, this should also be called here.
 
 <!-- prettier-ignore-start -->
 ```python
@@ -191,9 +187,9 @@ def connect(self, calibrate: bool = True) -> None:
 
 ### `disconnect()`
 
-此方法应优雅地终止与硬件的通信：释放任何相关资源（线程或进程），关闭端口等。
+This method should gracefully terminate communication with the hardware: free any related resources (threads or processes), close ports, etc.
 
-在这里，我们已经在 `MotorsBus` 和 `Camera` 类中处理了这个问题，所以我们只需要调用它们自己的 `disconnect()` 方法：
+Here, we already handle this in our `MotorsBus` and `Camera` classes so we just need to call their own `disconnect()` methods:
 
 <!-- prettier-ignore-start -->
 ```python
@@ -204,11 +200,11 @@ def disconnect(self) -> None:
 ```
 <!-- prettier-ignore-end -->
 
-## 步骤 4：支持校准和配置
+## Step 4: Support Calibration and Configuration
 
-LeRobot 支持自动保存和加载校准数据。这对关节偏移、零位或传感器对齐很有用。
+LeRobot supports saving and loading calibration data automatically. This is useful for joint offsets, zero positions, or sensor alignment.
 
-> 请注意，根据您的硬件，这可能不适用。如果是这种情况，您可以简单地将这些方法留空：
+> Note that depending on your hardware, this may not apply. If that's the case, you can simply leave these methods as no-ops:
 
 <!-- prettier-ignore-start -->
 ```python
@@ -223,7 +219,7 @@ def calibrate(self) -> None:
 
 ### `is_calibrated`
 
-这应该反映您的机器人是否已加载所需的校准。
+This should reflect whether your robot has the required calibration loaded.
 
 <!-- prettier-ignore-start -->
 ```python
@@ -235,12 +231,12 @@ def is_calibrated(self) -> bool:
 
 ### `calibrate()`
 
-校准的目标有两个：
+The goal of the calibration is twofold:
 
-- 了解每个电机的物理运动范围，以便仅在此范围内发送命令。
-- 将原始电机位置归一化为合理的连续值（例如百分比、度数），而不是依赖于所使用的特定电机且不会在其他地方复制的任意离散值。
+- Know the physical range of motion of each motors in order to only send commands within this range.
+- Normalize raw motors positions to sensible continuous values (e.g. percentages, degrees) instead of arbitrary discrete value dependant on the specific motor used that will not replicate elsewhere.
 
-它应该实现校准逻辑（如果相关）并更新 `self.calibration` 字典。如果您使用的是 Feetech 或 Dynamixel 电机，我们的总线接口已经包含了帮助实现此功能的方法。
+It should implement the logic for calibration (if relevant) and update the `self.calibration` dictionary. If you are using Feetech or Dynamixel motors, our bus interfaces already include methods to help with this.
 
 <!-- prettier-ignore-start -->
 ```python
@@ -276,7 +272,7 @@ def calibrate(self) -> None:
 
 ### `configure()`
 
-使用此方法为硬件设置任何配置（舵机控制模式、控制器增益等）。这通常应该在连接时运行，并且是幂等的。
+Use this to set up any configuration for your hardware (servos control modes, controller gains, etc.). This should usually be run at connection time and be idempotent.
 
 <!-- prettier-ignore-start -->
 ```python
@@ -291,13 +287,13 @@ def configure(self) -> None:
 ```
 <!-- prettier-ignore-end -->
 
-## 步骤 5：实现传感器读取和动作发送
+## Step 5: Implement Sensors Reading and Action Sending
 
-这些是最重要的运行时函数：核心 I/O 循环。
+These are the most important runtime functions: the core I/O loop.
 
 ### `get_observation()`
 
-从机器人返回一个传感器值字典。这些通常包括电机状态、相机帧、各种传感器等。在 LeRobot 框架中，这些观测是将被输入到策略中以预测要采取的动作的内容。字典键和结构必须与 `observation_features` 匹配。
+Returns a dictionary of sensor values from the robot. These typically include motor states, camera frames, various sensors, etc. In the LeRobot framework, these observations are what will be fed to a policy in order to predict the actions to take. The dictionary keys and structure must match `observation_features`.
 
 <!-- prettier-ignore-start -->
 ```python
@@ -305,11 +301,11 @@ def get_observation(self) -> dict[str, Any]:
     if not self.is_connected:
         raise ConnectionError(f"{self} is not connected.")
 
-    # 读取机械臂位置
+    # Read arm position
     obs_dict = self.bus.sync_read("Present_Position")
     obs_dict = {f"{motor}.pos": val for motor, val in obs_dict.items()}
 
-    # 从相机捕获图像
+    # Capture images from cameras
     for cam_key, cam in self.cameras.items():
         obs_dict[cam_key] = cam.async_read()
 
@@ -319,88 +315,88 @@ def get_observation(self) -> dict[str, Any]:
 
 ### `send_action()`
 
-接收与 `action_features` 匹配的字典，并将其发送到硬件。您可以添加安全限制（截断、平滑）并返回实际发送的内容。
+Takes a dictionary that matches `action_features`, and sends it to your hardware. You can add safety limits (clipping, smoothing) and return what was actually sent.
 
-为简单起见，我们在这个示例中不会添加对动作的任何修改。
+For simplicity, we won't be adding any modification of the actions in our example here.
 
 <!-- prettier-ignore-start -->
 ```python
 def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
     goal_pos = {key.removesuffix(".pos"): val for key, val in action.items()}
 
-    # 向机械臂发送目标位置
+    # Send goal position to the arm
     self.bus.sync_write("Goal_Position", goal_pos)
 
     return action
 ```
 <!-- prettier-ignore-end -->
 
-## 添加遥操作器
+## Adding a Teleoperator
 
-为了实现遥操作设备，我们还提供了一个 [`Teleoperator`](https://github.com/huggingface/lerobot/blob/main/src/lerobot/teleoperators/teleoperator.py) 基类。这个类与 `Robot` 基类非常相似，也不对外形做任何假设。
+For implementing teleoperation devices, we also provide a [`Teleoperator`](https://github.com/huggingface/lerobot/blob/main/src/lerobot/teleoperators/teleoperator.py) base class. This class is very similar to the `Robot` base class and also doesn't assume anything on form factor.
 
-主要区别在于 I/O 函数：遥操作器允许您通过 `get_action` 产生动作，并可以通过 `send_feedback` 接收反馈动作。反馈可以是遥操作设备上任何可控的东西，可以帮助控制它的人理解发送动作的后果。比如主臂上的运动/力反馈、游戏手柄控制器上的振动等。要实现遥操作器，您可以遵循同样的教程并适配这两个方法。
+The main differences are in the I/O functions: a teleoperator allows you to produce action via `get_action` and can receive feedback actions via `send_feedback`. Feedback could be anything controllable on the teleoperation device that could help the person controlling it understand the consequences of the actions sent. Think motion/force feedback on a leader arm, vibrations on a gamepad controller for example. To implement a teleoperator, you can follow this same tutorial and adapt it for these two methods.
 
-## 使用您自己的 `LeRobot` 设备
+## Using Your Own `LeRobot` Devices 🔌
 
-您可以通过创建一个单独的、可安装的 Python 包来轻松扩展 `lerobot`，使其包含您自己的自定义硬件——无论是相机、机器人还是遥操作设备。如果您遵循一些简单的约定，`lerobot` 命令行工具（如 `lerobot-teleop` 和 `lerobot-record`）将**自动发现并集成您的创作**，而无需对 `lerobot` 源代码进行任何更改。
+You can easily extend `lerobot` with your own custom hardware—be it a camera, robot, or teleoperation device—by creating a separate, installable Python package. If you follow a few simple conventions, the `lerobot` command-line tools (like `lerobot-teleop` and `lerobot-record`) will **automatically discover and integrate your creations** without requiring any changes to the `lerobot` source code.
 
-本指南概述了您的插件必须遵循的约定。
+This guide outlines the conventions your plugin must follow.
 
-### 4 个核心约定
+### The 4 Core Conventions
 
-为确保您的自定义设备可被发现，您必须遵守以下四个规则。
+To ensure your custom device is discoverable, you must adhere to the following four rules.
 
-#### 1. 创建具有特定前缀的可安装包
+#### 1\. Create an Installable Package with a Specific Prefix
 
-您的项目必须是一个标准的、可安装的 Python 包。至关重要的是，您的包名称（如 `pyproject.toml` 或 `setup.py` 中定义的）必须以以下前缀之一开头：
+Your project must be a standard, installable Python package. Crucially, the name of your package (as defined in `pyproject.toml` or `setup.py`) must begin with one of these prefixes:
 
-- `lerobot_robot_` 用于机器人。
-- `lerobot_camera_` 用于相机。
-- `lerobot_teleoperator_` 用于遥操作设备。
+- `lerobot_robot_` for a robot.
+- `lerobot_camera_` for a camera.
+- `lerobot_teleoperator_` for a teleoperation device.
 
-这个前缀系统是 `lerobot` 在 Python 环境中自动找到您的插件的方式。
+This prefix system is how `lerobot` automatically finds your plugin in the Python environment.
 
-#### 2. 遵循 `SomethingConfig`/`Something` 命名模式
+#### 2\. Follow the `SomethingConfig`/`Something` Naming Pattern
 
-您的设备实现类必须以其配置类命名，只需删除 `Config` 后缀即可。
+Your device's implementation class must be named after its configuration class, simply by removing the `Config` suffix.
 
-- **配置类：** `MyAwesomeTeleopConfig`
-- **设备类：** `MyAwesomeTeleop`
+- **Config Class:** `MyAwesomeTeleopConfig`
+- **Device Class:** `MyAwesomeTeleop`
 
-#### 3. 将文件放在可预测的结构中
+#### 3\. Place Your Files in a Predictable Structure
 
-设备类（`MyAwesomeTeleop`）必须位于相对于其配置类（`MyAwesomeTeleopConfig`）可预测的模块中。`lerobot` 将自动在以下位置搜索：
+The device class (`MyAwesomeTeleop`) must be located in a predictable module relative to its configuration class (`MyAwesomeTeleopConfig`). `lerobot` will automatically search in these locations:
 
-- 在与配置类**相同的模块**中。
-- 在以设备命名的**子模块**中（例如 `my_awesome_teleop.py`）。
+- In the **same module** as the config class.
+- In a **submodule named after the device** (e.g., `my_awesome_teleop.py`).
 
-推荐的最简单的结构是将它们放在同一目录中的单独的、命名清晰的文件中。
+The recommended and simplest structure is to place them in separate, clearly named files within the same directory.
 
-#### 4. 在 `__init__.py` 中暴露类
+#### 4\. Expose Classes in `__init__.py`
 
-您的包的 `__init__.py` 文件应该导入并暴露配置和设备类，使它们易于访问。
+Your package's `__init__.py` file should import and expose both the configuration and the device classes, making them easily accessible.
 
-### 整合在一起：完整示例
+### Putting It All Together: A Complete Example
 
-让我们创建一个名为 `my_awesome_teleop` 的新遥操作器。
+Let's create a new teleoperator called `my_awesome_teleop`.
 
-#### 目录结构
+#### Directory Structure
 
-以下是项目文件夹应该看起来的样子。包名 `lerobot_teleoperator_my_awesome_teleop` 遵循**约定 #1**。
+Here is what the project folder should look like. The package name, `lerobot_teleoperator_my_awesome_teleop`, follows **Convention \#1**.
 
 ```
 lerobot_teleoperator_my_awesome_teleop/
-├── pyproject.toml # （或 setup.py）列出 lerobot 作为依赖项
+├── pyproject.toml # (or setup.py) lists lerobot as a dependency
 └── lerobot_teleoperator_my_awesome_teleop/
     ├── __init__.py
     ├── config_my_awesome_teleop.py
     └── my_awesome_teleop.py
 ```
 
-#### 文件内容
+#### File Contents
 
-- **`config_my_awesome_teleop.py`**：定义配置类。注意 `Config` 后缀（**约定 #2**）。
+- **`config_my_awesome_teleop.py`**: Defines the configuration class. Note the `Config` suffix (**Convention \#2**).
 
   ```python
   from dataclasses import dataclass
@@ -410,11 +406,11 @@ lerobot_teleoperator_my_awesome_teleop/
   @TeleoperatorConfig.register_subclass("my_awesome_teleop")
   @dataclass
   class MyAwesomeTeleopConfig(TeleoperatorConfig):
-      # 您的配置字段在这里
+      # Your configuration fields go here
       port: str = "192.168.1.1"
   ```
 
-- **`my_awesome_teleop.py`**：实现设备。类名 `MyAwesomeTeleop` 与其配置类名匹配（**约定 #2**）。此文件结构遵守**约定 #3**。
+- **`my_awesome_teleop.py`**: Implements the device. The class name `MyAwesomeTeleop` matches its config class name (**Convention \#2**). This file structure adheres to **Convention \#3**.
 
   ```python
   from lerobot.teleoperators.teleoperator import Teleoperator
@@ -429,52 +425,52 @@ lerobot_teleoperator_my_awesome_teleop/
           super().__init__(config)
           self.config = config
 
-      # 您的设备逻辑（例如 connect）在这里
+      # Your device logic (e.g., connect) goes here
   ```
 
-- **`__init__.py`**：暴露关键类（**约定 #4**）。
+- **`__init__.py`**: Exposes the key classes (**Convention \#4**).
 
   ```python
   from .config_my_awesome_teleop import MyAwesomeTeleopConfig
   from .my_awesome_teleop import MyAwesomeTeleop
   ```
 
-### 安装和使用
+### Installation and Usage
 
-1. **在您的 Python 环境中安装新插件。** 您可以使用 `pip` 的可编辑模式或从 PyPi 安装本地插件包。
+1.  **Install your new plugin in your Python environment.** You can install your local plugin package using `pip`'s editable mode or from PyPi.
 
     ```bash
-    # 本地安装
-    # 导航到您的插件根目录并安装它
+    # Locally
+    # Navigate to your plugin's root directory and install it
     cd lerobot_teleoperator_my_awesome_teleop
     pip install -e .
 
-    # 从 PyPi 安装
+    # From PyPi
     pip install lerobot_teleoperator_my_awesome_teleop
     ```
 
-2. **直接从命令行使用它。** 现在，您可以通过引用其类型来使用自定义设备。
+2.  **Use it directly from the command line.** Now, you can use your custom device by referencing its type.
 
     ```bash
     lerobot-teleoperate --teleop.type=my_awesome_teleop \
-    # 其他参数
+    # other arguments
     ```
 
-就是这样！您的自定义设备现在已完全集成。
+And that's it\! Your custom device is now fully integrated.
 
-### 正在寻找示例？
+### Looking for an example ?
 
-查看社区的这两个包：
+Check out these two packages from the community:
 
 - https://github.com/SpesRobotics/lerobot-robot-xarm
 - https://github.com/SpesRobotics/lerobot-teleoperator-teleop
 
-## 总结
+## Wrapping Up
 
-一旦您的机器人类完成，您就可以利用 LeRobot 生态系统：
+Once your robot class is complete, you can leverage the LeRobot ecosystem:
 
-- 使用可用的遥操作器控制您的机器人或直接集成您的遥操作设备
-- 记录训练数据并可视化它
-- 将其集成到 RL 或模仿学习管道中
+- Control your robot with available teleoperators or integrate directly your teleoperating device
+- Record training data and visualize it
+- Integrate it into RL or imitation learning pipelines
 
-不要犹豫在我们的 [Discord](https://discord.gg/s3KuuzsPFb) 上向社区寻求帮助
+Don't hesitate to reach out to the community for help on our [Discord](https://discord.gg/s3KuuzsPFb) 🤗

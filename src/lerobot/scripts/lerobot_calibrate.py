@@ -13,9 +13,11 @@
 # limitations under the License.
 
 """
-帮助重新校准设备（机器人或遥操作器）的工具。
+Helper to recalibrate your device (robot or teleoperator).
 
-示例：
+Requires: pip install 'lerobot[hardware]'
+
+Example:
 
 ```shell
 lerobot-calibrate \
@@ -31,70 +33,71 @@ from pprint import pformat
 
 import draccus
 
-from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
-from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig  # noqa: F401
+from lerobot.cameras.opencv import OpenCVCameraConfig  # noqa: F401
+from lerobot.cameras.realsense import RealSenseCameraConfig  # noqa: F401
 from lerobot.robots import (  # noqa: F401
     Robot,
     RobotConfig,
+    bi_openarm_follower,
+    bi_so_follower,
     hope_jr,
     koch_follower,
     lekiwi,
     make_robot_from_config,
-    so100_follower,
-    so101_follower,
+    omx_follower,
+    openarm_follower,
+    so_follower,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
+    bi_openarm_leader,
+    bi_so_leader,
     homunculus,
     koch_leader,
     make_teleoperator_from_config,
-    so100_leader,
-    so101_leader,
+    omx_leader,
+    openarm_leader,
+    openarm_mini,
+    so_leader,
+    unitree_g1,
 )
+from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.utils import init_logging
 
 
 @dataclass
 class CalibrateConfig:
-    # 遥操作器配置，如果不校准遥操作器则为 None
     teleop: TeleoperatorConfig | None = None
-    # 机器人配置，如果不校准机器人则为 None
     robot: RobotConfig | None = None
 
     def __post_init__(self):
-        # 确保只选择遥操作器或机器人其中之一
         if bool(self.teleop) == bool(self.robot):
             raise ValueError("Choose either a teleop or a robot.")
 
-        # 将选中的设备（机器人或遥操作器）赋值给 device
         self.device = self.robot if self.robot else self.teleop
 
 
 @draccus.wrap()
 def calibrate(cfg: CalibrateConfig):
-    # 初始化日志系统
     init_logging()
-    # 记录配置信息
     logging.info(pformat(asdict(cfg)))
 
-    # 根据设备类型创建相应的实例
     if isinstance(cfg.device, RobotConfig):
-        # 从配置创建机器人实例
         device = make_robot_from_config(cfg.device)
     elif isinstance(cfg.device, TeleoperatorConfig):
-        # 从配置创建遥操作器实例
         device = make_teleoperator_from_config(cfg.device)
 
-    # 连接设备但不进行校准
     device.connect(calibrate=False)
-    # 执行设备校准
-    device.calibrate()
-    # 断开设备连接
-    device.disconnect()
+
+    try:
+        device.calibrate()
+    finally:
+        device.disconnect()
 
 
 def main():
+    register_third_party_plugins()
     calibrate()
 
 

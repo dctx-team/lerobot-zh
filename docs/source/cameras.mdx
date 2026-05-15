@@ -1,20 +1,30 @@
-# 相机
+# Cameras
 
-LeRobot 提供多种视频捕获选项，包括手机相机、笔记本电脑内置相机、外部网络摄像头和 Intel RealSense 相机。为了高效地记录来自大多数相机的帧，您可以使用 `OpenCVCamera` 或 `RealSenseCamera` 类。有关 `OpenCVCamera` 类的其他兼容性详细信息，请参阅 [Video I/O with OpenCV Overview](https://docs.opencv.org/4.x/d0/da7/videoio_overview.html)。
+LeRobot offers multiple options for video capture:
 
-### 查找您的相机
+| Class             | Supported Cameras                   |
+| ----------------- | ----------------------------------- |
+| `OpenCVCamera`    | Phone, built-in laptop, USB webcams |
+| `ZMQCamera`       | Network-connected cameras           |
+| `RealSenseCamera` | Intel RealSense (with depth)        |
+| `Reachy2Camera`   | Reachy 2 robot cameras              |
 
-要实例化相机，您需要一个相机标识符。如果重启计算机或重新插拔相机，此标识符可能会更改，这种行为主要取决于您的操作系统。
+> [!TIP]
+> For `OpenCVCamera` compatibility details, see the [Video I/O with OpenCV Overview](https://docs.opencv.org/4.x/d0/da7/videoio_overview.html).
 
-要查找连接到系统的相机索引，请运行以下脚本：
+### Find your camera
+
+Every camera requires a unique identifier to be instantiated, allowing you to distinguish between multiple connected devices.
+
+`OpenCVCamera` and `RealSenseCamera` support auto-discovery. Run the command below to list available devices and their identifiers. Note that these identifiers may change after rebooting your computer or re-plugging the camera, depending on your operating system.
 
 ```bash
-lerobot-find-cameras opencv # 或 realsense 用于 Intel Realsense 相机
+lerobot-find-cameras opencv # or realsense for Intel Realsense cameras
 ```
 
-如果您连接了两个相机，输出将如下所示：
+The output will look something like this if you have two cameras connected:
 
-```
+```bash
 --- Detected Cameras ---
 Camera #0:
   Name: OpenCV Camera @ 0
@@ -31,25 +41,48 @@ Camera #0:
 ```
 
 > [!WARNING]
-> 在 `macOS` 中使用 Intel RealSense 相机时，您可能会遇到此[错误](https://github.com/IntelRealSense/librealsense/issues/12307)：`Error finding RealSense cameras: failed to set power state`，可以通过使用 `sudo` 权限运行相同的命令来解决。请注意，在 `macOS` 中使用 RealSense 相机不稳定。
+> When using Intel RealSense cameras in `macOS`, you could get this [error](https://github.com/IntelRealSense/librealsense/issues/12307): `Error finding RealSense cameras: failed to set power state`, this can be solved by running the same command with `sudo` permissions. Note that using RealSense cameras in `macOS` is unstable.
 
-## 使用相机
+`ZMQCamera` and `Reachy2Camera` do not support auto-discovery. They must be configured manually by providing their network address and port or robot SDK settings.
 
-以下是两个示例，演示如何使用 API。
+## Use cameras
 
-- **异步帧捕获**使用基于 OpenCV 的相机
-- **彩色和深度捕获**使用 Intel RealSense 相机
+### Frame access modes
+
+All camera classes implement three access modes for capturing frames:
+
+| Method                    | Behavior                                                                                                                                                   | Blocks?        | Best For                                 |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- | ---------------------------------------- |
+| `read()`                  | Waits for the camera hardware to return a frame. May block for a long time depending on the camera and SDK.                                                | Yes            | Simple scripts, sequential capture       |
+| `async_read(timeout_ms)`  | Returns the latest unconsumed frame from background thread. Blocks only if buffer is empty, up to `timeout_ms`. Raises `TimeoutError` if no frame arrives. | With a timeout | Control loops synchronized to camera FPS |
+| `read_latest(max_age_ms)` | Peeks at the most recent frame in buffer (may be stale). Raises `TimeoutError` if frame is older than `max_age_ms`.                                        | No             | UI visualization, logging, monitoring    |
+
+### Usage examples
+
+The following examples show how to use the camera API to configure and capture frames from different camera types.
+
+- **Blocking and non-blocking frame capture** using an OpenCV-based camera
+- **Color and depth capture** using an Intel RealSense camera
+
+> [!WARNING]
+> Failing to cleanly disconnect cameras can cause resource leaks. Use the context manager protocol to ensure automatic cleanup:
+>
+> ```python
+> with OpenCVCamera(config) as camera:
+>     ...
+> ```
+>
+> You can also call `connect()` and `disconnect()` manually, but always use a `finally` block for the latter.
 
 <hfoptions id="shell_restart">
 <hfoption id="Open CV Camera">
 
 <!-- prettier-ignore-start -->
 ```python
-from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
-from lerobot.cameras.opencv.camera_opencv import OpenCVCamera
-from lerobot.cameras.configs import ColorMode, Cv2Rotation
+from lerobot.cameras.opencv import OpenCVCamera, OpenCVCameraConfig
+from lerobot.cameras import ColorMode, Cv2Rotation
 
-# 使用所需的 FPS、分辨率、颜色模式和旋转构造 `OpenCVCameraConfig`
+# Construct an `OpenCVCameraConfig` with your desired FPS, resolution, color mode, and rotation.
 config = OpenCVCameraConfig(
     index_or_path=0,
     fps=15,
@@ -59,17 +92,31 @@ config = OpenCVCameraConfig(
     rotation=Cv2Rotation.NO_ROTATION
 )
 
-# 实例化并连接 `OpenCVCamera`，执行预热读取（默认）
-camera = OpenCVCamera(config)
-camera.connect()
+# Instantiate and connect an `OpenCVCamera`, performing a warm-up read (default).
+with OpenCVCamera(config) as camera:
 
-# 通过 `async_read(timeout_ms)` 在循环中异步读取帧
-try:
-    for i in range(10):
-        frame = camera.async_read(timeout_ms=200)
-        print(f"Async frame {i} shape:", frame.shape)
-finally:
-    camera.disconnect()
+    # Read a frame synchronously — blocks until hardware delivers a new frame
+    frame = camera.read()
+    print(f"read() call returned frame with shape:", frame.shape)
+
+    # Read a frame asynchronously with a timeout — returns the latest unconsumed frame or waits up to timeout_ms for a new one
+    try:
+        for i in range(10):
+            frame = camera.async_read(timeout_ms=200)
+            print(f"async_read call returned frame {i} with shape:", frame.shape)
+    except TimeoutError as e:
+        print(f"No frame received within timeout: {e}")
+
+    # Instantly return a frame - returns the most recent frame captured by the camera
+    try:
+        initial_frame = camera.read_latest(max_age_ms=1000)
+        for i in range(10):
+            frame = camera.read_latest(max_age_ms=1000)
+            print(f"read_latest call returned frame {i} with shape:", frame.shape)
+            print(f"Was a new frame received by the camera? {not (initial_frame == frame).any()}")
+    except TimeoutError as e:
+        print(f"Frame too old: {e}")
+
 ```
 <!-- prettier-ignore-end -->
 
@@ -78,11 +125,10 @@ finally:
 
 <!-- prettier-ignore-start -->
 ```python
-from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
-from lerobot.cameras.realsense.camera_realsense import RealSenseCamera
-from lerobot.cameras.configs import ColorMode, Cv2Rotation
+from lerobot.cameras.realsense import RealSenseCamera, RealSenseCameraConfig
+from lerobot.cameras import ColorMode, Cv2Rotation
 
-# 创建 `RealSenseCameraConfig`，指定相机的序列号并启用深度
+# Create a `RealSenseCameraConfig` specifying your camera’s serial number and enabling depth.
 config = RealSenseCameraConfig(
     serial_number_or_name="233522074606",
     fps=15,
@@ -93,11 +139,11 @@ config = RealSenseCameraConfig(
     rotation=Cv2Rotation.NO_ROTATION
 )
 
-# 使用预热读取（默认）实例化并连接 `RealSenseCamera`
+# Instantiate and connect a `RealSenseCamera` with warm-up read (default).
 camera = RealSenseCamera(config)
 camera.connect()
 
-# 通过 `read()` 捕获彩色帧，通过 `read_depth()` 捕获深度图
+# Capture a color frame via `read()` and a depth map via `read_depth()`.
 try:
     color_frame = camera.read()
     depth_map = camera.read_depth()
@@ -111,96 +157,62 @@ finally:
 </hfoption>
 </hfoptions>
 
-## 使用您的手机
+## Use your phone's camera
 
 <hfoptions id="use phone">
-<hfoption id="Mac">
+<hfoption id="iPhone & macOS">
 
-要在 macOS 上将 iPhone 用作相机，请启用连续互通相机功能：
+To use your iPhone as a camera on macOS, enable the Continuity Camera feature:
 
-- 确保您的 Mac 运行 macOS 13 或更高版本，并且您的 iPhone 使用 iOS 16 或更高版本。
-- 使用相同的 Apple ID 登录两台设备。
-- 使用 USB 线缆连接设备，或打开 Wi-Fi 和蓝牙进行无线连接。
+- Ensure your Mac is running macOS 13 or later, and your iPhone is on iOS 16 or later.
+- Sign in both devices with the same Apple ID.
+- Connect your devices with a USB cable or turn on Wi-Fi and Bluetooth for a wireless connection.
 
-有关更多详细信息，请访问 [Apple support](https://support.apple.com/en-gb/guide/mac-help/mchl77879b8a/mac)。
-
-在下一节运行相机设置脚本时，您的 iPhone 应该会自动被检测到。
+For more details, visit [Apple support](https://support.apple.com/en-gb/guide/mac-help/mchl77879b8a/mac).
 
 </hfoption>
-<hfoption id="Linux">
+<hfoption id="OBS virtual camera">
 
-如果您想在 Linux 上将手机用作相机，请按照以下步骤设置虚拟相机
+If you want to use your phone as a camera using OBS, follow these steps to set up a virtual camera.
 
-1. _安装 `v4l2loopback-dkms` 和 `v4l-utils`_。这些包是创建虚拟相机设备（`v4l2loopback`）和使用 `v4l-utils` 中的 `v4l2-ctl` 实用程序验证其设置所必需的。使用以下命令安装它们：
+1. _(Linux only) Install `v4l2loopback-dkms` and `v4l-utils`_. These packages create virtual camera devices and verify their settings. Install with:
 
-<!-- prettier-ignore-start -->
-```python
+```bash
 sudo apt install v4l2loopback-dkms v4l-utils
 ```
-<!-- prettier-ignore-end -->
 
-2. _在手机上安装 [DroidCam](https://droidcam.app)_。此应用程序适用于 iOS 和 Android。
-3. _安装 [OBS Studio](https://obsproject.com)_。此软件将帮助您管理相机馈送。使用 [Flatpak](https://flatpak.org) 安装：
+2. _Install the [DroidCam app](https://droidcam.app) on your phone_. This app is available for both iOS and Android.
+3. _Download and install [OBS Studio](https://obsproject.com)_.
+4. _Download and install the [DroidCam OBS plugin](https://droidcam.app/obs)_.
+5. _Start OBS Studio_.
 
-<!-- prettier-ignore-start -->
-```python
-flatpak install flathub com.obsproject.Studio
-```
-<!-- prettier-ignore-end -->
+6. _Add your phone as a source_. Follow the instructions [here](https://droidcam.app/obs/usage). Be sure to set the resolution to `640x480` to avoid the watermarks.
+7. _Adjust resolution settings_. In OBS Studio, go to `File > Settings > Video` or `OBS > Preferences... > Video`. Change the `Base(Canvas) Resolution` and the `Output(Scaled) Resolution` to `640x480` by manually typing it.
+8. _Start virtual camera_. In OBS Studio, follow the instructions [here](https://obsproject.com/kb/virtual-camera-guide).
+9. _Verify the virtual camera setup and resolution_.
+   - **Linux**: Use `v4l2-ctl` to list devices and check resolution:
+     ```bash
+     v4l2-ctl --list-devices  # find VirtualCam and note its /dev/videoX path
+     v4l2-ctl -d /dev/videoX --get-fmt-video  # replace with your VirtualCam path
+     ```
+     You should see `VirtualCam` listed and resolution `640x480`.
+   - **macOS**: Open Photo Booth or FaceTime and select "OBS Virtual Camera" as the input.
+   - **Windows**: The native Camera app doesn't support virtual cameras. Use a video conferencing app (Zoom, Teams) or run `lerobot-find-cameras opencv` directly to verify.
 
-4. _安装 DroidCam OBS 插件_。此插件将 DroidCam 与 OBS Studio 集成。使用以下命令安装：
+<details>
+<summary><strong>Troubleshooting</strong></summary>
 
-<!-- prettier-ignore-start -->
-```python
-flatpak install flathub com.obsproject.Studio.Plugin.DroidCam
-```
-<!-- prettier-ignore-end -->
+> The virtual camera resolution is incorrect.
 
-5. _启动 OBS Studio_。使用以下命令启动：
+Delete the virtual camera source and recreate it. The resolution cannot be changed after creation.
 
-<!-- prettier-ignore-start -->
-```python
-flatpak run com.obsproject.Studio
-```
-<!-- prettier-ignore-end -->
+> Error reading frame in background thread for OpenCVCamera(X): OpenCVCamera(X) frame width=640 or height=480 do not match configured width=1920 or height=1080.
 
-6. _将手机添加为源_。按照[此处](https://droidcam.app/obs/usage)的说明操作。确保将分辨率设置为 `640x480`。
-7. _调整分辨率设置_。在 OBS Studio 中，转到 `File > Settings > Video`。通过手动输入将 `Base(Canvas) Resolution` 和 `Output(Scaled) Resolution` 更改为 `640x480`。
-8. _启动虚拟相机_。在 OBS Studio 中，按照[此处](https://obsproject.com/kb/virtual-camera-guide)的说明操作。
-9. _验证虚拟相机设置_。使用 `v4l2-ctl` 列出设备：
+This error is caused by OBS Virtual Camera advertising a `1920x1080` resolution despite rescaling. The only fix for now is to comment out the width and height check in `_postprocess_image()`.
 
-<!-- prettier-ignore-start -->
-```python
-v4l2-ctl --list-devices
-```
-<!-- prettier-ignore-end -->
-
-您应该看到如下条目：
-
-```
-VirtualCam (platform:v4l2loopback-000):
-/dev/video1
-```
-
-10. _检查相机分辨率_。使用 `v4l2-ctl` 确保虚拟相机输出分辨率为 `640x480`。将 `/dev/video1` 更改为来自 `v4l2-ctl --list-devices` 输出的虚拟相机端口。
-
-<!-- prettier-ignore-start -->
-```python
-v4l2-ctl -d /dev/video1 --get-fmt-video
-```
-<!-- prettier-ignore-end -->
-
-您应该看到如下条目：
-
-```
->>> Format Video Capture:
->>>	Width/Height      : 640/480
->>>	Pixel Format      : 'YUYV' (YUYV 4:2:2)
-```
-
-故障排除：如果分辨率不正确，您将不得不删除虚拟相机端口并重试，因为它无法更改。
-
-如果一切设置正确，您可以继续本教程的其余部分。
+</details>
 
 </hfoption>
 </hfoptions>
+
+If everything is set up correctly, your phone will appear as a standard OpenCV camera and can be used with `OpenCVCamera`.

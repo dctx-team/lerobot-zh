@@ -13,12 +13,13 @@
 # limitations under the License.
 import abc
 import builtins
+import dataclasses
 import logging
 import os
 from importlib.resources import files
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TypeVar
+from typing import TypedDict, TypeVar, Unpack
 
 import packaging
 import safetensors
@@ -28,17 +29,22 @@ from huggingface_hub.errors import HfHubHTTPError
 from safetensors.torch import load_model as load_model_as_safetensor, save_model as save_model_as_safetensor
 from torch import Tensor, nn
 
-from lerobot.configs.policies import PreTrainedConfig
+from lerobot.configs import PreTrainedConfig
 from lerobot.configs.train import TrainPipelineConfig
-from lerobot.policies.utils import log_model_loading_keys
 from lerobot.utils.hub import HubMixin
+
+from .utils import log_model_loading_keys
 
 T = TypeVar("T", bound="PreTrainedPolicy")
 
 
+class ActionSelectKwargs(TypedDict, total=False):
+    noise: Tensor | None
+
+
 class PreTrainedPolicy(nn.Module, HubMixin, abc.ABC):
     """
-    策略模型的基类。
+    Base class for policy models.
     """
 
     config_class: None
@@ -48,8 +54,8 @@ class PreTrainedPolicy(nn.Module, HubMixin, abc.ABC):
         super().__init__()
         if not isinstance(config, PreTrainedConfig):
             raise ValueError(
-                f"`{self.__class__.__name__}(config)` 中的参数 config 应该是 "
-                "`PreTrainedConfig` 类的实例。要从预训练模型创建模型，请使用 "
+                f"Parameter config in `{self.__class__.__name__}(config)` should be an instance of class "
+                "`PreTrainedConfig`. To create a model from a pretrained model use "
                 f"`model = {self.__class__.__name__}.from_pretrained(PRETRAINED_MODEL_NAME)`"
             )
         self.config = config
@@ -57,9 +63,9 @@ class PreTrainedPolicy(nn.Module, HubMixin, abc.ABC):
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         if not getattr(cls, "config_class", None):
-            raise TypeError(f"类 {cls.__name__} 必须定义 'config_class'")
+            raise TypeError(f"Class {cls.__name__} must define 'config_class'")
         if not getattr(cls, "name", None):
-            raise TypeError(f"类 {cls.__name__} 必须定义 'name'")
+            raise TypeError(f"Class {cls.__name__} must define 'name'")
 
     def _save_pretrained(self, save_directory: Path) -> None:
         self.config._save_pretrained(save_directory)
@@ -83,8 +89,8 @@ class PreTrainedPolicy(nn.Module, HubMixin, abc.ABC):
         **kwargs,
     ) -> T:
         """
-        默认情况下，策略被设置为评估模式，使用 `policy.eval()`（停用 dropout 模块）。
-        要训练它，您应该首先使用 `policy.train()` 将其设置回训练模式。
+        The policy is set in evaluation mode by default using `policy.eval()` (dropout modules are
+        deactivated). To train it, you should first set it back in training mode with `policy.train()`.
         """
         if config is None:
             config = PreTrainedConfig.from_pretrained(
@@ -101,7 +107,7 @@ class PreTrainedPolicy(nn.Module, HubMixin, abc.ABC):
         model_id = str(pretrained_name_or_path)
         instance = cls(config, **kwargs)
         if os.path.isdir(model_id):
-            print("从本地目录加载权重")
+            print("Loading weights from local directory")
             model_file = os.path.join(model_id, SAFETENSORS_SINGLE_FILE)
             policy = cls._load_as_safetensor(instance, model_file, config.device, strict)
         else:
@@ -120,7 +126,7 @@ class PreTrainedPolicy(nn.Module, HubMixin, abc.ABC):
                 policy = cls._load_as_safetensor(instance, model_file, config.device, strict)
             except HfHubHTTPError as e:
                 raise FileNotFoundError(
-                    f"在 HuggingFace Hub 的 {model_id} 中未找到 {SAFETENSORS_SINGLE_FILE}"
+                    f"{SAFETENSORS_SINGLE_FILE} not found on the HuggingFace Hub in {model_id}"
                 ) from e
 
         policy.to(config.device)
@@ -129,24 +135,24 @@ class PreTrainedPolicy(nn.Module, HubMixin, abc.ABC):
 
     @classmethod
     def _load_as_safetensor(cls, model: T, model_file: str, map_location: str, strict: bool) -> T:
-        # 创建基础参数字典
+        # Create base kwargs
         kwargs = {"strict": strict}
 
-        # 为支持设备参数的新版本添加设备参数
+        # Add device parameter for newer versions that support it
         if packaging.version.parse(safetensors.__version__) >= packaging.version.parse("0.4.3"):
             kwargs["device"] = map_location
 
-        # 使用适当的参数加载模型
+        # Load the model with appropriate kwargs
         missing_keys, unexpected_keys = load_model_as_safetensor(model, model_file, **kwargs)
         log_model_loading_keys(missing_keys, unexpected_keys)
 
-        # 对于旧版本，如果需要，手动移动到设备
+        # For older versions, manually move to device if needed
         if "device" not in kwargs and map_location != "cpu":
             logging.warning(
-                "在您的 safetensors 版本中，不原生支持在 'cpu' 以外的设备上加载模型权重。"
-                "这意味着模型首先在 'cpu' 上加载，然后复制到设备。"
-                "这会导致加载时间变慢。"
-                "请将 safetensors 更新到 0.4.3 或更高版本以提高性能。"
+                "Loading model weights on other devices than 'cpu' is not supported natively in your version of safetensors."
+                " This means that the model is loaded on 'cpu' first and then copied to the device."
+                " This leads to a slower loading time."
+                " Please update safetensors to version 0.4.3 or above for improved performance."
             )
             model.to(map_location)
         return model
@@ -154,85 +160,95 @@ class PreTrainedPolicy(nn.Module, HubMixin, abc.ABC):
     @abc.abstractmethod
     def get_optim_params(self) -> dict:
         """
-        返回要传递给优化器的策略特定参数字典。
+        Returns the policy-specific parameters dict to be passed on to the optimizer.
         """
         raise NotImplementedError
 
     @abc.abstractmethod
     def reset(self):
-        """每当环境重置时调用。
+        """To be called whenever the environment is reset.
 
-        执行诸如清除缓存之类的操作。
+        Does things like clearing caches.
         """
         raise NotImplementedError
 
-    # TODO(aliberts, rcadene): 拆分为 'forward' 和 'compute_loss'？
+    # TODO(aliberts, rcadene): split into 'forward' and 'compute_loss'?
     @abc.abstractmethod
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict | None]:
-        """前向传播方法。
+        """_summary_
 
         Args:
-            batch (dict[str, Tensor]): 输入批次数据。
+            batch (dict[str, Tensor]): _description_
 
         Returns:
-            tuple[Tensor, dict | None]: 损失以及可能的其他信息。除了损失是 Tensor 之外，
-                所有其他项应该是便于日志记录的原生 Python 类型。
+            tuple[Tensor, dict | None]: The loss and potentially other information. Apart from the loss which
+                is a Tensor, all other items should be logging-friendly, native Python types.
         """
         raise NotImplementedError
 
     @abc.abstractmethod
-    def predict_action_chunk(self, batch: dict[str, Tensor]) -> Tensor:
-        """返回给定观察的动作块（用于动作分块策略），可能是批处理模式。
+    def predict_action_chunk(self, batch: dict[str, Tensor], **kwargs: Unpack[ActionSelectKwargs]) -> Tensor:
+        """Returns the action chunk (for action chunking policies) for a given observation, potentially in batch mode.
 
-        使用动作分块的子类应在 `select_action` 中使用此方法来形成缓存以供选择的动作块。
+        Child classes using action chunking should use this method within `select_action` to form the action chunk
+        cached for selection.
         """
         raise NotImplementedError
 
     @abc.abstractmethod
-    def select_action(self, batch: dict[str, Tensor]) -> Tensor:
-        """返回要在环境中运行的一个动作（可能是批处理模式）。
+    def select_action(self, batch: dict[str, Tensor], **kwargs: Unpack[ActionSelectKwargs]) -> Tensor:
+        """Return one action to run in the environment (potentially in batch mode).
 
-        当模型使用观察历史或输出动作序列时，此方法负责缓存。
+        When the model uses a history of observations, or outputs a sequence of actions, this method deals
+        with caching.
         """
         raise NotImplementedError
 
     def push_model_to_hub(
         self,
         cfg: TrainPipelineConfig,
+        peft_model=None,
     ):
         api = HfApi()
         repo_id = api.create_repo(
             repo_id=self.config.repo_id, private=self.config.private, exist_ok=True
         ).repo_id
 
-        # 在单次提交中将文件推送到仓库
+        # Push the files to the repo in a single commit
         with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             saved_path = Path(tmp) / repo_id
 
-            self.save_pretrained(saved_path)  # 调用 _save_pretrained 并存储模型张量
+            if peft_model is not None:
+                # Since PEFT just forwards calls to `push_model_to_hub`, `self` is not the PeftModel wrapper
+                # but the actual policy which is why we need the PEFT model passed to us to save the adapter.
+                # That also means that we need to store the policy config ourselves since PEFT can't.
+                peft_model.save_pretrained(saved_path)
+                self.config.save_pretrained(saved_path)
+            else:
+                self.save_pretrained(saved_path)  # Calls _save_pretrained and stores model tensors
 
             card = self.generate_model_card(
                 cfg.dataset.repo_id, self.config.type, self.config.license, self.config.tags
             )
             card.save(str(saved_path / "README.md"))
 
-            cfg.save_pretrained(saved_path)  # 调用 _save_pretrained 并存储训练配置
+            cfg.save_pretrained(saved_path)  # Calls _save_pretrained and stores train config
 
             commit_info = api.upload_folder(
                 repo_id=repo_id,
                 repo_type="model",
                 folder_path=saved_path,
-                commit_message="上传策略权重、训练配置和 readme",
+                commit_message="Upload policy weights, train config and readme",
                 allow_patterns=["*.safetensors", "*.json", "*.yaml", "*.md"],
                 ignore_patterns=["*.tmp", "*.log"],
             )
 
-            logging.info(f"模型已推送到 {commit_info.repo_url.url}")
+            logging.info(f"Model pushed to {commit_info.repo_url.url}")
 
     def generate_model_card(
         self, dataset_repo_id: str, model_type: str, license: str | None, tags: list[str] | None
     ) -> ModelCard:
-        base_model = "lerobot/smolvla_base" if model_type == "smolvla" else None  # 设置基础模型
+        base_model = "lerobot/smolvla_base" if model_type == "smolvla" else None  # Set a base model
 
         card_data = ModelCardData(
             license=license or "apache-2.0",
@@ -250,3 +266,166 @@ class PreTrainedPolicy(nn.Module, HubMixin, abc.ABC):
         card = ModelCard.from_template(card_data, template_str=template_card)
         card.validate()
         return card
+
+    def wrap_with_peft(
+        self,
+        peft_config=None,
+        peft_cli_overrides: dict | None = None,
+    ) -> "PreTrainedPolicy":
+        """
+        Wrap this policy with PEFT adapters for parameter-efficient fine-tuning.
+
+        This method is the single entry point for PEFT integration. Subclasses should
+        override `_get_default_peft_targets()` to provide default target modules, and
+        `_validate_peft_config()` for policy-specific validation.
+
+        Args:
+            peft_config: Optional PEFT adapter configuration (e.g., LoraConfig).
+                If provided, used directly (with CLI overrides applied).
+            peft_cli_overrides: Optional dict of CLI overrides (method_type, target_modules, r, etc.)
+                These are merged with policy defaults to build the final config.
+        """
+        from peft import get_peft_model
+
+        # If user provided a complete config, use it directly (with overrides)
+        if peft_config is not None:
+            final_config = peft_config
+            if peft_cli_overrides:
+                final_config = self._apply_peft_cli_overrides(final_config, peft_cli_overrides)
+        else:
+            # Build config from defaults + CLI overrides
+            final_config = self._build_peft_config(peft_cli_overrides or {})
+
+        # Validate the configuration
+        self._validate_peft_config(final_config)
+
+        # Freeze base parameters, only adapter params will be trained
+        for p in self.parameters():
+            p.requires_grad_(False)
+
+        # Store pretrained path for PEFT's base_model_name_or_path
+        if self.config.pretrained_path:
+            self.name_or_path = str(self.config.pretrained_path)
+
+        # Wrap with PEFT
+        peft_model = get_peft_model(self, final_config)
+
+        # Mark config as using PEFT for proper loading later
+        peft_model.config.use_peft = True
+
+        logging.info(f"Wrapped {self.name} with PEFT ({type(final_config).__name__})")
+        return peft_model
+
+    def _get_default_peft_targets(self) -> dict[str, any] | None:
+        """
+        Return default PEFT target modules for this policy.
+
+        Override this in subclasses to provide policy-specific defaults. These defaults
+        are PEFT-method agnostic - they only specify which modules to target.
+
+        """
+        return None
+
+    def _validate_peft_config(self, peft_config) -> None:
+        """
+        Validate the PEFT configuration for this policy.
+
+        Override this in subclasses to add policy-specific validation or warnings.
+        The default implementation checks that a pretrained_path exists.
+
+        Args:
+            peft_config: The PEFT configuration to validate.
+
+        Raises:
+            ValueError: If the configuration is invalid.
+        """
+        if not self.config.pretrained_path:
+            raise ValueError(
+                "Training from scratch using PEFT is unlikely to yield good results. "
+                "Supply a `policy.pretrained_path` to fine-tune an existing model."
+            )
+
+    def _preprocess_peft_cli_overrides(self, cli_overrides: dict, peft_method_type) -> dict:
+        """
+        Preprocess CLI overrides: rename keys and handle method-specific init_type.
+
+        Args:
+            cli_overrides: Dict of CLI options (will be copied, not mutated).
+            peft_method_type: The PeftType enum value for the PEFT method.
+
+        Returns:
+            Preprocessed dict with renamed keys and init_type mapped to method-specific key.
+        """
+        from peft import PeftType
+
+        cli_overrides = cli_overrides.copy()
+
+        # Handle the full_training_modules -> modules_to_save rename
+        if "full_training_modules" in cli_overrides:
+            cli_overrides["modules_to_save"] = cli_overrides.pop("full_training_modules")
+
+        # Remove method_type as it's handled separately
+        cli_overrides.pop("method_type", None)
+
+        # Handle init_type specially based on PEFT method
+        init_type = cli_overrides.pop("init_type", None)
+        if init_type is not None:
+            if peft_method_type == PeftType.LORA:
+                cli_overrides["init_lora_weights"] = init_type
+            elif peft_method_type == PeftType.MISS:
+                cli_overrides["init_weights"] = init_type
+            else:
+                raise ValueError(f"Init type '{init_type}' unknown for PEFT method {peft_method_type}.")
+
+        return cli_overrides
+
+    def _build_peft_config(self, cli_overrides: dict):
+        """Build a PEFT config from policy defaults and CLI overrides."""
+        from peft import PEFT_TYPE_TO_CONFIG_MAPPING, PeftType
+
+        # Determine PEFT method type (default to LORA)
+        method_type_str = cli_overrides.get("method_type") or "lora"
+        peft_method_type = PeftType[method_type_str.upper()]
+        peft_config_cls = PEFT_TYPE_TO_CONFIG_MAPPING[peft_method_type]
+
+        # Preprocess CLI overrides
+        cli_overrides = self._preprocess_peft_cli_overrides(cli_overrides, peft_method_type)
+
+        # Start with policy defaults, apply CLI overrides
+        config_dict = dict(self._get_default_peft_targets() or {})
+        for key, value in cli_overrides.items():
+            if value is not None:
+                config_dict[key] = value
+
+        # Ensure we have target_modules
+        if not config_dict.get("target_modules"):
+            raise ValueError(
+                f"Policy '{self.name}' does not define default target_modules. "
+                "Please pass --peft.target_modules explicitly."
+            )
+
+        return peft_config_cls(**config_dict)
+
+    def _apply_peft_cli_overrides(self, peft_config, cli_overrides: dict):
+        """Apply CLI overrides to an existing PEFT config."""
+        from peft import PEFT_TYPE_TO_CONFIG_MAPPING, PeftType
+
+        # Get method type from existing config or CLI override
+        method_type_str = cli_overrides.get("method_type")
+        if method_type_str:
+            peft_method_type = PeftType[method_type_str.upper()]
+            peft_config_cls = PEFT_TYPE_TO_CONFIG_MAPPING[peft_method_type]
+        else:
+            peft_method_type = PeftType(peft_config.peft_type)
+            peft_config_cls = type(peft_config)
+
+        # Preprocess CLI overrides
+        cli_overrides = self._preprocess_peft_cli_overrides(cli_overrides, peft_method_type)
+
+        # Start with existing config, apply CLI overrides
+        config_dict = {k: v for k, v in dataclasses.asdict(peft_config).items() if not k.startswith("_")}
+        for key, value in cli_overrides.items():
+            if value is not None:
+                config_dict[key] = value
+
+        return peft_config_cls(**config_dict)

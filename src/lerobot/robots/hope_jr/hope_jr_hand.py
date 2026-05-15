@@ -17,15 +17,15 @@
 import logging
 import time
 from functools import cached_property
-from typing import Any
 
-from lerobot.cameras.utils import make_cameras_from_configs
+from lerobot.cameras import make_cameras_from_configs
 from lerobot.motors import Motor, MotorNormMode
 from lerobot.motors.calibration_gui import RangeFinderGUI
 from lerobot.motors.feetech import (
     FeetechMotorsBus,
 )
-from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+from lerobot.types import RobotAction, RobotObservation
+from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
 from ..robot import Robot
 from .config_hope_jr import HopeJrHandConfig
@@ -68,24 +68,24 @@ class HopeJrHand(Robot):
         self.bus = FeetechMotorsBus(
             port=self.config.port,
             motors={
-                # 拇指
+                # Thumb
                 "thumb_cmc": Motor(1, "scs0009", MotorNormMode.RANGE_0_100),
                 "thumb_mcp": Motor(2, "scs0009", MotorNormMode.RANGE_0_100),
                 "thumb_pip": Motor(3, "scs0009", MotorNormMode.RANGE_0_100),
                 "thumb_dip": Motor(4, "scs0009", MotorNormMode.RANGE_0_100),
-                # 食指
+                # Index
                 "index_radial_flexor": Motor(5, "scs0009", MotorNormMode.RANGE_0_100),
                 "index_ulnar_flexor": Motor(6, "scs0009", MotorNormMode.RANGE_0_100),
                 "index_pip_dip": Motor(7, "scs0009", MotorNormMode.RANGE_0_100),
-                # 中指
+                # Middle
                 "middle_radial_flexor": Motor(8, "scs0009", MotorNormMode.RANGE_0_100),
                 "middle_ulnar_flexor": Motor(9, "scs0009", MotorNormMode.RANGE_0_100),
                 "middle_pip_dip": Motor(10, "scs0009", MotorNormMode.RANGE_0_100),
-                # 无名指
+                # Ring
                 "ring_radial_flexor": Motor(11, "scs0009", MotorNormMode.RANGE_0_100),
                 "ring_ulnar_flexor": Motor(12, "scs0009", MotorNormMode.RANGE_0_100),
                 "ring_pip_dip": Motor(13, "scs0009", MotorNormMode.RANGE_0_100),
-                # 小指
+                # Pinky
                 "pinky_radial_flexor": Motor(14, "scs0009", MotorNormMode.RANGE_0_100),
                 "pinky_ulnar_flexor": Motor(15, "scs0009", MotorNormMode.RANGE_0_100),
                 "pinky_pip_dip": Motor(16, "scs0009", MotorNormMode.RANGE_0_100),
@@ -118,15 +118,13 @@ class HopeJrHand(Robot):
     def is_connected(self) -> bool:
         return self.bus.is_connected and all(cam.is_connected for cam in self.cameras.values())
 
+    @check_if_already_connected
     def connect(self, calibrate: bool = True) -> None:
-        if self.is_connected:
-            raise DeviceAlreadyConnectedError(f"{self} already connected")
-
         self.bus.connect()
         if not self.is_calibrated and calibrate:
             self.calibrate()
 
-        # 连接相机
+        # Connect the cameras
         for cam in self.cameras.values():
             cam.connect()
 
@@ -153,46 +151,40 @@ class HopeJrHand(Robot):
             self.bus.configure_motors()
 
     def setup_motors(self) -> None:
-        """设置电机ID。逐个连接每个电机并配置其ID。"""
+        # TODO: add docstring
         for motor in self.bus.motors:
-            input(f"仅将控制板连接到 '{motor}' 电机并按回车键。")
+            input(f"Connect the controller board to the '{motor}' motor only and press enter.")
             self.bus.setup_motor(motor)
-            print(f"'{motor}' 电机ID已设置为 {self.bus.motors[motor].id}")
+            print(f"'{motor}' motor id set to {self.bus.motors[motor].id}")
 
-    def get_observation(self) -> dict[str, Any]:
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-
+    @check_if_not_connected
+    def get_observation(self) -> RobotObservation:
         obs_dict = {}
 
-        # 读取灵巧手位置
+        # Read hand position
         start = time.perf_counter()
         for motor in self.bus.motors:
             obs_dict[f"{motor}.pos"] = self.bus.read("Present_Position", motor)
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
 
-        # 从相机捕获图像
+        # Capture images from cameras
         for cam_key, cam in self.cameras.items():
             start = time.perf_counter()
-            obs_dict[cam_key] = cam.async_read()
+            obs_dict[cam_key] = cam.read_latest()
             dt_ms = (time.perf_counter() - start) * 1e3
             logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
 
         return obs_dict
 
-    def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-
+    @check_if_not_connected
+    def send_action(self, action: RobotAction) -> RobotAction:
         goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
         self.bus.sync_write("Goal_Position", goal_pos)
         return action
 
+    @check_if_not_connected
     def disconnect(self):
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-
         self.bus.disconnect(self.config.disable_torque_on_disconnect)
         for cam in self.cameras.values():
             cam.disconnect()

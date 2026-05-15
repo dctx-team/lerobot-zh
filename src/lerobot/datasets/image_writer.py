@@ -13,6 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import logging
 import multiprocessing
 import queue
 import threading
@@ -22,44 +23,36 @@ import numpy as np
 import PIL.Image
 import torch
 
+logger = logging.getLogger(__name__)
+
 
 def safe_stop_image_writer(func):
-    """装饰器：在函数抛出异常时安全地停止图像写入器。"""
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
-        except Exception as e:
+        except BaseException:
             dataset = kwargs.get("dataset")
-            image_writer = getattr(dataset, "image_writer", None) if dataset else None
-            if image_writer is not None:
-                print("等待图像写入器终止...")
-                image_writer.stop()
-            raise e
+            writer = getattr(dataset, "writer", None) if dataset else None
+            if writer is not None and writer.image_writer is not None:
+                logger.warning("Waiting for image writer to terminate...")
+                writer.image_writer.stop()
+            raise
 
     return wrapper
 
 
 def image_array_to_pil_image(image_array: np.ndarray, range_check: bool = True) -> PIL.Image.Image:
-    """将图像数组转换为 PIL 图像。
-
-    Args:
-        image_array: 输入的图像数组
-        range_check: 是否检查值范围
-
-    Returns:
-        PIL.Image.Image: 转换后的 PIL 图像
-    """
-    # TODO(aliberts): 处理 1 个通道和 4 个通道的深度图像
+    # TODO(aliberts): handle 1 channel and 4 for depth images
     if image_array.ndim != 3:
-        raise ValueError(f"数组有 {image_array.ndim} 个维度，但图像预期为 3 维。")
+        raise ValueError(f"The array has {image_array.ndim} dimensions, but 3 is expected for an image.")
 
     if image_array.shape[0] == 3:
-        # 从 PyTorch 约定 (C, H, W) 转置到 (H, W, C)
+        # Transpose from pytorch convention (C, H, W) to (H, W, C)
         image_array = image_array.transpose(1, 2, 0)
 
     elif image_array.shape[-1] != 3:
         raise NotImplementedError(
-            f"图像有 {image_array.shape[-1]} 个通道，但目前只支持 3 个通道。"
+            f"The image has {image_array.shape[-1]} channels, but 3 is required for now."
         )
 
     if image_array.dtype != np.uint8:
@@ -68,9 +61,9 @@ def image_array_to_pil_image(image_array: np.ndarray, range_check: bool = True) 
             min_ = image_array.min().item()
             if max_ > 1.0 or min_ < 0.0:
                 raise ValueError(
-                    "图像数据类型为浮点型，需要值在 [0.0, 1.0] 范围内。"
-                    f"但是提供的范围是 [{min_}, {max_}]。请调整范围或"
-                    "提供值在 [0, 255] 范围内的 uint8 图像。"
+                    "The image data type is float, which requires values in the range [0.0, 1.0]. "
+                    f"However, the provided range is [{min_}, {max_}]. Please adjust the range or "
+                    "provide a uint8 image with values in the range [0, 255]."
                 )
 
         image_array = (image_array * 255).astype(np.uint8)
@@ -78,12 +71,28 @@ def image_array_to_pil_image(image_array: np.ndarray, range_check: bool = True) 
     return PIL.Image.fromarray(image_array)
 
 
-def write_image(image: np.ndarray | PIL.Image.Image, fpath: Path):
-    """将图像写入磁盘。
+def write_image(image: np.ndarray | PIL.Image.Image, fpath: Path, compress_level: int = 1):
+    """
+    Saves a NumPy array or PIL Image to a file.
+
+    This function handles both NumPy arrays and PIL Image objects, converting
+    the former to a PIL Image before saving. It includes error handling for
+    the save operation.
 
     Args:
-        image: numpy 数组或 PIL 图像
-        fpath: 文件保存路径
+        image (np.ndarray | PIL.Image.Image): The image data to save.
+        fpath (Path): The destination file path for the image.
+        compress_level (int, optional): The compression level for the saved
+            image, as used by PIL.Image.save(). Defaults to 1.
+            Refer to: https://github.com/huggingface/lerobot/pull/2135
+            for more details on the default value rationale.
+
+    Raises:
+        TypeError: If the input 'image' is not a NumPy array or a
+            PIL.Image.Image object.
+
+    Side Effects:
+        Logs an error message if the image writing process fails for any reason.
     """
     try:
         if isinstance(image, np.ndarray):
@@ -91,26 +100,24 @@ def write_image(image: np.ndarray | PIL.Image.Image, fpath: Path):
         elif isinstance(image, PIL.Image.Image):
             img = image
         else:
-            raise TypeError(f"不支持的图像类型：{type(image)}")
-        img.save(fpath)
+            raise TypeError(f"Unsupported image type: {type(image)}")
+        img.save(fpath, compress_level=compress_level)
     except Exception as e:
-        print(f"写入图像 {fpath} 时出错：{e}")
+        logger.error("Error writing image %s: %s", fpath, e)
 
 
 def worker_thread_loop(queue: queue.Queue):
-    """工作线程循环，从队列中获取图像并写入磁盘。"""
     while True:
         item = queue.get()
         if item is None:
             queue.task_done()
             break
-        image_array, fpath = item
-        write_image(image_array, fpath)
+        image_array, fpath, compress_level = item
+        write_image(image_array, fpath, compress_level)
         queue.task_done()
 
 
 def worker_process(queue: queue.Queue, num_threads: int):
-    """工作进程，启动多个工作线程。"""
     threads = []
     for _ in range(num_threads):
         t = threading.Thread(target=worker_thread_loop, args=(queue,))
@@ -123,16 +130,17 @@ def worker_process(queue: queue.Queue, num_threads: int):
 
 class AsyncImageWriter:
     """
-    此类抽象了用于异步在磁盘上保存图像的进程或/和线程的初始化，
-    这对于控制机器人和以高帧率记录数据至关重要。
+    This class abstract away the initialisation of processes or/and threads to
+    save images on disk asynchronously, which is critical to control a robot and record data
+    at a high frame rate.
 
-    当 `num_processes=0` 时，它创建一个大小为 `num_threads` 的线程池。
-    当 `num_processes>0` 时，它创建一个大小为 `num_processes` 的进程池，
-    其中每个子进程启动自己的大小为 `num_threads` 的线程池。
+    When `num_processes=0`, it creates a threads pool of size `num_threads`.
+    When `num_processes>0`, it creates processes pool of size `num_processes`, where each subprocess starts
+    their own threads pool of size `num_threads`.
 
-    最佳的进程数和线程数取决于您的计算机能力。
-    我们建议每个摄像头使用 4 个线程，进程数为 0。如果 fps 不稳定，
-    尝试增加或减少线程数。如果仍然不稳定，尝试使用 1 个子进程或更多。
+    The optimal number of processes and threads depends on your computer capabilities.
+    We advise to use 4 threads per camera with 0 processes. If the fps is not stable, try to increase or lower
+    the number of threads. If it is still not stable, try to use 1 subprocess, or more.
     """
 
     def __init__(self, num_processes: int = 0, num_threads: int = 1):
@@ -144,10 +152,10 @@ class AsyncImageWriter:
         self._stopped = False
 
         if num_threads <= 0 and num_processes <= 0:
-            raise ValueError("线程数和进程数必须大于零。")
+            raise ValueError("Number of threads and processes must be greater than zero.")
 
         if self.num_processes == 0:
-            # 使用线程
+            # Use threading
             self.queue = queue.Queue()
             for _ in range(self.num_threads):
                 t = threading.Thread(target=worker_thread_loop, args=(self.queue,))
@@ -155,7 +163,7 @@ class AsyncImageWriter:
                 t.start()
                 self.threads.append(t)
         else:
-            # 使用多进程
+            # Use multiprocessing
             self.queue = multiprocessing.JoinableQueue()
             for _ in range(self.num_processes):
                 p = multiprocessing.Process(target=worker_process, args=(self.queue, self.num_threads))
@@ -163,24 +171,18 @@ class AsyncImageWriter:
                 p.start()
                 self.processes.append(p)
 
-    def save_image(self, image: torch.Tensor | np.ndarray | PIL.Image.Image, fpath: Path):
-        """将图像添加到保存队列。
-
-        Args:
-            image: 要保存的图像（torch.Tensor、numpy 数组或 PIL 图像）
-            fpath: 保存路径
-        """
+    def save_image(
+        self, image: torch.Tensor | np.ndarray | PIL.Image.Image, fpath: Path, compress_level: int = 1
+    ):
         if isinstance(image, torch.Tensor):
-            # 将张量转换为 numpy 数组以减少主进程时间
+            # Convert tensor to numpy array to minimize main process time
             image = image.cpu().numpy()
-        self.queue.put((image, fpath))
+        self.queue.put((image, fpath, compress_level))
 
     def wait_until_done(self):
-        """等待队列中的所有图像写入完成。"""
         self.queue.join()
 
     def stop(self):
-        """停止所有工作线程和进程。"""
         if self._stopped:
             return
 

@@ -18,12 +18,16 @@ import logging
 import threading
 from collections import deque
 from pprint import pformat
-from typing import Deque
-
-import serial
+from typing import TYPE_CHECKING
 
 from lerobot.motors.motors_bus import MotorCalibration, MotorNormMode
-from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
+from lerobot.utils.import_utils import _serial_available, require_package
+
+if TYPE_CHECKING or _serial_available:
+    import serial
+else:
+    serial = None  # type: ignore[assignment]
 from lerobot.utils.utils import enter_pressed, move_cursor_up
 
 from ..teleoperator import Teleoperator
@@ -34,13 +38,14 @@ logger = logging.getLogger(__name__)
 
 class HomunculusArm(Teleoperator):
     """
-    由 Hugging Face 设计的 Homunculus 机械臂。
+    Homunculus Arm designed by Hugging Face.
     """
 
     config_class = HomunculusArmConfig
     name = "homunculus_arm"
 
     def __init__(self, config: HomunculusArmConfig):
+        require_package("pyserial", extra="pyserial-dep", import_name="serial")
         super().__init__(config)
         self.config = config
         self.serial = serial.Serial(config.port, config.baud_rate, timeout=1)
@@ -56,11 +61,11 @@ class HomunculusArm(Teleoperator):
             "wrist_pitch": MotorNormMode.RANGE_M100_100,
         }
         n = 50
-        # EMA 参数 ---------------------------------------------------
+        # EMA parameters ---------------------------------------------------
         self.n: int = n
         self.alpha: float = 2 / (n + 1)
-        # 每个关节一个双端队列，以便需要时检查原始历史记录
-        self._buffers: dict[str, Deque[int]] = {
+        # one deque *per joint* so we can inspect raw history if needed
+        self._buffers: dict[str, deque[int]] = {
             joint: deque(maxlen=n)
             for joint in (
                 "shoulder_pitch",
@@ -72,7 +77,7 @@ class HomunculusArm(Teleoperator):
                 "wrist_pitch",
             )
         }
-        # 每个关节的运行中 EMA 值 – 在首次读取时延迟初始化
+        # running EMA value per joint – lazily initialised on first read
         self._ema: dict[str, float | None] = dict.fromkeys(self._buffers)
 
         self._state: dict[str, float] | None = None
@@ -94,15 +99,13 @@ class HomunculusArm(Teleoperator):
         with self.serial_lock:
             return self.serial.is_open and self.thread.is_alive()
 
+    @check_if_already_connected
     def connect(self, calibrate: bool = True) -> None:
-        if self.is_connected:
-            raise DeviceAlreadyConnectedError(f"{self} already connected")
-
         if not self.serial.is_open:
             self.serial.open()
         self.thread.start()
 
-        # 等待线程启动并准备好第一个状态
+        # wait for the thread to ramp up & 1st state to be ready
         if not self.new_state_event.wait(timeout=2):
             raise TimeoutError(f"{self}: Timed out waiting for state after 2s.")
 
@@ -135,24 +138,25 @@ class HomunculusArm(Teleoperator):
         self._save_calibration()
         print("Calibration saved to", self.calibration_fpath)
 
-    # TODO(Steven): 此函数是从 `HomunculusGlove` 类复制粘贴的。考虑将其移至实用工具以减少重复代码。
+    # TODO(Steven): This function is copy/paste from the `HomunculusGlove` class. Consider moving it to an utility to reduce duplicated code.
     def _record_ranges_of_motion(
         self, joints: list[str] | None = None, display_values: bool = True
     ) -> tuple[dict[str, int], dict[str, int]]:
-        """交互式记录每个关节的最小/最大编码器值。
+        """Interactively record the min/max encoder values of each joint.
 
-        在方法流式传输实时位置时移动关节。按 :kbd:`Enter` 完成。
+        Move the joints while the method streams live positions. Press :kbd:`Enter` to finish.
 
         Args:
-            joints (list[str] | None, optional):  要记录的关节。默认为所有关节 (`None`)。
-            display_values (bool, optional): 当为 `True` (默认) 时，将实时表格打印到控制台。
+            joints (list[str] | None, optional):  Joints to record. Defaults to every joint (`None`).
+            display_values (bool, optional): When `True` (default) a live table is printed to the console.
 
         Raises:
-            TypeError: `joints` 不是 `None` 或列表。
-            ValueError: 任何关节记录的最小值和最大值相同。
+            TypeError: `joints` is not `None` or a list.
+            ValueError: any joint's recorded min and max are the same.
 
         Returns:
-            tuple[dict[str, int], dict[str, int]]: 两个字典 *mins* 和 *maxes*，包含每个关节观察到的极值。
+            tuple[dict[str, int], dict[str, int]]: Two dictionaries *mins* and *maxes* with the extreme values
+            observed for each joint.
         """
         if joints is None:
             joints = list(self.joints)
@@ -183,7 +187,7 @@ class HomunculusArm(Teleoperator):
                 user_pressed_enter = True
 
             if display_values and not user_pressed_enter:
-                # 向上移动光标以覆盖之前的输出
+                # Move cursor up to overwrite the previous output
                 move_cursor_up(len(joints) + 3)
 
         same_min_max = [joint for joint in joints if mins[joint] == maxes[joint]]
@@ -195,7 +199,7 @@ class HomunculusArm(Teleoperator):
     def configure(self) -> None:
         pass
 
-    # TODO(Steven): 此函数是从 `HomunculusGlove` 类复制粘贴的。考虑将其移至实用工具以减少重复代码。
+    # TODO(Steven): This function is copy/paste from the `HomunculusGlove` class. Consider moving it to an utility to reduce duplicated code.
     def _normalize(self, values: dict[str, int]) -> dict[str, float]:
         if not self.calibration:
             raise RuntimeError(f"{self} has no calibration registered.")
@@ -217,13 +221,13 @@ class HomunculusArm(Teleoperator):
         return normalized_values
 
     def _apply_ema(self, raw: dict[str, int]) -> dict[str, float]:
-        """更新缓冲区和运行中的 EMA 值；返回平滑后的字典。"""
+        """Update buffers & running EMA values; return smoothed dict."""
         smoothed: dict[str, float] = {}
         for joint, value in raw.items():
-            # 维护原始历史记录
+            # maintain raw history
             self._buffers[joint].append(value)
 
-            # 在首次运行时初始化
+            # initialise on first run
             if self._ema[joint] is None:
                 self._ema[joint] = float(value)
             else:
@@ -236,8 +240,8 @@ class HomunculusArm(Teleoperator):
         self, joints: list[str] | None = None, normalize: bool = True, timeout: float = 1
     ) -> dict[str, int | float]:
         """
-        从 self.last_d 返回最近的（单个）值，
-        可选择应用校准。
+        Return the most recent (single) values from self.last_d,
+        optionally applying calibration.
         """
         if not self.new_state_event.wait(timeout=timeout):
             raise TimeoutError(f"{self}: Timed out waiting for state after {timeout}s.")
@@ -262,16 +266,24 @@ class HomunculusArm(Teleoperator):
 
     def _read_loop(self):
         """
-        在其自己的线程中持续从串口缓冲区读取，并通过队列将值发送到主线程。
+        Continuously read from the serial buffer in its own thread and sends values to the main thread through
+        a queue.
         """
         while not self.stop_event.is_set():
             try:
                 raw_values = None
                 with self.serial_lock:
                     if self.serial.in_waiting > 0:
-                        self.serial.flush()
-                        raw_values = self.serial.readline().decode("utf-8").strip().split(" ")
-                if raw_values is None or len(raw_values) != 21:  # 16 个原始值 + 5 个角度值
+                        lines = []
+                        while self.serial.in_waiting > 0:
+                            line = self.serial.read_until().decode("utf-8").strip()
+                            if line:
+                                lines.append(line.split(" "))
+
+                        if lines:
+                            raw_values = lines[-1]
+
+                if raw_values is None or len(raw_values) != 21:  # 16 raw + 5 angle values
                     continue
 
                 joint_angles = {
@@ -291,6 +303,7 @@ class HomunculusArm(Teleoperator):
             except Exception as e:
                 logger.debug(f"Error reading frame in background thread for {self}: {e}")
 
+    @check_if_not_connected
     def get_action(self) -> dict[str, float]:
         joint_positions = self._read()
         return {f"{joint}.pos": pos for joint, pos in joint_positions.items()}
@@ -298,10 +311,8 @@ class HomunculusArm(Teleoperator):
     def send_feedback(self, feedback: dict[str, float]) -> None:
         raise NotImplementedError
 
+    @check_if_not_connected
     def disconnect(self) -> None:
-        if not self.is_connected:
-            DeviceNotConnectedError(f"{self} is not connected.")
-
         self.stop_event.set()
         self.thread.join(timeout=1)
         self.serial.close()

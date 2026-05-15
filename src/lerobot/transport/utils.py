@@ -19,28 +19,24 @@ import io
 import json
 import logging
 import pickle  # nosec B403: Safe usage for internal serialization only
-from multiprocessing import Event
+from multiprocessing.synchronize import Event as MpEvent
 from queue import Queue
 from typing import Any
 
 import torch
 
-from lerobot.transport import services_pb2
 from lerobot.utils.transition import Transition
+
+from . import services_pb2
+
+# FIX for protobuf: Assign the enum to a variable and ignore the type error once
+TransferState = services_pb2.TransferState  # type: ignore[attr-defined]
 
 CHUNK_SIZE = 2 * 1024 * 1024  # 2 MB
 MAX_MESSAGE_SIZE = 4 * 1024 * 1024  # 4 MB
 
 
 def bytes_buffer_size(buffer: io.BytesIO) -> int:
-    """获取字节缓冲区的大小
-
-    Args:
-        buffer: BytesIO 缓冲区对象
-
-    Returns:
-        缓冲区的字节大小
-    """
     buffer.seek(0, io.SEEK_END)
     result = buffer.tell()
     buffer.seek(0)
@@ -48,19 +44,8 @@ def bytes_buffer_size(buffer: io.BytesIO) -> int:
 
 
 def send_bytes_in_chunks(buffer: bytes, message_class: Any, log_prefix: str = "", silent: bool = True):
-    """分块发送字节数据
-
-    Args:
-        buffer: 要发送的字节数据
-        message_class: 消息类
-        log_prefix: 日志前缀
-        silent: 是否静默模式
-
-    Yields:
-        消息对象，包含传输状态和数据块
-    """
-    buffer = io.BytesIO(buffer)
-    size_in_bytes = bytes_buffer_size(buffer)
+    bytes_buffer: io.BytesIO = io.BytesIO(buffer)
+    size_in_bytes = bytes_buffer_size(bytes_buffer)
 
     sent_bytes = 0
 
@@ -69,15 +54,15 @@ def send_bytes_in_chunks(buffer: bytes, message_class: Any, log_prefix: str = ""
     logging_method(f"{log_prefix} Buffer size {size_in_bytes / 1024 / 1024} MB with")
 
     while sent_bytes < size_in_bytes:
-        transfer_state = services_pb2.TransferState.TRANSFER_MIDDLE
+        transfer_state = TransferState.TRANSFER_MIDDLE
 
         if sent_bytes + CHUNK_SIZE >= size_in_bytes:
-            transfer_state = services_pb2.TransferState.TRANSFER_END
+            transfer_state = TransferState.TRANSFER_END
         elif sent_bytes == 0:
-            transfer_state = services_pb2.TransferState.TRANSFER_BEGIN
+            transfer_state = TransferState.TRANSFER_BEGIN
 
         size_to_read = min(CHUNK_SIZE, size_in_bytes - sent_bytes)
-        chunk = buffer.read(size_to_read)
+        chunk = bytes_buffer.read(size_to_read)
 
         yield message_class(transfer_state=transfer_state, data=chunk)
         sent_bytes += size_to_read
@@ -86,18 +71,7 @@ def send_bytes_in_chunks(buffer: bytes, message_class: Any, log_prefix: str = ""
     logging_method(f"{log_prefix} Published {sent_bytes / 1024 / 1024} MB")
 
 
-def receive_bytes_in_chunks(iterator, queue: Queue | None, shutdown_event: Event, log_prefix: str = ""):
-    """分块接收字节数据
-
-    Args:
-        iterator: 数据迭代器
-        queue: 可选的队列，用于存储接收到的数据
-        shutdown_event: 关闭事件，用于优雅停止接收
-        log_prefix: 日志前缀
-
-    Returns:
-        如果 queue 为 None，则返回接收到的字节数据
-    """
+def receive_bytes_in_chunks(iterator, queue: Queue | None, shutdown_event: MpEvent, log_prefix: str = ""):
     bytes_buffer = io.BytesIO()
     step = 0
 
@@ -108,17 +82,17 @@ def receive_bytes_in_chunks(iterator, queue: Queue | None, shutdown_event: Event
             logging.info(f"{log_prefix} Shutting down receiver")
             return
 
-        if item.transfer_state == services_pb2.TransferState.TRANSFER_BEGIN:
+        if item.transfer_state == TransferState.TRANSFER_BEGIN:
             bytes_buffer.seek(0)
             bytes_buffer.truncate(0)
             bytes_buffer.write(item.data)
             logging.debug(f"{log_prefix} Received data at step 0")
             step = 0
-        elif item.transfer_state == services_pb2.TransferState.TRANSFER_MIDDLE:
+        elif item.transfer_state == TransferState.TRANSFER_MIDDLE:
             bytes_buffer.write(item.data)
             step += 1
             logging.debug(f"{log_prefix} Received data at step {step}")
-        elif item.transfer_state == services_pb2.TransferState.TRANSFER_END:
+        elif item.transfer_state == TransferState.TRANSFER_END:
             bytes_buffer.write(item.data)
             logging.debug(f"{log_prefix} Received data at step end size {bytes_buffer_size(bytes_buffer)}")
 
@@ -138,90 +112,43 @@ def receive_bytes_in_chunks(iterator, queue: Queue | None, shutdown_event: Event
 
 
 def state_to_bytes(state_dict: dict[str, torch.Tensor]) -> bytes:
-    """将模型状态字典转换为字节数组以进行传输
+    """Convert model state dict to flat array for transmission"""
+    bytes_buffer = io.BytesIO()
 
-    Args:
-        state_dict: 模型状态字典
+    torch.save(state_dict, bytes_buffer)
 
-    Returns:
-        序列化后的字节数据
-    """
-    buffer = io.BytesIO()
-
-    torch.save(state_dict, buffer)
-
-    return buffer.getvalue()
+    return bytes_buffer.getvalue()
 
 
 def bytes_to_state_dict(buffer: bytes) -> dict[str, torch.Tensor]:
-    """将字节数据转换为模型状态字典
-
-    Args:
-        buffer: 序列化的字节数据
-
-    Returns:
-        模型状态字典
-    """
-    buffer = io.BytesIO(buffer)
-    buffer.seek(0)
-    return torch.load(buffer, weights_only=True)
+    bytes_buffer = io.BytesIO(buffer)
+    bytes_buffer.seek(0)
+    return torch.load(bytes_buffer, weights_only=True)
 
 
 def python_object_to_bytes(python_object: Any) -> bytes:
-    """将 Python 对象序列化为字节数据
-
-    Args:
-        python_object: 要序列化的 Python 对象
-
-    Returns:
-        序列化后的字节数据
-    """
     return pickle.dumps(python_object)
 
 
 def bytes_to_python_object(buffer: bytes) -> Any:
-    """将字节数据反序列化为 Python 对象
-
-    Args:
-        buffer: 序列化的字节数据
-
-    Returns:
-        反序列化后的 Python 对象
-    """
-    buffer = io.BytesIO(buffer)
-    buffer.seek(0)
-    obj = pickle.load(buffer)  # nosec B301: Safe usage of pickle.load
-    # 在此处添加验证检查
+    bytes_buffer = io.BytesIO(buffer)
+    bytes_buffer.seek(0)
+    obj = pickle.load(bytes_buffer)  # nosec B301: Safe usage of pickle.load
+    # Add validation checks here
     return obj
 
 
 def bytes_to_transitions(buffer: bytes) -> list[Transition]:
-    """将字节数据转换为 Transition 列表
-
-    Args:
-        buffer: 序列化的字节数据
-
-    Returns:
-        Transition 对象列表
-    """
-    buffer = io.BytesIO(buffer)
-    buffer.seek(0)
-    transitions = torch.load(buffer, weights_only=True)
+    bytes_buffer = io.BytesIO(buffer)
+    bytes_buffer.seek(0)
+    transitions = torch.load(bytes_buffer, weights_only=True)
     return transitions
 
 
 def transitions_to_bytes(transitions: list[Transition]) -> bytes:
-    """将 Transition 列表转换为字节数据
-
-    Args:
-        transitions: Transition 对象列表
-
-    Returns:
-        序列化后的字节数据
-    """
-    buffer = io.BytesIO()
-    torch.save(transitions, buffer)
-    return buffer.getvalue()
+    bytes_buffer = io.BytesIO()
+    torch.save(transitions, bytes_buffer)
+    return bytes_buffer.getvalue()
 
 
 def grpc_channel_options(
@@ -233,33 +160,19 @@ def grpc_channel_options(
     backoff_multiplier: float = 2,
     max_backoff: str = "2s",
 ):
-    """配置 gRPC 通道选项
-
-    Args:
-        max_receive_message_length: 最大接收消息长度
-        max_send_message_length: 最大发送消息长度
-        enable_retries: 是否启用重试
-        initial_backoff: 初始退避时间
-        max_attempts: 最大尝试次数
-        backoff_multiplier: 退避乘数
-        max_backoff: 最大退避时间
-
-    Returns:
-        gRPC 通道选项列表
-    """
     service_config = {
         "methodConfig": [
             {
-                "name": [{}],  # 应用于所有服务的所有方法
+                "name": [{}],  # Applies to ALL methods in ALL services
                 "retryPolicy": {
-                    "maxAttempts": max_attempts,  # 最大重试次数（总尝试次数 = 5）
-                    "initialBackoff": initial_backoff,  # 首次重试在 0.1 秒后
-                    "maxBackoff": max_backoff,  # 重试之间的最大等待时间
-                    "backoffMultiplier": backoff_multiplier,  # 指数退避因子
+                    "maxAttempts": max_attempts,  # Max retries (total attempts = 5)
+                    "initialBackoff": initial_backoff,  # First retry after 0.1s
+                    "maxBackoff": max_backoff,  # Max wait time between retries
+                    "backoffMultiplier": backoff_multiplier,  # Exponential backoff factor
                     "retryableStatusCodes": [
                         "UNAVAILABLE",
                         "DEADLINE_EXCEEDED",
-                    ],  # 在网络故障时重试
+                    ],  # Retries on network failures
                 },
             }
         ]

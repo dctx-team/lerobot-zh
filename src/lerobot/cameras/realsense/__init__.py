@@ -11,12 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""
-Intel RealSense 相机模块
-
-本模块提供了对 Intel RealSense 深度相机的支持，包括相机配置和相机接口实现。
-RealSense 相机可以同时捕获 RGB 图像和深度信息，适用于机器人视觉和 3D 感知任务。
-"""
 
 from .camera_realsense import RealSenseCamera
 from .configuration_realsense import RealSenseCameraConfig
+
+__all__ = ["RealSenseCamera", "RealSenseCameraConfig"]

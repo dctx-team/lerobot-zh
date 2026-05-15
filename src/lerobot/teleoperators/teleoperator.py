@@ -20,6 +20,7 @@ from typing import Any
 import draccus
 
 from lerobot.motors.motors_bus import MotorCalibration
+from lerobot.types import RobotAction
 from lerobot.utils.constants import HF_LEROBOT_CALIBRATION, TELEOPERATORS
 
 from .config import TeleoperatorConfig
@@ -27,17 +28,17 @@ from .config import TeleoperatorConfig
 
 class Teleoperator(abc.ABC):
     """
-    所有 LeRobot 兼容遥操作设备的基础抽象类。
+    The base abstract class for all LeRobot-compatible teleoperation devices.
 
-    该类为与物理遥操作器交互提供了标准化接口。
-    子类必须实现所有抽象方法和属性才能使用。
+    This class provides a standardized interface for interacting with physical teleoperators.
+    Subclasses must implement all abstract methods and properties to be usable.
 
-    属性:
-        config_class (RobotConfig): 该遥操作器所需的配置类。
-        name (str): 用于识别该遥操作器类型的唯一名称。
+    Attributes:
+        config_class (RobotConfig): The expected configuration class for this teleoperator.
+        name (str): The unique name used to identify this teleoperator type.
     """
 
-    # 在所有子类中设置这些属性
+    # Set these in ALL subclasses
     config_class: builtins.type[TeleoperatorConfig]
     name: str
 
@@ -57,14 +58,42 @@ class Teleoperator(abc.ABC):
     def __str__(self) -> str:
         return f"{self.id} {self.__class__.__name__}"
 
+    def __enter__(self):
+        """
+        Context manager entry.
+        Automatically connects to the camera.
+        """
+        self.connect()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        """
+        Context manager exit.
+        Automatically disconnects, ensuring resources are released even on error.
+        """
+        self.disconnect()
+
+    def __del__(self) -> None:
+        """
+        Destructor safety net.
+        Attempts to disconnect if the object is garbage collected without cleanup.
+        """
+        try:
+            if self.is_connected:
+                self.disconnect()
+        except Exception:  # nosec B110
+            pass
+
     @property
     @abc.abstractmethod
     def action_features(self) -> dict:
         """
-        描述遥操作器产生的动作的结构和类型的字典。其结构（键）应与 :pymeth:`get_action` 返回的结构
-        匹配。字典的值应为简单值的类型，例如 `float` 表示单个本体感受值（关节的目标位置/速度）
+        A dictionary describing the structure and types of the actions produced by the teleoperator. Its
+        structure (keys) should match the structure of what is returned by :pymeth:`get_action`. Values for
+        the dict should be the type of the value if it's a simple value, e.g. `float` for single
+        proprioceptive value (a joint's goal position/velocity)
 
-        注意：无论机器人是否连接，此属性都应该能够被调用。
+        Note: this property should be able to be called regardless of whether the robot is connected or not.
         """
         pass
 
@@ -72,10 +101,12 @@ class Teleoperator(abc.ABC):
     @abc.abstractmethod
     def feedback_features(self) -> dict:
         """
-        描述机器人期望的反馈动作的结构和类型的字典。其结构（键）应与传递给 :pymeth:`send_feedback`
-        的结构匹配。字典的值应为简单值的类型，例如 `float` 表示单个本体感受值（关节的目标位置/速度）
+        A dictionary describing the structure and types of the feedback actions expected by the robot. Its
+        structure (keys) should match the structure of what is passed to :pymeth:`send_feedback`. Values for
+        the dict should be the type of the value if it's a simple value, e.g. `float` for single
+        proprioceptive value (a joint's goal position/velocity)
 
-        注意：无论机器人是否连接，此属性都应该能够被调用。
+        Note: this property should be able to be called regardless of whether the robot is connected or not.
         """
         pass
 
@@ -83,43 +114,44 @@ class Teleoperator(abc.ABC):
     @abc.abstractmethod
     def is_connected(self) -> bool:
         """
-        遥操作器当前是否已连接。如果为 `False`，调用 :pymeth:`get_action` 或 :pymeth:`send_feedback`
-        应抛出错误。
+        Whether the teleoperator is currently connected or not. If `False`, calling :pymeth:`get_action`
+        or :pymeth:`send_feedback` should raise an error.
         """
         pass
 
     @abc.abstractmethod
     def connect(self, calibrate: bool = True) -> None:
         """
-        建立与遥操作器的通信。
+        Establish communication with the teleoperator.
 
-        参数:
-            calibrate (bool): 如果为 True，在连接后如果未校准或需要校准（取决于硬件），
-                自动校准遥操作器。
+        Args:
+            calibrate (bool): If True, automatically calibrate the teleoperator after connecting if it's not
+                calibrated or needs calibration (this is hardware-dependant).
         """
         pass
 
     @property
     @abc.abstractmethod
     def is_calibrated(self) -> bool:
-        """遥操作器当前是否已校准。如果不适用，应始终为 `True`"""
+        """Whether the teleoperator is currently calibrated or not. Should be always `True` if not applicable"""
         pass
 
     @abc.abstractmethod
     def calibrate(self) -> None:
         """
-        如果适用，校准遥操作器。如果不适用，此方法应为空操作。
+        Calibrate the teleoperator if applicable. If not, this should be a no-op.
 
-        此方法应收集任何必要的数据（例如电机偏移量）并相应地更新 :pyattr:`calibration` 字典。
+        This method should collect any necessary data (e.g., motor offsets) and update the
+        :pyattr:`calibration` dictionary accordingly.
         """
         pass
 
     def _load_calibration(self, fpath: Path | None = None) -> None:
         """
-        从指定文件加载校准数据的辅助方法。
+        Helper to load calibration data from the specified file.
 
-        参数:
-            fpath (Path | None): 校准文件的可选路径。默认为 `self.calibration_fpath`。
+        Args:
+            fpath (Path | None): Optional path to the calibration file. Defaults to `self.calibration_fpath`.
         """
         fpath = self.calibration_fpath if fpath is None else fpath
         with open(fpath) as f, draccus.config_type("json"):
@@ -127,10 +159,10 @@ class Teleoperator(abc.ABC):
 
     def _save_calibration(self, fpath: Path | None = None) -> None:
         """
-        将校准数据保存到指定文件的辅助方法。
+        Helper to save calibration data to the specified file.
 
-        参数:
-            fpath (Path | None): 保存校准文件的可选路径。默认为 `self.calibration_fpath`。
+        Args:
+            fpath (Path | None): Optional path to save the calibration file. Defaults to `self.calibration_fpath`.
         """
         fpath = self.calibration_fpath if fpath is None else fpath
         with open(fpath, "w") as f, draccus.config_type("json"):
@@ -139,37 +171,38 @@ class Teleoperator(abc.ABC):
     @abc.abstractmethod
     def configure(self) -> None:
         """
-        对遥操作器应用任何一次性或运行时配置。
-        这可能包括设置电机参数、控制模式或初始状态。
+        Apply any one-time or runtime configuration to the teleoperator.
+        This may include setting motor parameters, control modes, or initial state.
         """
         pass
 
     @abc.abstractmethod
-    def get_action(self) -> dict[str, Any]:
+    def get_action(self) -> RobotAction:
         """
-        从遥操作器检索当前动作。
+        Retrieve the current action from the teleoperator.
 
-        返回:
-            dict[str, Any]: 表示遥操作器当前动作的扁平字典。其结构应与 :pymeth:`observation_features`
-                匹配。
+        Returns:
+            RobotAction: A flat dictionary representing the teleoperator's current actions. Its
+                structure should match :pymeth:`observation_features`.
         """
         pass
 
     @abc.abstractmethod
     def send_feedback(self, feedback: dict[str, Any]) -> None:
         """
-        向遥操作器发送反馈动作命令。
+        Send a feedback action command to the teleoperator.
 
-        参数:
-            feedback (dict[str, Any]): 表示所需反馈的字典。其结构应与 :pymeth:`feedback_features`
-                匹配。
+        Args:
+            feedback (dict[str, Any]): Dictionary representing the desired feedback. Its structure should match
+                :pymeth:`feedback_features`.
 
-        返回:
-            dict[str, Any]: 实际发送到电机的动作，可能经过裁剪或修改，例如通过速度安全限制。
+        Returns:
+            dict[str, Any]: The action actually sent to the motors potentially clipped or modified, e.g. by
+                safety limits on velocity.
         """
         pass
 
     @abc.abstractmethod
     def disconnect(self) -> None:
-        """断开与遥操作器的连接并执行任何必要的清理工作。"""
+        """Disconnect from the teleoperator and perform any necessary cleanup."""
         pass

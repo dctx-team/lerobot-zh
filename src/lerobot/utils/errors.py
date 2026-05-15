@@ -14,30 +14,19 @@
 
 
 class DeviceNotConnectedError(ConnectionError):
-    """设备未连接时引发的异常。"""
+    """Exception raised when the device is not connected."""
 
-    def __init__(self, message="该设备未连接。请先尝试调用 `connect()` 方法。"):
+    def __init__(self, message="This device is not connected. Try calling `connect()` first."):
         self.message = message
         super().__init__(self.message)
 
 
 class DeviceAlreadyConnectedError(ConnectionError):
-    """设备已连接时引发的异常。"""
+    """Exception raised when the device is already connected."""
 
     def __init__(
         self,
-        message="该设备已经连接。请不要重复调用 `connect()` 方法。",
-    ):
-        self.message = message
-        super().__init__(self.message)
-
-
-class InvalidActionError(ValueError):
-    """动作无效时引发的异常。"""
-
-    def __init__(
-        self,
-        message="该动作无效。请检查数值是否符合动作空间的预期。",
+        message="This device is already connected. Try not calling `connect()` twice.",
     ):
         self.message = message
         super().__init__(self.message)

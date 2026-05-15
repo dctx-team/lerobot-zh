@@ -14,14 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Homunculus 遥操作模块
-
-该模块提供 Homunculus 系统的遥操作功能，包括机械臂和数据手套控制，
-支持将手套数据转换为机器人手部控制信号。
-"""
-
 from .config_homunculus import HomunculusArmConfig, HomunculusGloveConfig
 from .homunculus_arm import HomunculusArm
 from .homunculus_glove import HomunculusGlove
 from .joints_translation import homunculus_glove_to_hope_jr_hand
+
+__all__ = [
+    "HomunculusArm",
+    "HomunculusArmConfig",
+    "HomunculusGlove",
+    "HomunculusGloveConfig",
+    "homunculus_glove_to_hope_jr_hand",
+]

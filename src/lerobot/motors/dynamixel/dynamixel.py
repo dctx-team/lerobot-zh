@@ -12,19 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# TODO(aliberts): 我们应该实现FastSyncRead/Write吗？
+# TODO(aliberts): Should we implement FastSyncRead/Write?
 # https://github.com/ROBOTIS-GIT/DynamixelSDK/pull/643
 # https://github.com/ROBOTIS-GIT/DynamixelSDK/releases/tag/3.8.2
 # https://emanual.robotis.com/docs/en/dxl/protocol2/#fast-sync-read-0x8a
-# -> 需要检查跨型号的兼容性
+# -> Need to check compatibility across models
 
 import logging
 from copy import deepcopy
 from enum import Enum
+from typing import TYPE_CHECKING
 
-from lerobot.motors.encoding_utils import decode_twos_complement, encode_twos_complement
+from lerobot.utils.import_utils import _dynamixel_sdk_available, require_package
 
-from ..motors_bus import Motor, MotorCalibration, MotorsBus, NameOrID, Value, get_address
+from ..encoding_utils import decode_twos_complement, encode_twos_complement
+from ..motors_bus import Motor, MotorCalibration, NameOrID, SerialMotorsBus, Value, get_address
 from .tables import (
     AVAILABLE_BAUDRATES,
     MODEL_BAUDRATE_TABLE,
@@ -33,6 +35,11 @@ from .tables import (
     MODEL_NUMBER_TABLE,
     MODEL_RESOLUTION,
 )
+
+if TYPE_CHECKING or _dynamixel_sdk_available:
+    import dynamixel_sdk as dxl
+else:
+    dxl = None
 
 PROTOCOL_VERSION = 2.0
 DEFAULT_BAUDRATE = 1_000_000
@@ -44,30 +51,32 @@ logger = logging.getLogger(__name__)
 
 
 class OperatingMode(Enum):
-    # DYNAMIXEL仅控制电流（扭矩），而不考虑速度和位置。此模式适用于
-    # 夹爪或仅使用电流（扭矩）控制的系统，或具有附加速度/位置控制器的系统。
+    # DYNAMIXEL only controls current(torque) regardless of speed and position. This mode is ideal for a
+    # gripper or a system that only uses current(torque) control or a system that has additional
+    # velocity/position controllers.
     CURRENT = 0
 
-    # 此模式控制速度。此模式与现有DYNAMIXEL的轮模式（无限）相同。
-    # 此模式适用于轮式机器人。
+    # This mode controls velocity. This mode is identical to the Wheel Mode(endless) from existing DYNAMIXEL.
+    # This mode is ideal for wheel-type robots.
     VELOCITY = 1
 
-    # 此模式控制位置。此模式与现有DYNAMIXEL的关节模式相同。工作位置范围
-    # 受最大位置限制(48)和最小位置限制(52)的限制。此模式适用于每个关节
-    # 旋转小于360度的关节机器人。
+    # This mode controls position. This mode is identical to the Joint Mode from existing DYNAMIXEL. Operating
+    # position range is limited by the Max Position Limit(48) and the Min Position Limit(52). This mode is
+    # ideal for articulated robots that each joint rotates less than 360 degrees.
     POSITION = 3
 
-    # 此模式控制位置。此模式与现有DYNAMIXEL的多圈位置控制相同。
-    # 支持512圈（-256[圈] ~ 256[圈]）。此模式适用于多圈手腕或输送系统
-    # 或需要额外减速齿轮的系统。请注意，最大位置限制(48)和最小位置限制(52)
-    # 在扩展位置控制模式下不使用。
+    # This mode controls position. This mode is identical to the Multi-turn Position Control from existing
+    # DYNAMIXEL. 512 turns are supported(-256[rev] ~ 256[rev]). This mode is ideal for multi-turn wrists or
+    # conveyor systems or a system that requires an additional reduction gear. Note that Max Position
+    # Limit(48), Min Position Limit(52) are not used on Extended Position Control Mode.
     EXTENDED_POSITION = 4
 
-    # 此模式同时控制位置和电流（扭矩）。支持最多512圈（-256[圈] ~ 256[圈]）。
-    # 此模式适用于需要同时进行位置和电流控制的系统，例如关节机器人或夹爪。
+    # This mode controls both position and current(torque). Up to 512 turns are supported (-256[rev] ~
+    # 256[rev]). This mode is ideal for a system that requires both position and current control such as
+    # articulated robots or grippers.
     CURRENT_POSITION = 5
 
-    # 此模式直接控制PWM输出。（电压控制模式）
+    # This mode directly controls PWM output. (Voltage Control Mode)
     PWM = 16
 
 
@@ -81,27 +90,10 @@ class TorqueMode(Enum):
     DISABLED = 0
 
 
-def _split_into_byte_chunks(value: int, length: int) -> list[int]:
-    import dynamixel_sdk as dxl
-
-    if length == 1:
-        data = [value]
-    elif length == 2:
-        data = [dxl.DXL_LOBYTE(value), dxl.DXL_HIBYTE(value)]
-    elif length == 4:
-        data = [
-            dxl.DXL_LOBYTE(dxl.DXL_LOWORD(value)),
-            dxl.DXL_HIBYTE(dxl.DXL_LOWORD(value)),
-            dxl.DXL_LOBYTE(dxl.DXL_HIWORD(value)),
-            dxl.DXL_HIBYTE(dxl.DXL_HIWORD(value)),
-        ]
-    return data
-
-
-class DynamixelMotorsBus(MotorsBus):
+class DynamixelMotorsBus(SerialMotorsBus):
     """
-    MotorsBus的Dynamixel实现。它依赖于python dynamixel SDK与
-    电机通信。有关更多信息，请参阅Dynamixel SDK文档：
+    The Dynamixel implementation for a MotorsBus. It relies on the python dynamixel sdk to communicate with
+    the motors. For more info, see the Dynamixel SDK Documentation:
     https://emanual.robotis.com/docs/en/software/dynamixel/dynamixel_sdk/sample_code/python_read_write_protocol_2_0/#python-read-write-protocol-20
     """
 
@@ -122,9 +114,8 @@ class DynamixelMotorsBus(MotorsBus):
         motors: dict[str, Motor],
         calibration: dict[str, MotorCalibration] | None = None,
     ):
+        require_package("dynamixel-sdk", extra="dynamixel", import_name="dynamixel_sdk")
         super().__init__(port, motors, calibration)
-        import dynamixel_sdk as dxl
-
         self.port_handler = dxl.PortHandler(self.port)
         self.packet_handler = dxl.PacketHandler(PROTOCOL_VERSION)
         self.sync_reader = dxl.GroupSyncRead(self.port_handler, self.packet_handler, 0, 0)
@@ -161,8 +152,8 @@ class DynamixelMotorsBus(MotorsBus):
         raise RuntimeError(f"Motor '{motor}' (model '{model}') was not found. Make sure it is connected.")
 
     def configure_motors(self, return_delay_time=0) -> None:
-        # 默认情况下，Dynamixel电机的延迟响应时间为500µs（在'Return_Delay_Time'
-        # 地址上对应值250）。我们确保将其减少到最小值2µs（值为0）。
+        # By default, Dynamixel motors have a 500µs delay response time (corresponding to a value of 250 on
+        # the 'Return_Delay_Time' address). We ensure this is reduced to the minimum of 2µs (value of 0).
         for motor in self.motors:
             self.write("Return_Delay_Time", motor, return_delay_time)
 
@@ -180,10 +171,10 @@ class DynamixelMotorsBus(MotorsBus):
         for motor, m in self.motors.items():
             calibration[motor] = MotorCalibration(
                 id=m.id,
-                drive_mode=drive_modes[motor],
-                homing_offset=offsets[motor],
-                range_min=mins[motor],
-                range_max=maxes[motor],
+                drive_mode=int(drive_modes[motor]),
+                homing_offset=int(offsets[motor]),
+                range_min=int(mins[motor]),
+                range_max=int(maxes[motor]),
             )
 
         return calibration
@@ -197,15 +188,15 @@ class DynamixelMotorsBus(MotorsBus):
         if cache:
             self.calibration = calibration_dict
 
-    def disable_torque(self, motors: str | list[str] | None = None, num_retry: int = 0) -> None:
+    def disable_torque(self, motors: int | str | list[str] | None = None, num_retry: int = 0) -> None:
         for motor in self._get_motors_list(motors):
             self.write("Torque_Enable", motor, TorqueMode.DISABLED.value, num_retry=num_retry)
 
-    def _disable_torque(self, motor_id: int, model: str, num_retry: int = 0) -> None:
+    def _disable_torque(self, motor: int, model: str, num_retry: int = 0) -> None:
         addr, length = get_address(self.model_ctrl_table, model, "Torque_Enable")
-        self._write(addr, length, motor_id, TorqueMode.DISABLED.value, num_retry=num_retry)
+        self._write(addr, length, motor, TorqueMode.DISABLED.value, num_retry=num_retry)
 
-    def enable_torque(self, motors: str | list[str] | None = None, num_retry: int = 0) -> None:
+    def enable_torque(self, motors: int | str | list[str] | None = None, num_retry: int = 0) -> None:
         for motor in self._get_motors_list(motors):
             self.write("Torque_Enable", motor, TorqueMode.ENABLED.value, num_retry=num_retry)
 
@@ -230,10 +221,11 @@ class DynamixelMotorsBus(MotorsBus):
         return ids_values
 
     def _get_half_turn_homings(self, positions: dict[NameOrID, Value]) -> dict[NameOrID, Value]:
-        """在Dynamixel电机上：
+        """
+        On Dynamixel Motors:
         Present_Position = Actual_Position + Homing_Offset
         """
-        half_turn_homings = {}
+        half_turn_homings: dict[NameOrID, Value] = {}
         for motor, pos in positions.items():
             model = self._get_motor_model(motor)
             max_res = self.model_resolution_table[model] - 1
@@ -242,7 +234,18 @@ class DynamixelMotorsBus(MotorsBus):
         return half_turn_homings
 
     def _split_into_byte_chunks(self, value: int, length: int) -> list[int]:
-        return _split_into_byte_chunks(value, length)
+        if length == 1:
+            data = [value]
+        elif length == 2:
+            data = [dxl.DXL_LOBYTE(value), dxl.DXL_HIBYTE(value)]
+        elif length == 4:
+            data = [
+                dxl.DXL_LOBYTE(dxl.DXL_LOWORD(value)),
+                dxl.DXL_HIBYTE(dxl.DXL_LOWORD(value)),
+                dxl.DXL_LOBYTE(dxl.DXL_HIWORD(value)),
+                dxl.DXL_HIBYTE(dxl.DXL_HIWORD(value)),
+            ]
+        return data
 
     def broadcast_ping(self, num_retry: int = 0, raise_on_error: bool = False) -> dict[int, int] | None:
         for n_try in range(1 + num_retry):
@@ -256,6 +259,6 @@ class DynamixelMotorsBus(MotorsBus):
             if raise_on_error:
                 raise ConnectionError(self.packet_handler.getTxRxResult(comm))
 
-            return
+            return None
 
         return {id_: data[0] for id_, data in data_list.items()}

@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import abc
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -22,12 +23,23 @@ import draccus
 import torch
 from safetensors.torch import load_file, save_file
 
-from lerobot.datasets.utils import flatten_dict, unflatten_dict, write_json
 from lerobot.utils.constants import (
     OPTIMIZER_PARAM_GROUPS,
     OPTIMIZER_STATE,
 )
-from lerobot.utils.io_utils import deserialize_json_into_object
+from lerobot.utils.io_utils import deserialize_json_into_object, write_json
+from lerobot.utils.utils import flatten_dict, unflatten_dict
+
+# Type alias for parameters accepted by optimizer build() methods.
+# This matches PyTorch's optimizer signature while also supporting:
+# - dict[str, Parameter]: Named parameters for differential LR by name (e.g., XVLA)
+# - dict[str, Iterable]: Multiple parameter groups for multi-optimizer configs (e.g., SAC)
+OptimizerParams = (
+    Iterable[torch.nn.Parameter]  # From model.parameters()
+    | Iterable[dict[str, Any]]  # List of param groups with lr/weight_decay overrides
+    | dict[str, torch.nn.Parameter]  # From dict(model.named_parameters()) for name-based LR
+    | dict[str, Any]  # For multi-optimizer configs (SAC) with multiple param groups
+)
 
 
 @dataclass
@@ -45,14 +57,26 @@ class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
         return "adam"
 
     @abc.abstractmethod
-    def build(self) -> torch.optim.Optimizer | dict[str, torch.optim.Optimizer]:
-        """构建优化器。它可以是单个优化器或优化器字典。
+    def build(self, params: OptimizerParams) -> torch.optim.Optimizer | dict[str, torch.optim.Optimizer]:
+        """
+        Build the optimizer. It can be a single optimizer or a dictionary of optimizers.
 
-        注意: 当您有不同的模型需要优化时，多个优化器很有用。
-        例如，在强化学习设置中，您可以为策略使用一个优化器，为价值函数使用另一个优化器。
+        NOTE: Multiple optimizers are useful when you have different models to optimize.
+        For example, you can have one optimizer for the policy and another one for the value function
+        in reinforcement learning settings.
 
-        返回:
-            优化器或优化器字典。
+        Args:
+            params: Parameters to optimize. Accepts multiple formats depending on the optimizer:
+                - Iterable[Parameter]: From model.parameters() - standard PyTorch usage
+                - Iterable[dict]: List of param groups with 'params' key and optional
+                  'lr', 'weight_decay' overrides (e.g., ACT, VQBeT policies)
+                - dict[str, Parameter]: From dict(model.named_parameters()) for optimizers
+                  that apply differential learning rates by parameter name (e.g., XVLA)
+                - dict[str, Iterable]: For multi-optimizer configs where each key maps to
+                  a separate optimizer's parameters (e.g., SAC with actor/critic/temperature)
+
+        Returns:
+            The optimizer or a dictionary of optimizers.
         """
         raise NotImplementedError
 
@@ -66,7 +90,7 @@ class AdamConfig(OptimizerConfig):
     weight_decay: float = 0.0
     grad_clip_norm: float = 10.0
 
-    def build(self, params: dict) -> torch.optim.Optimizer:
+    def build(self, params: OptimizerParams) -> torch.optim.Optimizer:
         kwargs = asdict(self)
         kwargs.pop("grad_clip_norm")
         return torch.optim.Adam(params, **kwargs)
@@ -81,7 +105,7 @@ class AdamWConfig(OptimizerConfig):
     weight_decay: float = 1e-2
     grad_clip_norm: float = 10.0
 
-    def build(self, params: dict) -> torch.optim.Optimizer:
+    def build(self, params: OptimizerParams) -> torch.optim.Optimizer:
         kwargs = asdict(self)
         kwargs.pop("grad_clip_norm")
         return torch.optim.AdamW(params, **kwargs)
@@ -97,24 +121,123 @@ class SGDConfig(OptimizerConfig):
     weight_decay: float = 0.0
     grad_clip_norm: float = 10.0
 
-    def build(self, params: dict) -> torch.optim.Optimizer:
+    def build(self, params: OptimizerParams) -> torch.optim.Optimizer:
         kwargs = asdict(self)
         kwargs.pop("grad_clip_norm")
         return torch.optim.SGD(params, **kwargs)
 
 
+@OptimizerConfig.register_subclass("xvla-adamw")
+@dataclass
+class XVLAAdamWConfig(OptimizerConfig):
+    """Custom AdamW optimizer for XVLA with differential learning rates.
+
+    The Vision-Language Model (VLM) is trained with 1/10 of the base learning rate
+    for stable optimization, while all other components use the full LR.
+
+    This LR ratio is crucial for achieving strong and stable finetuning performance.
+
+    Soft-prompts can optionally use a separate learning rate with warm-up support.
+    Set `soft_prompt_lr_scale` to a value < 1.0 (e.g., 0.1) to start soft-prompts
+    at a lower LR. Combine with a warmup scheduler for optimal results.
+
+    Note:
+        Completely matching official reported performance may require an additional
+        warm-up LR schedule for soft-prompts, which can bring minor improvements.
+        When `soft_prompt_warmup_lr_scale` is set, soft-prompts start at
+        `lr * soft_prompt_warmup_lr_scale` and should be warmed up via the scheduler.
+
+    Parameter Groups:
+        - Group 0 (vlm): VLM parameters at lr * 0.1, weight_decay * 0.1
+        - Group 1 (soft_prompts): Soft-prompt parameters at lr * soft_prompt_lr_scale
+        - Group 2 (other): All other parameters at full lr
+    """
+
+    lr: float = 1e-4
+    betas: tuple[float, float] = (0.9, 0.99)
+    eps: float = 1e-8
+    weight_decay: float = 0.0
+    grad_clip_norm: float = 10.0
+    # Soft-prompt specific settings
+    soft_prompt_lr_scale: float = 1.0  # Scale factor for soft-prompt LR (1.0 = same as base LR)
+    soft_prompt_warmup_lr_scale: float | None = None  # If set, start soft-prompts at this scale (e.g., 0.01)
+
+    def build(self, params: OptimizerParams) -> torch.optim.Optimizer:
+        """
+        Build AdamW optimizer with differential learning rates.
+
+        Args:
+            params: Must be a dict[str, Parameter] from dict(model.named_parameters())
+                or equivalent.
+
+        Returns:
+            AdamW optimizer with parameter groups for VLM, soft-prompts, and other components
+
+        Raises:
+            AssertionError: If params is not a dict (e.g., from model.parameters())
+        """
+        assert isinstance(params, dict), "Custom LR optimizer requires `named_parameters()` as inputs."
+
+        vlm_group, soft_prompt_group, other_group = [], [], []
+        for name, p in params.items():
+            if not p.requires_grad:
+                continue
+            if "vlm" in name.lower():
+                vlm_group.append(p)
+            elif "soft_prompt" in name.lower():
+                soft_prompt_group.append(p)
+            else:
+                other_group.append(p)
+
+        # Determine soft-prompt LR
+        soft_prompt_lr = self.lr * self.soft_prompt_lr_scale
+        if self.soft_prompt_warmup_lr_scale is not None:
+            # Start at warmup scale, scheduler will warm up to soft_prompt_lr
+            soft_prompt_lr = self.lr * self.soft_prompt_warmup_lr_scale
+
+        param_groups: list[dict[str, Any]] = [
+            {
+                "params": vlm_group,
+                "lr": self.lr * 0.1,
+                "weight_decay": self.weight_decay * 0.1,
+                "name": "vlm",
+            },
+            {
+                "params": soft_prompt_group,
+                "lr": soft_prompt_lr,
+                "weight_decay": self.weight_decay,
+                "name": "soft_prompts",
+            },
+            {
+                "params": other_group,
+                "lr": self.lr,
+                "weight_decay": self.weight_decay,
+                "name": "other",
+            },
+        ]
+
+        # Filter out empty groups
+        param_groups = [g for g in param_groups if len(g["params"]) > 0]
+
+        return torch.optim.AdamW(
+            param_groups,
+            betas=self.betas,
+            eps=self.eps,
+        )
+
+
 @OptimizerConfig.register_subclass("multi_adam")
 @dataclass
 class MultiAdamConfig(OptimizerConfig):
-    """具有不同参数组的多个 Adam 优化器配置。
+    """Configuration for multiple Adam optimizers with different parameter groups.
 
-    这会创建一个 Adam 优化器字典，每个优化器都有自己的超参数。
+    This creates a dictionary of Adam optimizers, each with its own hyperparameters.
 
-    参数:
-        lr: 默认学习率（如果未为组指定则使用）
-        weight_decay: 默认权重衰减（如果未为组指定则使用）
-        optimizer_groups: 将参数组名称映射到其超参数的字典
-        grad_clip_norm: 梯度裁剪范数
+    Args:
+        lr: Default learning rate (used if not specified for a group)
+        weight_decay: Default weight decay (used if not specified for a group)
+        optimizer_groups: Dictionary mapping parameter group names to their hyperparameters
+        grad_clip_norm: Gradient clipping norm
     """
 
     lr: float = 1e-3
@@ -122,23 +245,29 @@ class MultiAdamConfig(OptimizerConfig):
     grad_clip_norm: float = 10.0
     optimizer_groups: dict[str, dict[str, Any]] = field(default_factory=dict)
 
-    def build(self, params_dict: dict[str, list]) -> dict[str, torch.optim.Optimizer]:
-        """构建多个 Adam 优化器。
+    def build(self, params: OptimizerParams) -> dict[str, torch.optim.Optimizer]:
+        """Build multiple Adam optimizers.
 
-        参数:
-            params_dict: 将参数组名称映射到参数列表的字典
-                         键应该与 optimizer_groups 中的键匹配
+        Args:
+            params: Must be a dict[str, Iterable[Parameter]] mapping parameter group names
+                to iterables of parameters. The keys should match the keys in optimizer_groups.
+                Typically from policies that need separate optimizers (e.g., SAC with
+                actor/critic/temperature).
 
-        返回:
-            将参数组名称映射到其优化器的字典
+        Returns:
+            Dictionary mapping parameter group names to their optimizers
+
+        Raises:
+            AssertionError: If params is not a dict
         """
+        assert isinstance(params, dict), "MultiAdamConfig requires a dict of parameter groups as inputs."
         optimizers = {}
 
-        for name, params in params_dict.items():
-            # 获取组特定的超参数或使用默认值
+        for name, group_params in params.items():
+            # Get group-specific hyperparameters or use defaults
             group_config = self.optimizer_groups.get(name, {})
 
-            # 使用合并参数（默认值 + 组特定值）创建优化器
+            # Create optimizer with merged parameters (defaults + group-specific)
             optimizer_kwargs = {
                 "lr": group_config.get("lr", self.lr),
                 "betas": group_config.get("betas", (0.9, 0.999)),
@@ -146,7 +275,7 @@ class MultiAdamConfig(OptimizerConfig):
                 "weight_decay": group_config.get("weight_decay", self.weight_decay),
             }
 
-            optimizers[name] = torch.optim.Adam(params, **optimizer_kwargs)
+            optimizers[name] = torch.optim.Adam(group_params, **optimizer_kwargs)
 
         return optimizers
 
@@ -154,51 +283,46 @@ class MultiAdamConfig(OptimizerConfig):
 def save_optimizer_state(
     optimizer: torch.optim.Optimizer | dict[str, torch.optim.Optimizer], save_dir: Path
 ) -> None:
-    """将优化器状态保存到磁盘。
+    """Save optimizer state to disk.
 
-    参数:
-        optimizer: 单个优化器或优化器字典。
-        save_dir: 保存优化器状态的目录。
+    Args:
+        optimizer: Either a single optimizer or a dictionary of optimizers.
+        save_dir: Directory to save the optimizer state.
     """
     if isinstance(optimizer, dict):
-        # 处理优化器字典
+        # Handle dictionary of optimizers
         for name, opt in optimizer.items():
             optimizer_dir = save_dir / name
             optimizer_dir.mkdir(exist_ok=True, parents=True)
             _save_single_optimizer_state(opt, optimizer_dir)
     else:
-        # 处理单个优化器
+        # Handle single optimizer
         _save_single_optimizer_state(optimizer, save_dir)
 
 
 def _save_single_optimizer_state(optimizer: torch.optim.Optimizer, save_dir: Path) -> None:
-    """将单个优化器的状态保存到磁盘。
-
-    参数:
-        optimizer: 要保存状态的 PyTorch 优化器。
-        save_dir: 保存优化器状态文件的目录。
-    """
+    """Save a single optimizer's state to disk."""
     state = optimizer.state_dict()
     param_groups = state.pop("param_groups")
     flat_state = flatten_dict(state)
-    save_file(flat_state, save_dir / OPTIMIZER_STATE)  # 保存优化器状态张量
-    write_json(param_groups, save_dir / OPTIMIZER_PARAM_GROUPS)  # 保存参数组配置
+    save_file(flat_state, save_dir / OPTIMIZER_STATE)
+    write_json(param_groups, save_dir / OPTIMIZER_PARAM_GROUPS)
 
 
 def load_optimizer_state(
     optimizer: torch.optim.Optimizer | dict[str, torch.optim.Optimizer], save_dir: Path
 ) -> torch.optim.Optimizer | dict[str, torch.optim.Optimizer]:
-    """从磁盘加载优化器状态。
+    """Load optimizer state from disk.
 
-    参数:
-        optimizer: 单个优化器或优化器字典。
-        save_dir: 加载优化器状态的目录。
+    Args:
+        optimizer: Either a single optimizer or a dictionary of optimizers.
+        save_dir: Directory to load the optimizer state from.
 
-    返回:
-        加载了状态的更新后的优化器。
+    Returns:
+        The updated optimizer(s) with loaded state.
     """
     if isinstance(optimizer, dict):
-        # 处理优化器字典
+        # Handle dictionary of optimizers
         loaded_optimizers = {}
         for name, opt in optimizer.items():
             optimizer_dir = save_dir / name
@@ -208,32 +332,23 @@ def load_optimizer_state(
                 loaded_optimizers[name] = opt
         return loaded_optimizers
     else:
-        # 处理单个优化器
+        # Handle single optimizer
         return _load_single_optimizer_state(optimizer, save_dir)
 
 
 def _load_single_optimizer_state(optimizer: torch.optim.Optimizer, save_dir: Path) -> torch.optim.Optimizer:
-    """从磁盘加载单个优化器的状态。
-
-    参数:
-        optimizer: 要加载状态的 PyTorch 优化器。
-        save_dir: 包含优化器状态文件的目录。
-
-    返回:
-        加载了状态的优化器。
-    """
+    """Load a single optimizer's state from disk."""
     current_state_dict = optimizer.state_dict()
-    flat_state = load_file(save_dir / OPTIMIZER_STATE)  # 加载优化器状态张量
+    flat_state = load_file(save_dir / OPTIMIZER_STATE)
     state = unflatten_dict(flat_state)
 
-    # 处理 'state' 键可能不存在的情况（针对新创建的优化器）
+    # Handle case where 'state' key might not exist (for newly created optimizers)
     if "state" in state:
-        loaded_state_dict = {"state": {int(k): v for k, v in state["state"].items()}}  # 将字符串键转换为整数
+        loaded_state_dict = {"state": {int(k): v for k, v in state["state"].items()}}
     else:
         loaded_state_dict = {"state": {}}
 
     if "param_groups" in current_state_dict:
-        # 从 JSON 文件加载参数组配置
         param_groups = deserialize_json_into_object(
             save_dir / OPTIMIZER_PARAM_GROUPS, current_state_dict["param_groups"]
         )

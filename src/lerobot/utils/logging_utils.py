@@ -13,15 +13,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from collections.abc import Callable
 from typing import Any
 
-from lerobot.utils.utils import format_big_number
+from .utils import format_big_number
 
 
 class AverageMeter:
     """
-    计算并存储平均值和当前值
-    改编自 https://github.com/pytorch/examples/blob/main/imagenet/main.py
+    Computes and stores the average and current value
+    Adapted from https://github.com/pytorch/examples/blob/main/imagenet/main.py
     """
 
     def __init__(self, name: str, fmt: str = ":f"):
@@ -48,29 +49,29 @@ class AverageMeter:
 
 class MetricsTracker:
     """
-    一个辅助类，用于随时间跟踪和记录指标。
+    A helper class to track and log metrics over time.
 
-    使用模式:
+    Usage pattern:
 
     ```python
-    # 初始化，可能使用非零的初始步数（例如，如果恢复运行）
+    # initialize, potentially with non-zero initial step (e.g. if resuming run)
     metrics = {"loss": AverageMeter("loss", ":.3f")}
     train_metrics = MetricsTracker(cfg, dataset, metrics, initial_step=step)
 
-    # 在每个训练步骤更新派生自步数的指标（样本、片段、轮次）
+    # update metrics derived from step (samples, episodes, epochs) at each training step
     train_metrics.step()
 
-    # 更新各种指标
+    # update various metrics
     loss = policy.forward(batch)
     train_metrics.loss = loss
 
-    # 显示当前指标
+    # display current metrics
     logging.info(train_metrics)
 
-    # 导出到 wandb
+    # export for wandb
     wandb.log(train_metrics.to_dict())
 
-    # 记录后重置平均值
+    # reset averages after logging
     train_metrics.reset_averages()
     ```
     """
@@ -84,6 +85,7 @@ class MetricsTracker:
         "samples",
         "episodes",
         "epochs",
+        "accelerator",
     ]
 
     def __init__(
@@ -93,6 +95,7 @@ class MetricsTracker:
         num_episodes: int,
         metrics: dict[str, AverageMeter],
         initial_step: int = 0,
+        accelerator: Callable | None = None,
     ):
         self.__dict__.update(dict.fromkeys(self.__keys__))
         self._batch_size = batch_size
@@ -101,11 +104,13 @@ class MetricsTracker:
         self.metrics = metrics
 
         self.steps = initial_step
+        world_size = accelerator.num_processes if accelerator else 1
         # A sample is an (observation,action) pair, where observation and action
         # can be on multiple timestamps. In a batch, we have `batch_size` number of samples.
-        self.samples = self.steps * self._batch_size
+        self.samples = self.steps * self._batch_size * world_size
         self.episodes = self.samples / self._avg_samples_per_ep
         self.epochs = self.samples / self._num_frames
+        self.accelerator = accelerator
 
     def __getattr__(self, name: str) -> int | dict[str, AverageMeter] | AverageMeter | Any:
         if name in self.__dict__:
@@ -125,10 +130,11 @@ class MetricsTracker:
 
     def step(self) -> None:
         """
-        更新依赖于 'step' 的指标一步。
+        Updates metrics that depend on 'step' for one step.
         """
         self.steps += 1
-        self.samples += self._batch_size
+        world_size = self.accelerator.num_processes if self.accelerator else 1
+        self.samples += self._batch_size * world_size
         self.episodes = self.samples / self._avg_samples_per_ep
         self.epochs = self.samples / self._num_frames
 
@@ -147,7 +153,7 @@ class MetricsTracker:
 
     def to_dict(self, use_avg: bool = True) -> dict[str, int | float]:
         """
-        返回当前指标值（或如果 `use_avg=True` 则返回平均值）作为字典。
+        Returns the current metric values (or averages if `use_avg=True`) as a dict.
         """
         return {
             "steps": self.steps,
@@ -158,6 +164,6 @@ class MetricsTracker:
         }
 
     def reset_averages(self) -> None:
-        """重置平均计量器。"""
+        """Resets average meters."""
         for m in self.metrics.values():
             m.reset()

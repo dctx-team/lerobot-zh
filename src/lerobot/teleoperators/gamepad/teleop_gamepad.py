@@ -20,6 +20,9 @@ from typing import Any
 
 import numpy as np
 
+from lerobot.types import RobotAction
+from lerobot.utils.decorators import check_if_not_connected
+
 from ..teleoperator import Teleoperator
 from ..utils import TeleopEvents
 from .configuration_gamepad import GamepadTeleopConfig
@@ -40,7 +43,7 @@ gripper_action_map = {
 
 class GamepadTeleop(Teleoperator):
     """
-    使用游戏手柄输入进行控制的遥操作类。
+    Teleop class to use gamepad inputs for control.
     """
 
     config_class = GamepadTeleopConfig
@@ -73,9 +76,9 @@ class GamepadTeleop(Teleoperator):
         return {}
 
     def connect(self) -> None:
-        # 在 macOS 上使用 HidApi
+        # use HidApi for macos
         if sys.platform == "darwin":
-            # 注意：在 macOS 上，pygame 无法可靠地检测某些控制器的输入，因此我们使用 hidapi
+            # NOTE: On macOS, pygame doesn’t reliably detect input from some controllers so we fall back to hidapi
             from .gamepad_utils import GamepadControllerHID as Gamepad
         else:
             from .gamepad_utils import GamepadController as Gamepad
@@ -83,14 +86,15 @@ class GamepadTeleop(Teleoperator):
         self.gamepad = Gamepad()
         self.gamepad.start()
 
-    def get_action(self) -> dict[str, Any]:
-        # 更新控制器以获取最新输入
+    @check_if_not_connected
+    def get_action(self) -> RobotAction:
+        # Update the controller to get fresh inputs
         self.gamepad.update()
 
-        # 从控制器获取移动增量
+        # Get movement deltas from the controller
         delta_x, delta_y, delta_z = self.gamepad.get_deltas()
 
-        # 从游戏手柄输入创建动作
+        # Create action from gamepad input
         gamepad_action = np.array([delta_x, delta_y, delta_z], dtype=np.float32)
 
         action_dict = {
@@ -99,7 +103,7 @@ class GamepadTeleop(Teleoperator):
             "delta_z": gamepad_action[2],
         }
 
-        # 默认夹爪动作为保持
+        # Default gripper action is to stay
         gripper_action = GripperAction.STAY.value
         if self.config.use_gripper:
             gripper_command = self.gamepad.gripper_command()
@@ -110,15 +114,15 @@ class GamepadTeleop(Teleoperator):
 
     def get_teleop_events(self) -> dict[str, Any]:
         """
-        从游戏手柄获取额外的控制事件，例如干预状态、
-        回合终止、成功指示器等。
+        Get extra control events from the gamepad such as intervention status,
+        episode termination, success indicators, etc.
 
-        返回：
-            包含以下内容的字典：
-                - is_intervention: bool - 人类当前是否正在干预
-                - terminate_episode: bool - 是否终止当前回合
-                - success: bool - 回合是否成功
-                - rerecord_episode: bool - 是否重新记录回合
+        Returns:
+            Dictionary containing:
+                - is_intervention: bool - Whether human is currently intervening
+                - terminate_episode: bool - Whether to terminate the current episode
+                - success: bool - Whether the episode was successful
+                - rerecord_episode: bool - Whether to rerecord the episode
         """
         if self.gamepad is None:
             return {
@@ -128,13 +132,13 @@ class GamepadTeleop(Teleoperator):
                 TeleopEvents.RERECORD_EPISODE: False,
             }
 
-        # 更新游戏手柄状态以获取最新输入
+        # Update gamepad state to get fresh inputs
         self.gamepad.update()
 
-        # 检查干预是否激活
+        # Check if intervention is active
         is_intervention = self.gamepad.should_intervene()
 
-        # 获取回合结束状态
+        # Get episode end status
         episode_end_status = self.gamepad.get_episode_end_status()
         terminate_episode = episode_end_status in [
             TeleopEvents.RERECORD_EPISODE,
@@ -151,31 +155,32 @@ class GamepadTeleop(Teleoperator):
         }
 
     def disconnect(self) -> None:
-        """断开与游戏手柄的连接。"""
+        """Disconnect from the gamepad."""
         if self.gamepad is not None:
             self.gamepad.stop()
             self.gamepad = None
 
+    @property
     def is_connected(self) -> bool:
-        """检查游戏手柄是否已连接。"""
+        """Check if gamepad is connected."""
         return self.gamepad is not None
 
     def calibrate(self) -> None:
-        """校准游戏手柄。"""
-        # 游戏手柄不需要校准
+        """Calibrate the gamepad."""
+        # No calibration needed for gamepad
         pass
 
     def is_calibrated(self) -> bool:
-        """检查游戏手柄是否已校准。"""
-        # 游戏手柄不需要校准
+        """Check if gamepad is calibrated."""
+        # Gamepad doesn't require calibration
         return True
 
     def configure(self) -> None:
-        """配置游戏手柄。"""
-        # 不需要额外的配置
+        """Configure the gamepad."""
+        # No additional configuration needed
         pass
 
     def send_feedback(self, feedback: dict) -> None:
-        """向游戏手柄发送反馈。"""
-        # 游戏手柄不支持反馈
+        """Send feedback to the gamepad."""
+        # Gamepad doesn't support feedback
         pass

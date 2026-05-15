@@ -1,34 +1,34 @@
-# 在仿真中训练强化学习
+# Train RL in Simulation
 
-本指南解释了如何使用 `gym_hil` 仿真环境作为真实机器人的替代方案，在 LeRobot 框架中进行人机协同（Human-In-the-Loop, HIL）强化学习。
+This guide explains how to use the `gym_hil` simulation environments as an alternative to real robots when working with the LeRobot framework for Human-In-the-Loop (HIL) reinforcement learning.
 
-`gym_hil` 是一个提供与 Gymnasium 兼容的仿真环境包，专门为人机协同强化学习设计。这些环境允许您：
+`gym_hil` is a package that provides Gymnasium-compatible simulation environments specifically designed for Human-In-the-Loop reinforcement learning. These environments allow you to:
 
-- 在仿真中训练策略，在真实机器人上训练之前测试强化学习堆栈
+- Train policies in simulation to test the RL stack before training on real robots
 
-- 使用外部设备（如游戏手柄或键盘）在仿真中收集演示数据
-- 在策略学习过程中进行人工干预
+- Collect demonstrations in sim using external devices like gamepads or keyboards
+- Perform human interventions during policy learning
 
-目前，主要环境是基于 MuJoCo 的 Franka Panda 机器人仿真，包含抓取立方体等任务。
+Currently, the main environment is a Franka Panda robot simulation based on MuJoCo, with tasks like picking up a cube.
 
-## 安装
+## Installation
 
-首先，在 LeRobot 环境中安装 `gym_hil` 包：
+First, install the `gym_hil` package within the LeRobot environment:
 
 ```bash
 pip install -e ".[hilserl]"
 ```
 
-## 需要准备什么？
+## What do I need?
 
-- 用于控制机器人的游戏手柄或键盘
-- 英伟达（Nvidia）GPU
+- A gamepad or keyboard to control the robot
+- A Nvidia GPU
 
-## 配置
+## Configuration
 
-要在 LeRobot 中使用 `gym_hil`，您需要创建一个配置文件。[这里](https://huggingface.co/datasets/lerobot/config_examples/resolve/main/rl/gym_hil/env_config.json)提供了一个示例。主要配置部分包括：
+To use `gym_hil` with LeRobot, you need to create a configuration file. An example is provided [here](https://huggingface.co/datasets/lerobot/config_examples/resolve/main/rl/gym_hil/env_config.json). Key configuration sections include:
 
-### 环境类型和任务
+### Environment Type and Task
 
 ```json
 {
@@ -42,13 +42,13 @@ pip install -e ".[hilserl]"
 }
 ```
 
-可用任务：
+Available tasks:
 
-- `PandaPickCubeBase-v0`：基础环境
-- `PandaPickCubeGamepad-v0`：带游戏手柄控制
-- `PandaPickCubeKeyboard-v0`：带键盘控制
+- `PandaPickCubeBase-v0`: Basic environment
+- `PandaPickCubeGamepad-v0`: With gamepad control
+- `PandaPickCubeKeyboard-v0`: With keyboard control
 
-### 处理器配置
+### Processor Configuration
 
 ```json
 {
@@ -77,26 +77,26 @@ pip install -e ".[hilserl]"
 }
 ```
 
-重要参数：
+Important parameters:
 
-- `gripper.gripper_penalty`：过度夹爪运动的惩罚值
-- `gripper.use_gripper`：是否启用夹爪控制
-- `inverse_kinematics.end_effector_step_sizes`：末端执行器在 x、y、z 轴上的步长大小
-- `control_mode`：设置为 `"gamepad"` 以使用游戏手柄控制器
+- `gripper.gripper_penalty`: Penalty for excessive gripper movement
+- `gripper.use_gripper`: Whether to enable gripper control
+- `inverse_kinematics.end_effector_step_sizes`: Size of the steps in the x,y,z axes of the end-effector
+- `control_mode`: Set to `"gamepad"` to use a gamepad controller
 
-## 使用 LeRobot 的 HIL RL 运行
+## Running with HIL RL of LeRobot
 
-### 基本使用
+### Basic Usage
 
-要运行环境，将模式设置为 null：
+To run the environment, set mode to null:
 
 ```bash
 python -m lerobot.rl.gym_manipulator --config_path path/to/gym_hil_env.json
 ```
 
-### 记录数据集
+### Recording a Dataset
 
-要收集数据集，将模式设置为 `record`，同时定义 repo_id 和要记录的回合数量：
+To collect a dataset, set the mode to `record` whilst defining the repo_id and number of episodes to record:
 
 ```json
 {
@@ -121,28 +121,28 @@ python -m lerobot.rl.gym_manipulator --config_path path/to/gym_hil_env.json
 python -m lerobot.rl.gym_manipulator --config_path path/to/gym_hil_env.json
 ```
 
-### 训练策略
+### Training a Policy
 
-要训练策略，查看[这里](https://huggingface.co/datasets/lerobot/config_examples/resolve/main/rl/gym_hil/train_config.json)提供的配置示例，然后运行 actor 和 learner 服务器：
+To train a policy, checkout the configuration example available [here](https://huggingface.co/datasets/lerobot/config_examples/resolve/main/rl/gym_hil/train_config.json) and run the actor and learner servers:
 
 ```bash
 python -m lerobot.rl.actor --config_path path/to/train_gym_hil_env.json
 ```
 
-在另一个终端中，运行 learner 服务器：
+In a different terminal, run the learner server:
 
 ```bash
 python -m lerobot.rl.learner --config_path path/to/train_gym_hil_env.json
 ```
 
-仿真环境提供了一种安全且可重复的方式来开发和测试您的人机协同强化学习组件，然后再部署到真实机器人上。
+The simulation environment provides a safe and repeatable way to develop and test your Human-In-the-Loop reinforcement learning components before deploying to real robots.
 
-恭喜 🎉，您已完成本教程！
+Congrats 🎉, you have finished this tutorial!
 
 > [!TIP]
-> 如果您有任何问题或需要帮助，请在 [Discord](https://discord.com/invite/s3KuuzsPFb) 上联系我们。
+> If you have any questions or need help, please reach out on [Discord](https://discord.com/invite/s3KuuzsPFb).
 
-论文引用：
+Paper citation:
 
 ```
 @article{luo2024precise,

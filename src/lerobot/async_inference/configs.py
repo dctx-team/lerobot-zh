@@ -25,7 +25,7 @@ from .constants import (
     DEFAULT_OBS_QUEUE_TIMEOUT,
 )
 
-# CLI使用的聚合函数注册表
+# Aggregate function registry for CLI usage
 AGGREGATE_FUNCTIONS = {
     "weighted_average": lambda old, new: 0.3 * old + 0.7 * new,
     "latest_only": lambda old, new: new,
@@ -35,7 +35,7 @@ AGGREGATE_FUNCTIONS = {
 
 
 def get_aggregate_function(name: str) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
-    """从注册表中按名称获取聚合函数。"""
+    """Get aggregate function by name from registry."""
     if name not in AGGREGATE_FUNCTIONS:
         available = list(AGGREGATE_FUNCTIONS.keys())
         raise ValueError(f"Unknown aggregate function '{name}'. Available: {available}")
@@ -44,28 +44,28 @@ def get_aggregate_function(name: str) -> Callable[[torch.Tensor, torch.Tensor], 
 
 @dataclass
 class PolicyServerConfig:
-    """PolicyServer的配置类。
+    """Configuration for PolicyServer.
 
-    该类定义了PolicyServer的所有可配置参数，
-    包括网络设置和动作分块规范。
+    This class defines all configurable parameters for the PolicyServer,
+    including networking settings and action chunking specifications.
     """
 
-    # 网络配置
-    host: str = field(default="localhost", metadata={"help": "服务器绑定的主机地址"})
-    port: int = field(default=8080, metadata={"help": "服务器绑定的端口号"})
+    # Networking configuration
+    host: str = field(default="localhost", metadata={"help": "Host address to bind the server to"})
+    port: int = field(default=8080, metadata={"help": "Port number to bind the server to"})
 
-    # 时序配置
-    fps: int = field(default=DEFAULT_FPS, metadata={"help": "每秒帧数"})
+    # Timing configuration
+    fps: int = field(default=DEFAULT_FPS, metadata={"help": "Frames per second"})
     inference_latency: float = field(
-        default=DEFAULT_INFERENCE_LATENCY, metadata={"help": "目标推理延迟（秒）"}
+        default=DEFAULT_INFERENCE_LATENCY, metadata={"help": "Target inference latency in seconds"}
     )
 
     obs_queue_timeout: float = field(
-        default=DEFAULT_OBS_QUEUE_TIMEOUT, metadata={"help": "观测队列超时时间（秒）"}
+        default=DEFAULT_OBS_QUEUE_TIMEOUT, metadata={"help": "Timeout for observation queue in seconds"}
     )
 
     def __post_init__(self):
-        """初始化后验证配置。"""
+        """Validate configuration after initialization."""
         if self.port < 1 or self.port > 65535:
             raise ValueError(f"Port must be between 1 and 65535, got {self.port}")
 
@@ -80,16 +80,16 @@ class PolicyServerConfig:
 
     @classmethod
     def from_dict(cls, config_dict: dict) -> "PolicyServerConfig":
-        """从字典创建PolicyServerConfig实例。"""
+        """Create a PolicyServerConfig from a dictionary."""
         return cls(**config_dict)
 
     @property
     def environment_dt(self) -> float:
-        """环境时间步长，以秒为单位"""
+        """Environment time step, in seconds"""
         return 1 / self.fps
 
     def to_dict(self) -> dict:
-        """将配置转换为字典。"""
+        """Convert the configuration to a dictionary."""
         return {
             "host": self.host,
             "port": self.port,
@@ -101,59 +101,60 @@ class PolicyServerConfig:
 
 @dataclass
 class RobotClientConfig:
-    """RobotClient的配置类。
+    """Configuration for RobotClient.
 
-    该类定义了RobotClient的所有可配置参数，
-    包括网络连接、策略设置和控制行为。
+    This class defines all configurable parameters for the RobotClient,
+    including network connection, policy settings, and control behavior.
     """
 
-    # 策略配置
-    policy_type: str = field(metadata={"help": "要使用的策略类型"})
-    pretrained_name_or_path: str = field(metadata={"help": "预训练模型名称或路径"})
+    # Policy configuration
+    policy_type: str = field(metadata={"help": "Type of policy to use"})
+    pretrained_name_or_path: str = field(metadata={"help": "Pretrained model name or path"})
 
-    # 机器人配置（用于CLI使用 - 机器人实例将从此创建）
-    robot: RobotConfig = field(metadata={"help": "机器人配置"})
+    # Robot configuration (for CLI usage - robot instance will be created from this)
+    robot: RobotConfig = field(metadata={"help": "Robot configuration"})
 
-    # 策略通常最多输出K个动作，但我们可以使用较少的动作以避免浪费带宽（因为动作
-    # 无论如何都会在客户端聚合，这取决于`chunk_size_threshold`的值）
-    actions_per_chunk: int = field(metadata={"help": "每个块中的动作数量"})
+    # Policies typically output K actions at max, but we can use less to avoid wasting bandwidth (as actions
+    # would be aggregated on the client side anyway, depending on the value of `chunk_size_threshold`)
+    actions_per_chunk: int = field(metadata={"help": "Number of actions per chunk"})
 
-    # 机器人执行的任务指令（例如，'fold my tshirt'）
-    task: str = field(default="", metadata={"help": "机器人执行的任务指令"})
+    # Task instruction for the robot to execute (e.g., 'fold my tshirt')
+    task: str = field(default="", metadata={"help": "Task instruction for the robot to execute"})
 
-    # 网络配置
-    server_address: str = field(default="localhost:8080", metadata={"help": "要连接的服务器地址"})
+    # Network configuration
+    server_address: str = field(default="localhost:8080", metadata={"help": "Server address to connect to"})
 
-    # 设备配置
-    policy_device: str = field(default="cpu", metadata={"help": "策略推理的设备"})
+    # Device configuration
+    policy_device: str = field(default="cpu", metadata={"help": "Device for policy inference"})
+    client_device: str = field(
+        default="cpu",
+        metadata={
+            "help": "Device to move actions to after receiving from server (e.g., for downstream planners)"
+        },
+    )
 
-    # 控制行为配置
-    chunk_size_threshold: float = field(default=0.5, metadata={"help": "块大小控制的阈值"})
-    fps: int = field(default=DEFAULT_FPS, metadata={"help": "每秒帧数"})
+    # Control behavior configuration
+    chunk_size_threshold: float = field(default=0.5, metadata={"help": "Threshold for chunk size control"})
+    fps: int = field(default=DEFAULT_FPS, metadata={"help": "Frames per second"})
 
-    # 聚合函数配置（CLI兼容）
+    # Aggregate function configuration (CLI-compatible)
     aggregate_fn_name: str = field(
         default="weighted_average",
-        metadata={"help": f"要使用的聚合函数名称。选项：{list(AGGREGATE_FUNCTIONS.keys())}"},
+        metadata={"help": f"Name of aggregate function to use. Options: {list(AGGREGATE_FUNCTIONS.keys())}"},
     )
 
-    # 调试配置
+    # Debug configuration
     debug_visualize_queue_size: bool = field(
-        default=False, metadata={"help": "可视化动作队列大小"}
-    )
-
-    # 验证配置
-    verify_robot_cameras: bool = field(
-        default=True, metadata={"help": "验证机器人相机是否与策略相机匹配"}
+        default=False, metadata={"help": "Visualize the action queue size"}
     )
 
     @property
     def environment_dt(self) -> float:
-        """环境时间步长，以秒为单位"""
+        """Environment time step, in seconds"""
         return 1 / self.fps
 
     def __post_init__(self):
-        """初始化后验证配置。"""
+        """Validate configuration after initialization."""
         if not self.server_address:
             raise ValueError("server_address cannot be empty")
 
@@ -165,6 +166,9 @@ class RobotClientConfig:
 
         if not self.policy_device:
             raise ValueError("policy_device cannot be empty")
+
+        if not self.client_device:
+            raise ValueError("client_device cannot be empty")
 
         if self.chunk_size_threshold < 0 or self.chunk_size_threshold > 1:
             raise ValueError(f"chunk_size_threshold must be between 0 and 1, got {self.chunk_size_threshold}")
@@ -179,16 +183,17 @@ class RobotClientConfig:
 
     @classmethod
     def from_dict(cls, config_dict: dict) -> "RobotClientConfig":
-        """从字典创建RobotClientConfig实例。"""
+        """Create a RobotClientConfig from a dictionary."""
         return cls(**config_dict)
 
     def to_dict(self) -> dict:
-        """将配置转换为字典。"""
+        """Convert the configuration to a dictionary."""
         return {
             "server_address": self.server_address,
             "policy_type": self.policy_type,
             "pretrained_name_or_path": self.pretrained_name_or_path,
             "policy_device": self.policy_device,
+            "client_device": self.client_device,
             "chunk_size_threshold": self.chunk_size_threshold,
             "fps": self.fps,
             "actions_per_chunk": self.actions_per_chunk,

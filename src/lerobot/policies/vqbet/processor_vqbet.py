@@ -19,7 +19,6 @@ from typing import Any
 
 import torch
 
-from lerobot.policies.vqbet.configuration_vqbet import VQBeTConfig
 from lerobot.processor import (
     AddBatchDimensionProcessorStep,
     DeviceProcessorStep,
@@ -28,9 +27,12 @@ from lerobot.processor import (
     PolicyProcessorPipeline,
     RenameObservationsProcessorStep,
     UnnormalizerProcessorStep,
+    policy_action_to_transition,
+    transition_to_policy_action,
 )
-from lerobot.processor.converters import policy_action_to_transition, transition_to_policy_action
 from lerobot.utils.constants import POLICY_POSTPROCESSOR_DEFAULT_NAME, POLICY_PREPROCESSOR_DEFAULT_NAME
+
+from .configuration_vqbet import VQBeTConfig
 
 
 def make_vqbet_pre_post_processors(
@@ -41,28 +43,28 @@ def make_vqbet_pre_post_processors(
     PolicyProcessorPipeline[PolicyAction, PolicyAction],
 ]:
     """
-    为VQ-BeT策略构建预处理器和后处理器管道。
+    Constructs pre-processor and post-processor pipelines for the VQ-BeT policy.
 
-    预处理管道通过以下步骤为模型准备输入数据：
-    1. 重命名特征，允许自定义以匹配预训练配置。
-    2. 基于数据集统计信息对输入和输出特征进行归一化。
-    3. 添加批次维度。
-    4. 将所有数据移动到指定设备。
+    The pre-processing pipeline prepares input data for the model by:
+    1. Renaming features, allowing customization to match pretrained configurations.
+    2. Normalizing input and output features based on dataset statistics.
+    3. Adding a batch dimension.
+    4. Moving all data to the specified device.
 
-    后处理管道处理模型的输出：
-    1. 将数据移动到CPU。
-    2. 将输出特征反归一化到原始尺度。
+    The post-processing pipeline handles the model's output by:
+    1. Moving data to the CPU.
+    2. Unnormalizing the output features to their original scale.
 
     Args:
-        config: VQ-BeT策略的配置对象。
-        dataset_stats: 用于归一化的统计信息字典。
+        config: The configuration object for the VQ-BeT policy.
+        dataset_stats: A dictionary of statistics for normalization.
 
     Returns:
-        包含配置好的预处理器和后处理器管道的元组。
+        A tuple containing the configured pre-processor and post-processor pipelines.
     """
 
     input_steps = [
-        RenameObservationsProcessorStep(rename_map={}),  # 允许用户重命名键
+        RenameObservationsProcessorStep(rename_map={}),  # Let the possibility to the user to rename the keys
         AddBatchDimensionProcessorStep(),
         DeviceProcessorStep(device=config.device),
         NormalizerProcessorStep(

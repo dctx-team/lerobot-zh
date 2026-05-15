@@ -14,23 +14,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import abc
+import logging
 import math
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import draccus
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR, LRScheduler
 
-from lerobot.datasets.utils import write_json
 from lerobot.utils.constants import SCHEDULER_STATE
-from lerobot.utils.io_utils import deserialize_json_into_object
+from lerobot.utils.import_utils import _diffusers_available, require_package
+from lerobot.utils.io_utils import deserialize_json_into_object, write_json
+
+if TYPE_CHECKING or _diffusers_available:
+    from diffusers.optimization import get_scheduler
+else:
+    get_scheduler = None
 
 
 @dataclass
 class LRSchedulerConfig(draccus.ChoiceRegistry, abc.ABC):
-    """学习率调度器配置的基类"""
-    num_warmup_steps: int
+    num_warmup_steps: int | None
 
     @property
     def type(self) -> str:
@@ -44,12 +50,11 @@ class LRSchedulerConfig(draccus.ChoiceRegistry, abc.ABC):
 @LRSchedulerConfig.register_subclass("diffuser")
 @dataclass
 class DiffuserSchedulerConfig(LRSchedulerConfig):
-    """Diffuser 调度器配置类"""
     name: str = "cosine"
     num_warmup_steps: int | None = None
 
     def build(self, optimizer: Optimizer, num_training_steps: int) -> LambdaLR:
-        from diffusers.optimization import get_scheduler
+        require_package("diffusers", extra="diffusion")
 
         kwargs = {**asdict(self), "num_training_steps": num_training_steps, "optimizer": optimizer}
         return get_scheduler(**kwargs)
@@ -58,7 +63,6 @@ class DiffuserSchedulerConfig(LRSchedulerConfig):
 @LRSchedulerConfig.register_subclass("vqbet")
 @dataclass
 class VQBeTSchedulerConfig(LRSchedulerConfig):
-    """VQBeT 调度器配置类"""
     num_warmup_steps: int
     num_vqvae_training_steps: int
     num_cycles: float = 0.5
@@ -82,7 +86,11 @@ class VQBeTSchedulerConfig(LRSchedulerConfig):
 @LRSchedulerConfig.register_subclass("cosine_decay_with_warmup")
 @dataclass
 class CosineDecayWithWarmupSchedulerConfig(LRSchedulerConfig):
-    """带预热的余弦衰减调度器配置类，由 Physical Intelligence 用于训练 Pi0"""
+    """Used by Physical Intelligence to train Pi0.
+
+    Automatically scales warmup and decay steps if num_training_steps < num_decay_steps.
+    This ensures the learning rate schedule completes properly even with shorter training runs.
+    """
 
     num_warmup_steps: int
     num_decay_steps: int
@@ -90,23 +98,39 @@ class CosineDecayWithWarmupSchedulerConfig(LRSchedulerConfig):
     decay_lr: float
 
     def build(self, optimizer: Optimizer, num_training_steps: int) -> LambdaLR:
-        del num_training_steps
+        # Auto-scale scheduler parameters if training steps are shorter than configured decay steps
+        actual_warmup_steps = self.num_warmup_steps
+        actual_decay_steps = self.num_decay_steps
+
+        if num_training_steps < self.num_decay_steps:
+            # Calculate scaling factor to fit the schedule into the available training steps
+            scale_factor = num_training_steps / self.num_decay_steps
+            actual_warmup_steps = int(self.num_warmup_steps * scale_factor)
+            actual_decay_steps = num_training_steps
+
+            logging.info(
+                f"Auto-scaling LR scheduler: "
+                f"num_training_steps ({num_training_steps}) < num_decay_steps ({self.num_decay_steps}). "
+                f"Scaling warmup: {self.num_warmup_steps} → {actual_warmup_steps}, "
+                f"decay: {self.num_decay_steps} → {actual_decay_steps} "
+                f"(scale factor: {scale_factor:.3f})"
+            )
 
         def lr_lambda(current_step):
             def linear_warmup_schedule(current_step):
                 if current_step <= 0:
-                    return 1 / (self.num_warmup_steps + 1)
-                frac = 1 - current_step / self.num_warmup_steps
-                return (1 / (self.num_warmup_steps + 1) - 1) * frac + 1
+                    return 1 / (actual_warmup_steps + 1)
+                frac = 1 - current_step / actual_warmup_steps
+                return (1 / (actual_warmup_steps + 1) - 1) * frac + 1
 
             def cosine_decay_schedule(current_step):
-                step = min(current_step, self.num_decay_steps)
-                cosine_decay = 0.5 * (1 + math.cos(math.pi * step / self.num_decay_steps))
+                step = min(current_step, actual_decay_steps)
+                cosine_decay = 0.5 * (1 + math.cos(math.pi * step / actual_decay_steps))
                 alpha = self.decay_lr / self.peak_lr
                 decayed = (1 - alpha) * cosine_decay + alpha
                 return decayed
 
-            if current_step < self.num_warmup_steps:
+            if current_step < actual_warmup_steps:
                 return linear_warmup_schedule(current_step)
 
             return cosine_decay_schedule(current_step)
@@ -115,13 +139,11 @@ class CosineDecayWithWarmupSchedulerConfig(LRSchedulerConfig):
 
 
 def save_scheduler_state(scheduler: LRScheduler, save_dir: Path) -> None:
-    """保存学习率调度器的状态到指定目录"""
     state_dict = scheduler.state_dict()
     write_json(state_dict, save_dir / SCHEDULER_STATE)
 
 
 def load_scheduler_state(scheduler: LRScheduler, save_dir: Path) -> LRScheduler:
-    """从指定目录加载学习率调度器的状态"""
     state_dict = deserialize_json_into_object(save_dir / SCHEDULER_STATE, scheduler.state_dict())
     scheduler.load_state_dict(state_dict)
     return scheduler

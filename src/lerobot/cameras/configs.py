@@ -18,49 +18,50 @@ import abc
 from dataclasses import dataclass
 from enum import Enum
 
-import draccus
+import draccus  # type: ignore  # TODO: add type stubs for draccus
 
 
 class ColorMode(str, Enum):
-    """颜色模式枚举。
-
-    RGB: 红-绿-蓝颜色顺序
-    BGR: 蓝-绿-红颜色顺序
-    """
     RGB = "rgb"
     BGR = "bgr"
 
+    @classmethod
+    def _missing_(cls, value: object) -> None:
+        raise ValueError(f"`color_mode` is expected to be in {list(cls)}, but {value} is provided.")
+
 
 class Cv2Rotation(int, Enum):
-    """OpenCV 旋转角度枚举。
-
-    NO_ROTATION: 不旋转（0度）
-    ROTATE_90: 顺时针旋转90度
-    ROTATE_180: 旋转180度
-    ROTATE_270: 逆时针旋转90度（或顺时针270度）
-    """
     NO_ROTATION = 0
     ROTATE_90 = 90
     ROTATE_180 = 180
     ROTATE_270 = -90
 
+    @classmethod
+    def _missing_(cls, value: object) -> None:
+        raise ValueError(f"`rotation` is expected to be in {list(cls)}, but {value} is provided.")
+
+
+# Subset from https://docs.opencv.org/3.4/d4/d15/group__videoio__flags__base.html
+class Cv2Backends(int, Enum):
+    ANY = 0
+    V4L2 = 200
+    DSHOW = 700
+    PVAPI = 800
+    ANDROID = 1000
+    AVFOUNDATION = 1200
+    MSMF = 1400
+
+    @classmethod
+    def _missing_(cls, value: object) -> None:
+        raise ValueError(f"`backend` is expected to be in {list(cls)}, but {value} is provided.")
+
 
 @dataclass(kw_only=True)
-class CameraConfig(draccus.ChoiceRegistry, abc.ABC):
-    """摄像头配置基类。
-
-    用于定义摄像头的基本配置参数。子类可以扩展此类以添加特定于实现的配置。
-
-    属性：
-        fps (int | None): 每秒帧数，如果为 None 则使用摄像头默认值
-        width (int | None): 帧宽度（像素），如果为 None 则使用摄像头默认值
-        height (int | None): 帧高度（像素），如果为 None 则使用摄像头默认值
-    """
+class CameraConfig(draccus.ChoiceRegistry, abc.ABC):  # type: ignore  # TODO: add type stubs for draccus
     fps: int | None = None
     width: int | None = None
     height: int | None = None
 
     @property
     def type(self) -> str:
-        """返回配置类型名称。"""
-        return self.get_choice_name(self.__class__)
+        return str(self.get_choice_name(self.__class__))

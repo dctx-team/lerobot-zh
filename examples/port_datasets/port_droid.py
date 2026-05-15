@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 import tensorflow_datasets as tfds
 
-from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
+from lerobot.datasets import LeRobotDataset, LeRobotDatasetMetadata
 from lerobot.utils.utils import get_elapsed_time_in_days_hours_minutes_seconds
 
 DROID_SHARDS = 2048
@@ -361,6 +361,8 @@ def port_droid(
 
         lerobot_dataset.save_episode()
         logging.info("Save_episode")
+
+    lerobot_dataset.finalize()
 
     if push_to_hub:
         lerobot_dataset.push_to_hub(

@@ -13,9 +13,9 @@
 # limitations under the License.
 
 """
-示例:
+Example:
 ```shell
-python src/lerobot/async_inference/policy_server.py \
+python -m lerobot.async_inference.policy_server \
      --host=127.0.0.1 \
      --port=8080 \
      --fps=30 \
@@ -32,17 +32,20 @@ from concurrent import futures
 from dataclasses import asdict
 from pprint import pformat
 from queue import Empty, Queue
+from typing import Any
 
 import draccus
 import grpc
 import torch
 
-from lerobot.policies.factory import get_policy_class
+from lerobot.policies import get_policy_class, make_pre_post_processors
+from lerobot.processor import PolicyProcessorPipeline
 from lerobot.transport import (
     services_pb2,  # type: ignore
     services_pb2_grpc,  # type: ignore
 )
 from lerobot.transport.utils import receive_bytes_in_chunks
+from lerobot.types import PolicyAction
 
 from .configs import PolicyServerConfig
 from .constants import SUPPORTED_POLICIES
@@ -66,7 +69,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self.config = config
         self.shutdown_event = threading.Event()
 
-        # FPS 测量
+        # FPS measurement
         self.fps_tracker = FPSTracker(target_fps=config.fps)
 
         self.observation_queue = Queue(maxsize=1)
@@ -76,12 +79,14 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
         self.last_processed_obs = None
 
-        # 属性将通过 SendPolicyInstructions 设置
+        # Attributes will be set by SendPolicyInstructions
         self.device = None
         self.policy_type = None
         self.lerobot_features = None
         self.actions_per_chunk = None
         self.policy = None
+        self.preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]] | None = None
+        self.postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction] | None = None
 
     @property
     def running(self):
@@ -92,8 +97,8 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         return self.policy.config.image_features
 
     def _reset_server(self) -> None:
-        """当新客户端连接时刷新服务器状态。"""
-        # 仅在服务器接收到的最新观测上运行推理
+        """Flushes server state when new client connects."""
+        # only running inference on the latest observation received by the server
         self.shutdown_event.set()
         self.observation_queue = Queue(maxsize=1)
 
@@ -109,7 +114,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         return services_pb2.Empty()
 
     def SendPolicyInstructions(self, request, context):  # noqa: N802
-        """从机器人客户端接收策略指令"""
+        """Receive policy instructions from the robot client"""
 
         if not self.running:
             self.logger.warning("Server is not running. Ignoring policy instructions.")
@@ -137,7 +142,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         )
 
         self.device = policy_specs.device
-        self.policy_type = policy_specs.policy_type  # act、pi0 等
+        self.policy_type = policy_specs.policy_type  # act, pi0, etc.
         self.lerobot_features = policy_specs.lerobot_features
         self.actions_per_chunk = policy_specs.actions_per_chunk
 
@@ -146,6 +151,19 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         start = time.perf_counter()
         self.policy = policy_class.from_pretrained(policy_specs.pretrained_name_or_path)
         self.policy.to(self.device)
+
+        # Load preprocessor and postprocessor, overriding device to match requested device
+        device_override = {"device": self.device}
+        self.preprocessor, self.postprocessor = make_pre_post_processors(
+            self.policy.config,
+            pretrained_path=policy_specs.pretrained_name_or_path,
+            preprocessor_overrides={
+                "device_processor": device_override,
+                "rename_observations_processor": {"rename_map": policy_specs.rename_map},
+            },
+            postprocessor_overrides={"device_processor": device_override},
+        )
+
         end = time.perf_counter()
 
         self.logger.info(f"Time taken to put policy on {self.device}: {end - start:.4f} seconds")
@@ -153,15 +171,15 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         return services_pb2.Empty()
 
     def SendObservations(self, request_iterator, context):  # noqa: N802
-        """从机器人客户端接收观测"""
+        """Receive observations from the robot client"""
         client_id = context.peer()
         self.logger.debug(f"Receiving observations from {client_id}")
 
-        receive_time = time.time()  # 比较时间戳，因此需要 time.time()
+        receive_time = time.time()  # comparing timestamps so need time.time()
         start_deserialize = time.perf_counter()
         received_bytes = receive_bytes_in_chunks(
             request_iterator, None, self.shutdown_event, self.logger
-        )  # 在循环遍历 request_iterator 时的阻塞调用
+        )  # blocking call while looping over request_iterator
         timed_observation = pickle.loads(received_bytes)  # nosec
         deserialize_time = time.perf_counter() - start_deserialize
 
@@ -170,12 +188,12 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         obs_timestep = timed_observation.get_timestep()
         obs_timestamp = timed_observation.get_timestamp()
 
-        # 计算 FPS 指标
+        # Calculate FPS metrics
         fps_metrics = self.fps_tracker.calculate_fps_metrics(obs_timestamp)
 
-        self.logger.info(
+        self.logger.debug(
             f"Received observation #{obs_timestep} | "
-            f"Avg FPS: {fps_metrics['avg_fps']:.2f} | "  # 从客户端接收观测的 fps
+            f"Avg FPS: {fps_metrics['avg_fps']:.2f} | "  # fps at which observations are received from client
             f"Target: {fps_metrics['target_fps']:.2f} | "
             f"One-way latency: {(receive_time - obs_timestamp) * 1000:.2f}ms"
         )
@@ -187,19 +205,19 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         )
 
         if not self._enqueue_observation(
-            timed_observation  # 包装一个 RawObservation
+            timed_observation  # wrapping a RawObservation
         ):
-            self.logger.info(f"Observation #{obs_timestep} has been filtered out")
+            self.logger.debug(f"Observation #{obs_timestep} has been filtered out")
 
         return services_pb2.Empty()
 
     def GetActions(self, request, context):  # noqa: N802
-        """向机器人客户端返回动作。动作以单个块的形式发送，
-        包含多个动作。"""
+        """Returns actions to the robot client. Actions are sent as a single
+        chunk, containing multiple actions."""
         client_id = context.peer()
         self.logger.debug(f"Client {client_id} connected for action streaming")
 
-        # 基于最新观测及其时间步生成动作
+        # Generate action based on the most recent observation and its timestep
         try:
             getactions_starts = time.perf_counter()
             obs = self.observation_queue.get(timeout=self.config.obs_queue_timeout)
@@ -218,7 +236,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             actions_bytes = pickle.dumps(action_chunk)  # nosec
             serialize_time = time.perf_counter() - start_time
 
-            # 创建并返回动作块
+            # Create and return the action chunk
             actions = services_pb2.Actions(data=actions_bytes)
 
             self.logger.info(
@@ -235,11 +253,11 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
             time.sleep(
                 max(0, self.config.inference_latency - max(0, time.perf_counter() - getactions_starts))
-            )  # sleep 控制推理延迟
+            )  # sleep controls inference latency
 
             return actions
 
-        except Empty:  # 在 obs_queue_timeout 时间内没有观测添加到队列
+        except Empty:  # no observation added to queue in obs_queue_timeout
             return services_pb2.Empty()
 
         except Exception as e:
@@ -248,7 +266,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             return services_pb2.Empty()
 
     def _obs_sanity_checks(self, obs: TimedObservation, previous_obs: TimedObservation) -> bool:
-        """检查观测是否可以被策略处理"""
+        """Check if the observation is valid to be processed by the policy"""
         with self._predicted_timesteps_lock:
             predicted_timesteps = self._predicted_timesteps
 
@@ -266,8 +284,8 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             return True
 
     def _enqueue_observation(self, obs: TimedObservation) -> bool:
-        """如果观测必须通过处理，则将其入队，否则跳过。
-        不在队列中的观测永远不会通过策略网络运行"""
+        """Enqueue an observation if it must go through processing, otherwise skip it.
+        Observations not in queue are never run through the policy network"""
 
         if (
             obs.must_go
@@ -279,115 +297,132 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
                 f"Enqueuing observation. Must go: {obs.must_go} | Last processed obs: {last_obs}"
             )
 
-            # 如果队列已满，获取旧观测以腾出空间
+            # If queue is full, get the old observation to make room
             if self.observation_queue.full():
-                # 从队列中弹出
+                # pops from queue
                 _ = self.observation_queue.get_nowait()
                 self.logger.debug("Observation queue was full, removed oldest observation")
 
-            # 现在放入新观测（在这里队列非满，因此不会阻塞）
+            # Now put the new observation (never blocks as queue is non-full here)
             self.observation_queue.put(obs)
             return True
 
         return False
 
     def _time_action_chunk(self, t_0: float, action_chunk: list[torch.Tensor], i_0: int) -> list[TimedAction]:
-        """将一个动作块转换为 TimedAction 实例列表，
-        第一个动作对应于 t_0，其余动作对应于
-        t_0 + i*environment_dt，其中 i 在 range(len(action_chunk)) 范围内
+        """Turn a chunk of actions into a list of TimedAction instances,
+        with the first action corresponding to t_0 and the rest corresponding to
+        t_0 + i*environment_dt for i in range(len(action_chunk))
         """
         return [
             TimedAction(timestamp=t_0 + i * self.config.environment_dt, timestep=i_0 + i, action=action)
             for i, action in enumerate(action_chunk)
         ]
 
-    def _prepare_observation(self, observation_t: TimedObservation) -> Observation:
-        """
-        准备观测，使其可用于策略推理。
-        例如：为了保持观测采样率高（并且网络数据包很小），我们从客户端发送 int8 [0,255] 图像，
-        然后在这里将它们转换为 float32 [0,1] 图像，在运行推理之前。
-        """
-        # 来自 robot.get_observation() 的 RawObservation - 错误的键、错误的数据类型、错误的图像形状
-        observation: Observation = raw_observation_to_observation(
-            observation_t.get_observation(),
-            self.lerobot_features,
-            self.policy_image_features,
-            self.device,
-        )
-        # 处理后的 Observation - 正确的键、正确的数据类型、正确的图像形状
-
-        return observation
-
     def _get_action_chunk(self, observation: dict[str, torch.Tensor]) -> torch.Tensor:
-        """从策略中获取一个动作块。该块仅包含指定数量的动作。"""
+        """Get an action chunk from the policy. The chunk contains only"""
         chunk = self.policy.predict_action_chunk(observation)
         if chunk.ndim != 3:
-            chunk = chunk.unsqueeze(0)  # 添加批次维度，现在形状为 (B, chunk_size, action_dim)
+            chunk = chunk.unsqueeze(0)  # adding batch dimension, now shape is (B, chunk_size, action_dim)
 
         return chunk[:, : self.actions_per_chunk, :]
 
     def _predict_action_chunk(self, observation_t: TimedObservation) -> list[TimedAction]:
-        """基于观测预测动作块。"""
-        inference_starts = time.perf_counter()
+        """Predict an action chunk based on an observation.
 
-        # 1. 准备观测
-        start_time = time.perf_counter()
-        observation = self._prepare_observation(observation_t)
-        preprocessing_time = time.perf_counter() - start_time
+        Pipeline:
+        1. Convert raw observation to LeRobot format
+        2. Apply preprocessor (tokenization, normalization, batching, device placement)
+        3. Run policy inference to get action chunk
+        4. Apply postprocessor (unnormalization, device movement)
+        5. Convert to TimedAction list
+        """
+        """1. Prepare observation"""
+        start_prepare = time.perf_counter()
+        observation: Observation = raw_observation_to_observation(
+            observation_t.get_observation(),
+            self.lerobot_features,
+            self.policy_image_features,
+        )
+        prepare_time = time.perf_counter() - start_prepare
 
+        """2. Apply preprocessor"""
+        start_preprocess = time.perf_counter()
+        observation = self.preprocessor(observation)
         self.last_processed_obs: TimedObservation = observation_t
+        preprocessing_time = time.perf_counter() - start_preprocess
 
-        # 2. 获取动作块
-        start_time = time.perf_counter()
+        """3. Get action chunk"""
+        start_inference = time.perf_counter()
         action_tensor = self._get_action_chunk(observation)
-        inference_time = time.perf_counter() - start_time
+        inference_time = time.perf_counter() - start_inference
+        self.logger.info(
+            f"Preprocessing and inference took {inference_time:.4f}s, action shape: {action_tensor.shape}"
+        )
 
-        # 3. 推理后处理
-        start_time = time.perf_counter()
-        # 在序列化之前移到 CPU
-        action_tensor = action_tensor.cpu().squeeze(0)
+        """4. Apply postprocessor"""
+        # Apply postprocessor (handles unnormalization and device movement)
+        # Postprocessor expects (B, action_dim) per action, but we have (B, chunk_size, action_dim)
+        # So we process each action in the chunk individually
+        start_postprocess = time.perf_counter()
+        _, chunk_size, _ = action_tensor.shape
 
+        # Process each action in the chunk
+        processed_actions = []
+        for i in range(chunk_size):
+            # Extract action at timestep i: (B, action_dim)
+            single_action = action_tensor[:, i, :]
+            processed_action = self.postprocessor(single_action)
+            processed_actions.append(processed_action)
+
+        # Stack back to (B, chunk_size, action_dim), then remove batch dim
+        action_tensor = torch.stack(processed_actions, dim=1).squeeze(0)
+        self.logger.debug(f"Postprocessed action shape: {action_tensor.shape}")
+
+        action_tensor = action_tensor.detach().cpu()
+
+        """5. Convert to TimedAction list"""
         action_chunk = self._time_action_chunk(
             observation_t.get_timestamp(), list(action_tensor), observation_t.get_timestep()
         )
-        postprocessing_time = time.perf_counter() - start_time
-        inference_stops = time.perf_counter()
+        postprocess_stops = time.perf_counter()
+        postprocessing_time = postprocess_stops - start_postprocess
 
         self.logger.info(
-            f"Observation {observation_t.get_timestep()} |"
-            f"Inference time: {1000 * (inference_stops - inference_starts):.2f}ms"
+            f"Observation {observation_t.get_timestep()} | "
+            f"Total time: {1000 * (postprocess_stops - start_prepare):.2f}ms"
         )
 
-        # 用于调试目的的完整过程延迟分解
         self.logger.debug(
             f"Observation {observation_t.get_timestep()} | "
-            f"Preprocessing time: {1000 * (preprocessing_time - inference_starts):.2f}ms | "
-            f"Inference time: {1000 * (inference_time - preprocessing_time):.2f}ms | "
-            f"Postprocessing time: {1000 * (postprocessing_time - inference_time):.2f}ms | "
-            f"Total time: {1000 * (postprocessing_time - inference_starts):.2f}ms"
+            f"Prepare time: {1000 * prepare_time:.2f}ms | "
+            f"Preprocessing time: {1000 * preprocessing_time:.2f}ms | "
+            f"Inference time: {1000 * inference_time:.2f}ms | "
+            f"Postprocessing time: {1000 * postprocessing_time:.2f}ms | "
+            f"Total time: {1000 * (postprocess_stops - start_prepare):.2f}ms"
         )
 
         return action_chunk
 
     def stop(self):
-        """停止服务器"""
+        """Stop the server"""
         self._reset_server()
         self.logger.info("Server stopping...")
 
 
 @draccus.wrap()
 def serve(cfg: PolicyServerConfig):
-    """使用给定的配置启动 PolicyServer。
+    """Start the PolicyServer with the given configuration.
 
-    参数:
-        config: PolicyServerConfig 实例。如果为 None，则使用默认配置。
+    Args:
+        config: PolicyServerConfig instance. If None, uses default configuration.
     """
     logging.info(pformat(asdict(cfg)))
 
-    # 首先创建服务器实例
+    # Create the server instance first
     policy_server = PolicyServer(cfg)
 
-    # 设置并启动 gRPC 服务器
+    # Setup and start gRPC server
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
     services_pb2_grpc.add_AsyncInferenceServicer_to_server(policy_server, server)
     server.add_insecure_port(f"{cfg.host}:{cfg.port}")

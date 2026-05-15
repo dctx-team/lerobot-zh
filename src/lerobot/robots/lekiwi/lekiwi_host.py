@@ -18,12 +18,22 @@ import base64
 import json
 import logging
 import time
+from dataclasses import dataclass, field
 
 import cv2
+import draccus
 import zmq
 
 from .config_lekiwi import LeKiwiConfig, LeKiwiHostConfig
 from .lekiwi import LeKiwi
+
+
+@dataclass
+class LeKiwiServerConfig:
+    """Configuration for the LeKiwi host script."""
+
+    robot: LeKiwiConfig = field(default_factory=LeKiwiConfig)
+    host: LeKiwiHostConfig = field(default_factory=LeKiwiHostConfig)
 
 
 class LeKiwiHost:
@@ -47,23 +57,22 @@ class LeKiwiHost:
         self.zmq_context.term()
 
 
-def main():
+@draccus.wrap()
+def main(cfg: LeKiwiServerConfig):
     logging.info("Configuring LeKiwi")
-    robot_config = LeKiwiConfig()
-    robot = LeKiwi(robot_config)
+    robot = LeKiwi(cfg.robot)
 
     logging.info("Connecting LeKiwi")
     robot.connect()
 
     logging.info("Starting HostAgent")
-    host_config = LeKiwiHostConfig()
-    host = LeKiwiHost(host_config)
+    host = LeKiwiHost(cfg.host)
 
     last_cmd_time = time.time()
     watchdog_active = False
     logging.info("Waiting for commands...")
     try:
-        # 业务逻辑
+        # Business logic
         start = time.perf_counter()
         duration = 0
         while duration < host.connection_time_s:
@@ -90,7 +99,7 @@ def main():
 
             last_observation = robot.get_observation()
 
-            # 将 ndarray 编码为 base64 字符串
+            # Encode ndarrays to base64 strings
             for cam_key, _ in robot.cameras.items():
                 ret, buffer = cv2.imencode(
                     ".jpg", last_observation[cam_key], [int(cv2.IMWRITE_JPEG_QUALITY), 90]
@@ -100,13 +109,13 @@ def main():
                 else:
                     last_observation[cam_key] = ""
 
-            # 将观测发送到远程代理
+            # Send the observation to the remote agent
             try:
                 host.zmq_observation_socket.send_string(json.dumps(last_observation), flags=zmq.NOBLOCK)
             except zmq.Again:
                 logging.info("Dropping observation, no client connected")
 
-            # 确保短暂休眠以避免 CPU 过载。
+            # Ensure a short sleep to avoid overloading the CPU.
             elapsed = time.time() - loop_start_time
 
             time.sleep(max(1 / host.max_loop_freq_hz - elapsed, 0))

@@ -15,29 +15,36 @@
 # limitations under the License.
 
 """
-一个通用脚本，用于将具有内置归一化层的 LeRobot 策略迁移到新的基于管道的处理器系统。
+A generic script to migrate LeRobot policies with built-in normalization layers to the new
+pipeline-based processor system.
 
-此脚本执行以下步骤：
-1.  从本地路径或 Hugging Face Hub 加载预训练的策略模型及其配置。
-2.  扫描模型的状态字典以提取所有特征的归一化统计信息（例如，均值、标准差、最小值、最大值）。
-3.  创建两个新的处理器管道：
-    - 预处理器：对输入（观察）和输出（动作）进行归一化。
-    - 后处理器：对输出（动作）进行反归一化以供推理使用。
-4.  从模型的状态字典中移除原始的归一化层，创建一个"干净的"模型。
-5.  将新的干净模型、预处理器、后处理器和生成的模型卡保存到新目录。
-6.  可选地将所有新的工件推送到 Hugging Face Hub。
+This script performs the following steps:
+1.  Loads a pretrained policy model and its configuration from a local path or the
+    Hugging Face Hub.
+2.  Scans the model's state dictionary to extract normalization statistics (e.g., mean,
+    std, min, max) for all features.
+3.  Creates two new processor pipelines:
+    - A preprocessor that normalizes inputs (observations) and outputs (actions).
+    - A postprocessor that unnormalizes outputs (actions) for inference.
+4.  Removes the original normalization layers from the model's state dictionary,
+    creating a "clean" model.
+5.  Saves the new clean model, the preprocessor, the postprocessor, and a generated
+    model card to a new directory.
+6.  Optionally pushes all the new artifacts to the Hugging Face Hub.
 
-用法：
+Usage:
     python src/lerobot/processor/migrate_policy_normalization.py \
         --pretrained-path lerobot/act_aloha_sim_transfer_cube_human \
         --push-to-hub \
         --branch main
 
-注意：此脚本现在使用 `lerobot.policies.factory` 中的现代 `make_pre_post_processors` 和
-`make_policy_config` 工厂函数来创建处理器和配置，确保与当前代码库的一致性。
+Note: This script now uses the modern `make_pre_post_processors` and `make_policy_config`
+factory functions from `lerobot.policies.factory` to create processors and configurations,
+ensuring consistency with the current codebase.
 
-该脚本从旧模型的 state_dict 中提取归一化统计信息，使用工厂函数创建干净的处理器管道，
-并保存与新 PolicyProcessorPipeline 架构兼容的迁移模型。
+The script extracts normalization statistics from the old model's state_dict, creates clean
+processor pipelines using the factory functions, and saves a migrated model that is compatible
+with the new PolicyProcessorPipeline architecture.
 """
 
 import argparse
@@ -50,34 +57,36 @@ import torch
 from huggingface_hub import HfApi, hf_hub_download
 from safetensors.torch import load_file as load_safetensors
 
-from lerobot.configs.types import FeatureType, NormalizationMode, PolicyFeature
-from lerobot.policies.factory import get_policy_class, make_policy_config, make_pre_post_processors
+from lerobot.configs import FeatureType, NormalizationMode, PolicyFeature
+from lerobot.policies import get_policy_class, make_policy_config, make_pre_post_processors
 from lerobot.utils.constants import ACTION
 
 
 def extract_normalization_stats(state_dict: dict[str, torch.Tensor]) -> dict[str, dict[str, torch.Tensor]]:
     """
-    扫描模型的 state_dict 以查找并提取归一化统计信息。
+    Scans a model's state_dict to find and extract normalization statistics.
 
-    此函数基于一组预定义的模式识别对应归一化层的键（例如，均值、标准差、最小值、最大值），
-    并将它们组织到嵌套字典中。
+    This function identifies keys corresponding to normalization layers (e.g., those
+    for mean, std, min, max) based on a set of predefined patterns and organizes
+    them into a nested dictionary.
 
-    参数：
-        state_dict: 预训练策略模型的状态字典。
+    Args:
+        state_dict: The state dictionary of a pretrained policy model.
 
-    返回：
-        嵌套字典，外层键是特征名称（例如，'observation.state'），内层键是统计类型（'mean'、'std'），
-        映射到它们对应的张量值。
+    Returns:
+        A nested dictionary where outer keys are feature names (e.g.,
+        'observation.state') and inner keys are statistic types ('mean', 'std'),
+        mapping to their corresponding tensor values.
     """
     stats = {}
 
-    # 定义要匹配的模式及其要移除的前缀
+    # Define patterns to match and their prefixes to remove
     normalization_patterns = [
         "normalize_inputs.buffer_",
         "unnormalize_outputs.buffer_",
         "normalize_targets.buffer_",
-        "normalize.",  # 必须在 normalize_* 模式之后
-        "unnormalize.",  # 必须在 unnormalize_* 模式之后
+        "normalize.",  # Must come after normalize_* patterns
+        "unnormalize.",  # Must come after unnormalize_* patterns
         "input_normalizer.",
         "output_normalizer.",
         "normalalize_inputs.",
@@ -86,28 +95,28 @@ def extract_normalization_stats(state_dict: dict[str, torch.Tensor]) -> dict[str
         "unnormalize_targets.",
     ]
 
-    # 处理 state_dict 中的每个键
+    # Process each key in state_dict
     for key, tensor in state_dict.items():
-        # 尝试每个模式
+        # Try each pattern
         for pattern in normalization_patterns:
             if key.startswith(pattern):
-                # 提取模式后的剩余部分
+                # Extract the remaining part after the pattern
                 remaining = key[len(pattern) :]
                 parts = remaining.split(".")
 
-                # 至少需要特征名称和统计类型
+                # Need at least feature name and stat type
                 if len(parts) >= 2:
-                    # 最后一部分是统计类型（mean、std、min、max 等）
+                    # Last part is the stat type (mean, std, min, max, etc.)
                     stat_type = parts[-1]
-                    # 其他所有部分是特征名称
+                    # Everything else is the feature name
                     feature_name = ".".join(parts[:-1]).replace("_", ".")
 
-                    # 添加到 stats
+                    # Add to stats
                     if feature_name not in stats:
                         stats[feature_name] = {}
                     stats[feature_name][stat_type] = tensor.clone()
 
-                # 仅处理第一个匹配的模式
+                # Only process the first matching pattern
                 break
 
     return stats
@@ -117,31 +126,33 @@ def detect_features_and_norm_modes(
     config: dict[str, Any], stats: dict[str, dict[str, torch.Tensor]]
 ) -> tuple[dict[str, PolicyFeature], dict[FeatureType, NormalizationMode]]:
     """
-    从模型配置和统计信息推断策略特征和归一化模式。
+    Infers policy features and normalization modes from the model config and stats.
 
-    此函数首先尝试直接从策略的配置文件中查找特征定义和归一化映射。
-    如果此信息不存在，它将从提取的归一化统计信息中推断，使用张量形状
-    来确定特征形状，并根据特定统计键（例如，'mean'/'std' 与 'min'/'max'）
-    的存在来确定归一化模式。如果无法推断，它将应用合理的默认值。
+    This function first attempts to find feature definitions and normalization
+    mappings directly from the policy's configuration file. If this information is
+    not present, it infers it from the extracted normalization statistics, using
+    tensor shapes to determine feature shapes and the presence of specific stat
+    keys (e.g., 'mean'/'std' vs 'min'/'max') to determine the normalization mode.
+    It applies sensible defaults if inference is not possible.
 
-    参数：
-        config: 来自 `config.json` 的策略配置字典。
-        stats: 从模型的 state_dict 中提取的归一化统计信息。
+    Args:
+        config: The policy's configuration dictionary from `config.json`.
+        stats: The normalization statistics extracted from the model's state_dict.
 
-    返回：
-        包含以下内容的元组：
-        - 将特征名称映射到 `PolicyFeature` 对象的字典。
-        - 将 `FeatureType` 枚举映射到 `NormalizationMode` 枚举的字典。
+    Returns:
+        A tuple containing:
+        - A dictionary mapping feature names to `PolicyFeature` objects.
+        - A dictionary mapping `FeatureType` enums to `NormalizationMode` enums.
     """
     features = {}
     norm_modes = {}
 
-    # 首先，检查配置中是否有 normalization_mapping
+    # First, check if there's a normalization_mapping in the config
     if "normalization_mapping" in config:
         print(f"Found normalization_mapping in config: {config['normalization_mapping']}")
-        # 从配置中提取归一化模式
+        # Extract normalization modes from config
         for feature_type_str, mode_str in config["normalization_mapping"].items():
-            # 将字符串转换为 FeatureType 枚举
+            # Convert string to FeatureType enum
             try:
                 if feature_type_str == "VISUAL":
                     feature_type = FeatureType.VISUAL
@@ -156,7 +167,7 @@ def detect_features_and_norm_modes(
                 print(f"Warning: Could not parse feature type '{feature_type_str}', skipping")
                 continue
 
-            # 将字符串转换为 NormalizationMode 枚举
+            # Convert string to NormalizationMode enum
             try:
                 if mode_str == "MEAN_STD":
                     mode = NormalizationMode.MEAN_STD
@@ -175,13 +186,13 @@ def detect_features_and_norm_modes(
 
             norm_modes[feature_type] = mode
 
-    # 尝试从配置中提取
+    # Try to extract from config
     if "features" in config:
         for key, feature_config in config["features"].items():
             shape = feature_config.get("shape", feature_config.get("dim"))
             shape = (shape,) if isinstance(shape, int) else tuple(shape)
 
-            # 确定特征类型
+            # Determine feature type
             if "image" in key or "visual" in key:
                 feature_type = FeatureType.VISUAL
             elif "state" in key:
@@ -189,18 +200,18 @@ def detect_features_and_norm_modes(
             elif ACTION in key:
                 feature_type = FeatureType.ACTION
             else:
-                feature_type = FeatureType.STATE  # 默认
+                feature_type = FeatureType.STATE  # Default
 
             features[key] = PolicyFeature(feature_type, shape)
 
-    # 如果配置中没有特征，则从 stats 推断
+    # If no features in config, infer from stats
     if not features:
         for key, stat_dict in stats.items():
-            # 从任何统计张量获取形状
+            # Get shape from any stat tensor
             tensor = next(iter(stat_dict.values()))
             shape = tuple(tensor.shape)
 
-            # 根据键确定特征类型
+            # Determine feature type based on key
             if "image" in key or "visual" in key or "pixels" in key:
                 feature_type = FeatureType.VISUAL
             elif "state" in key or "joint" in key or "position" in key:
@@ -212,7 +223,7 @@ def detect_features_and_norm_modes(
 
             features[key] = PolicyFeature(feature_type, shape)
 
-    # 如果归一化模式不在配置中，则根据可用的统计信息确定
+    # If normalization modes weren't in config, determine based on available stats
     if not norm_modes:
         for key, stat_dict in stats.items():
             if key in features:
@@ -225,7 +236,7 @@ def detect_features_and_norm_modes(
                     if feature_type not in norm_modes:
                         norm_modes[feature_type] = NormalizationMode.MIN_MAX
 
-    # 如果未检测到，使用默认归一化模式
+    # Default normalization modes if not detected
     if FeatureType.VISUAL not in norm_modes:
         norm_modes[FeatureType.VISUAL] = NormalizationMode.MEAN_STD
     if FeatureType.STATE not in norm_modes:
@@ -238,23 +249,25 @@ def detect_features_and_norm_modes(
 
 def remove_normalization_layers(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     """
-    创建一个新的 state_dict，移除所有与归一化相关的层。
+    Creates a new state_dict with all normalization-related layers removed.
 
-    此函数过滤原始状态字典，排除与一组预定义的与归一化模块相关的模式匹配的任何键。
+    This function filters the original state dictionary, excluding any keys that
+    match a set of predefined patterns associated with normalization modules.
 
-    参数：
-        state_dict: 原始模型状态字典。
+    Args:
+        state_dict: The original model state dictionary.
 
-    返回：
-        仅包含核心模型权重的新状态字典，不包含任何归一化参数。
+    Returns:
+        A new state dictionary containing only the core model weights, without
+        any normalization parameters.
     """
     new_state_dict = {}
 
-    # 要移除的模式
+    # Patterns to remove
     remove_patterns = [
         "normalize_inputs.",
         "unnormalize_outputs.",
-        "normalize_targets.",  # 为目标归一化添加的模式
+        "normalize_targets.",  # Added pattern for target normalization
         "normalize.",
         "unnormalize.",
         "input_normalizer.",
@@ -274,14 +287,14 @@ def clean_state_dict(
     state_dict: dict[str, torch.Tensor], remove_str: str = "._orig_mod"
 ) -> dict[str, torch.Tensor]:
     """
-    从状态字典中的所有键移除子字符串（例如 '._orig_mod'）。
+    Remove a substring (e.g. '._orig_mod') from all keys in a state dict.
 
-    参数：
-        state_dict (dict): 原始状态字典。
-        remove_str (str): 要从键中移除的子字符串。
+    Args:
+        state_dict (dict): The original state dict.
+        remove_str (str): The substring to remove from the keys.
 
-    返回：
-        dict: 具有清理后的键的新状态字典。
+    Returns:
+        dict: A new state dict with cleaned keys.
     """
     new_state_dict = {}
     for k, v in state_dict.items():
@@ -290,20 +303,80 @@ def clean_state_dict(
     return new_state_dict
 
 
+def load_state_dict_with_missing_key_handling(
+    policy: torch.nn.Module,
+    state_dict: dict[str, torch.Tensor],
+    policy_type: str,
+    known_missing_keys_whitelist: dict[str, list[str]],
+) -> list[str]:
+    """
+    Load state dict into policy with graceful handling of missing keys.
+
+    This function loads the state dict with strict=False, filters out whitelisted
+    missing keys, and provides detailed reporting about any issues found.
+
+    Args:
+        policy: The policy model to load the state dict into.
+        state_dict: The cleaned state dictionary to load.
+        policy_type: The type of policy (used for whitelist lookup).
+        known_missing_keys_whitelist: Dictionary mapping policy types to lists of
+                                     known acceptable missing keys.
+
+    Returns:
+        List of problematic missing keys that weren't in the whitelist.
+    """
+    # Load the cleaned state dict with strict=False to capture missing/unexpected keys
+    load_result = policy.load_state_dict(state_dict, strict=False)
+
+    # Check for missing keys
+    missing_keys = load_result.missing_keys
+    unexpected_keys = load_result.unexpected_keys
+
+    # Filter out whitelisted missing keys
+    policy_type_lower = policy_type.lower()
+    whitelisted_keys = known_missing_keys_whitelist.get(policy_type_lower, [])
+    problematic_missing_keys = [key for key in missing_keys if key not in whitelisted_keys]
+
+    if missing_keys:
+        if problematic_missing_keys:
+            print(f"WARNING: Found {len(problematic_missing_keys)} unexpected missing keys:")
+            for key in problematic_missing_keys:
+                print(f"   - {key}")
+
+        if len(missing_keys) > len(problematic_missing_keys):
+            whitelisted_missing = [key for key in missing_keys if key in whitelisted_keys]
+            print(f"INFO: Found {len(whitelisted_missing)} expected missing keys (whitelisted):")
+            for key in whitelisted_missing:
+                print(f"   - {key}")
+
+    if unexpected_keys:
+        print(f"WARNING: Found {len(unexpected_keys)} unexpected keys:")
+        for key in unexpected_keys:
+            print(f"   - {key}")
+
+    if not missing_keys and not unexpected_keys:
+        print("Successfully loaded cleaned state dict into policy model (all keys matched)")
+    else:
+        print("State dict loaded with some missing/unexpected keys (see details above)")
+
+    return problematic_missing_keys
+
+
 def convert_features_to_policy_features(features_dict: dict[str, dict]) -> dict[str, PolicyFeature]:
     """
-    将特征字典从旧配置格式转换为新的 `PolicyFeature` 格式。
+    Converts a feature dictionary from the old config format to the new `PolicyFeature` format.
 
-    参数：
-        features_dict: 旧格式的特征字典，其中值是简单字典（例如，`{"shape": [7]}`）。
+    Args:
+        features_dict: The feature dictionary in the old format, where values are
+                       simple dictionaries (e.g., `{"shape": [7]}`).
 
-    返回：
-        将特征名称映射到 `PolicyFeature` 数据类对象的字典。
+    Returns:
+        A dictionary mapping feature names to `PolicyFeature` dataclass objects.
     """
     converted_features = {}
 
     for key, feature_dict in features_dict.items():
-        # 根据键确定特征类型
+        # Determine feature type based on key
         if "image" in key or "visual" in key:
             feature_type = FeatureType.VISUAL
         elif "state" in key:
@@ -313,7 +386,7 @@ def convert_features_to_policy_features(features_dict: dict[str, dict]) -> dict[
         else:
             feature_type = FeatureType.STATE
 
-        # 从特征字典获取形状
+        # Get shape from feature dict
         shape = feature_dict.get("shape", feature_dict.get("dim"))
         shape = (shape,) if isinstance(shape, int) else tuple(shape) if shape is not None else ()
 
@@ -322,99 +395,148 @@ def convert_features_to_policy_features(features_dict: dict[str, dict]) -> dict[
     return converted_features
 
 
+def display_migration_summary_with_warnings(problematic_missing_keys: list[str]) -> None:
+    """
+    Display final migration summary with warnings about problematic missing keys.
+
+    Args:
+        problematic_missing_keys: List of missing keys that weren't in the whitelist.
+    """
+    if not problematic_missing_keys:
+        return
+
+    print("\n" + "=" * 60)
+    print("IMPORTANT: MIGRATION COMPLETED WITH WARNINGS")
+    print("=" * 60)
+    print(
+        f"The migration was successful, but {len(problematic_missing_keys)} unexpected missing keys were found:"
+    )
+    print()
+    for key in problematic_missing_keys:
+        print(f"   - {key}")
+    print()
+    print("These missing keys may indicate:")
+    print("  • The model architecture has changed")
+    print("  • Some components were not properly saved in the original model")
+    print("  • The migration script needs to be updated for this policy type")
+    print()
+    print("What to do next:")
+    print("  1. Test your migrated model carefully to ensure it works as expected")
+    print("  2. If you encounter issues, please open an issue at:")
+    print("     https://github.com/huggingface/lerobot/issues")
+    print("  3. Include this migration log and the missing keys listed above")
+    print()
+    print("If the model works correctly despite these warnings, the missing keys")
+    print("might be expected for your policy type and can be added to the whitelist.")
+    print("=" * 60)
+
+
 def load_model_from_hub(
     repo_id: str, revision: str | None = None
-) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any]]:
+) -> tuple[dict[str, torch.Tensor], dict[str, Any], dict[str, Any] | None]:
     """
-    从 Hugging Face Hub 下载并加载模型的 state_dict 和配置。
+    Downloads and loads a model's state_dict and configs from the Hugging Face Hub.
 
-    参数：
-        repo_id: Hub 上的仓库 ID（例如，'lerobot/aloha'）。
-        revision: 要使用的特定 git 修订版本（分支、标签或提交哈希）。
+    Args:
+        repo_id: The repository ID on the Hub (e.g., 'lerobot/aloha').
+        revision: The specific git revision (branch, tag, or commit hash) to use.
 
-    返回：
-        包含模型的状态字典、策略配置和训练配置的元组。
+    Returns:
+        A tuple containing the model's state dictionary, the policy configuration,
+        and the training configuration (None if train_config.json is not found).
     """
-    # 下载文件。
+    # Download files.
     safetensors_path = hf_hub_download(repo_id=repo_id, filename="model.safetensors", revision=revision)
 
     config_path = hf_hub_download(repo_id=repo_id, filename="config.json", revision=revision)
-    train_config_path = hf_hub_download(repo_id=repo_id, filename="train_config.json", revision=revision)
 
-    # 加载 state_dict
+    # Load state_dict
     state_dict = load_safetensors(safetensors_path)
 
-    # 加载配置
+    # Load config
     with open(config_path) as f:
         config = json.load(f)
 
-    with open(train_config_path) as f:
-        train_config = json.load(f)
+    # Try to load train_config (optional)
+    train_config = None
+    try:
+        train_config_path = hf_hub_download(repo_id=repo_id, filename="train_config.json", revision=revision)
+        with open(train_config_path) as f:
+            train_config = json.load(f)
+    except FileNotFoundError:
+        print("train_config.json not found - continuing without training configuration")
 
     return state_dict, config, train_config
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="将具有归一化层的策略模型迁移到新的管道系统"
+        description="Migrate policy models with normalization layers to new pipeline system"
     )
     parser.add_argument(
         "--pretrained-path",
         type=str,
         required=True,
-        help="预训练模型的路径（hub 仓库或本地目录）",
+        help="Path to pretrained model (hub repo or local directory)",
     )
     parser.add_argument(
         "--output-dir",
         type=str,
         default=None,
-        help="迁移模型的输出目录（默认：与 pretrained-path 相同）",
+        help="Output directory for migrated model (default: same as pretrained-path)",
     )
-    parser.add_argument("--push-to-hub", action="store_true", help="将迁移的模型推送到 hub")
+    parser.add_argument("--push-to-hub", action="store_true", help="Push migrated model to hub")
     parser.add_argument(
         "--hub-repo-id",
         type=str,
         default=None,
-        help="用于推送的 Hub 仓库 ID（默认：与 pretrained-path 相同）",
+        help="Hub repository ID for pushing (default: same as pretrained-path)",
     )
-    parser.add_argument("--revision", type=str, default=None, help="要加载的模型修订版本")
-    parser.add_argument("--private", action="store_true", help="将 hub 仓库设为私有")
+    parser.add_argument("--revision", type=str, default=None, help="Revision of the model to load")
+    parser.add_argument("--private", action="store_true", help="Make the hub repository private")
     parser.add_argument(
         "--branch",
         type=str,
         default=None,
-        help="推送到 hub 时使用的 Git 分支。如果指定，将自动创建 PR（默认：直接推送到 main）",
+        help="Git branch to use when pushing to hub. If specified, a PR will be created automatically (default: push directly to main)",
     )
 
     args = parser.parse_args()
 
-    # 加载模型和配置
+    # Load model and config
     print(f"Loading model from {args.pretrained_path}...")
     if os.path.isdir(args.pretrained_path):
-        # 本地目录
+        # Local directory
         state_dict = load_safetensors(os.path.join(args.pretrained_path, "model.safetensors"))
         with open(os.path.join(args.pretrained_path, "config.json")) as f:
             config = json.load(f)
-        with open(os.path.join(args.pretrained_path, "train_config.json")) as f:
-            train_config = json.load(f)
+
+        # Try to load train_config (optional)
+        train_config = None
+        train_config_path = os.path.join(args.pretrained_path, "train_config.json")
+        if os.path.exists(train_config_path):
+            with open(train_config_path) as f:
+                train_config = json.load(f)
+        else:
+            print("train_config.json not found - continuing without training configuration")
     else:
-        # Hub 仓库
+        # Hub repository
         state_dict, config, train_config = load_model_from_hub(args.pretrained_path, args.revision)
 
-    # 提取归一化统计信息
+    # Extract normalization statistics
     print("Extracting normalization statistics...")
     stats = extract_normalization_stats(state_dict)
 
     print(f"Found normalization statistics for: {list(stats.keys())}")
 
-    # 检测输入特征和归一化模式
+    # Detect input features and normalization modes
     print("Detecting features and normalization modes...")
     features, norm_map = detect_features_and_norm_modes(config, stats)
 
     print(f"Detected features: {list(features.keys())}")
     print(f"Normalization modes: {norm_map}")
 
-    # 从 state_dict 中移除归一化层
+    # Remove normalization layers from state_dict
     print("Removing normalization layers from model...")
     new_state_dict = remove_normalization_layers(state_dict)
     new_state_dict = clean_state_dict(new_state_dict, remove_str="._orig_mod")
@@ -423,7 +545,7 @@ def main():
     if removed_keys:
         print(f"Removed {len(removed_keys)} normalization layer keys")
 
-    # 确定输出路径
+    # Determine output path
     if args.output_dir:
         output_dir = Path(args.output_dir)
     else:
@@ -434,24 +556,24 @@ def main():
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 从配置中提取策略类型
+    # Extract policy type from config
     if "type" not in config:
         raise ValueError("Policy type not found in config.json. The config must contain a 'type' field.")
 
     policy_type = config["type"]
     print(f"Detected policy type: {policy_type}")
 
-    # 清理配置 - 移除不应传递给配置构造函数的字段
+    # Clean up config - remove fields that shouldn't be passed to config constructor
     cleaned_config = dict(config)
 
-    # 移除不属于配置类构造函数的字段
+    # Remove fields that are not part of the config class constructors
     fields_to_remove = ["normalization_mapping", "type"]
     for field in fields_to_remove:
         if field in cleaned_config:
             print(f"Removing '{field}' field from config")
             del cleaned_config[field]
 
-    # 如果存在 input_features 和 output_features，将它们转换为 PolicyFeature 对象
+    # Convert input_features and output_features to PolicyFeature objects if they exist
     if "input_features" in cleaned_config:
         cleaned_config["input_features"] = convert_features_to_policy_features(
             cleaned_config["input_features"]
@@ -461,39 +583,49 @@ def main():
             cleaned_config["output_features"]
         )
 
-    # 将归一化映射添加到配置
+    # Add normalization mapping to config
     cleaned_config["normalization_mapping"] = norm_map
 
-    # 使用工厂创建策略配置
+    # Create policy configuration using the factory
     print(f"Creating {policy_type} policy configuration...")
     policy_config = make_policy_config(policy_type, **cleaned_config)
 
-    # 使用工厂创建策略实例
+    # Create policy instance using the factory
     print(f"Instantiating {policy_type} policy...")
     policy_class = get_policy_class(policy_type)
     policy = policy_class(policy_config)
 
-    # 加载清理后的状态字典
-    policy.load_state_dict(new_state_dict, strict=True)
-    print("Successfully loaded cleaned state dict into policy model")
+    # Define whitelist of known missing keys that are acceptable (for example weight tie) for certain policy types
+    known_missing_keys_whitelist = {
+        "pi0": ["model.paligemma_with_expert.paligemma.model.language_model.embed_tokens.weight"],
+        # Add other policy types and their known missing keys here as needed
+    }
 
-    # 使用工厂创建预处理器和后处理器
+    # Load state dict with graceful missing key handling
+    problematic_missing_keys = load_state_dict_with_missing_key_handling(
+        policy=policy,
+        state_dict=new_state_dict,
+        policy_type=policy_type,
+        known_missing_keys_whitelist=known_missing_keys_whitelist,
+    )
+    policy.to(torch.float32)
+    # Create preprocessor and postprocessor using the factory
     print("Creating preprocessor and postprocessor using make_pre_post_processors...")
     preprocessor, postprocessor = make_pre_post_processors(policy_cfg=policy_config, dataset_stats=stats)
 
-    # 如果推送到 hub，确定 hub 仓库 ID
+    # Determine hub repo ID if pushing to hub
     hub_repo_id = None
     if args.push_to_hub:
         if args.hub_repo_id:
             hub_repo_id = args.hub_repo_id
         else:
             if not os.path.isdir(args.pretrained_path):
-                # 使用带有 "_migrated" 后缀的相同仓库
+                # Use same repo with "_migrated" suffix
                 hub_repo_id = f"{args.pretrained_path}_migrated"
             else:
                 raise ValueError("--hub-repo-id must be specified when pushing local model to hub")
 
-    # 首先将所有组件保存到本地目录
+    # Save all components to local directory first
     print(f"Saving preprocessor to {output_dir}...")
     preprocessor.save_pretrained(output_dir)
 
@@ -503,90 +635,92 @@ def main():
     print(f"Saving model to {output_dir}...")
     policy.save_pretrained(output_dir)
 
-    # 生成并保存模型卡
+    # Generate and save model card
     print("Generating model card...")
-    # 从原始配置获取元数据
-    dataset_repo_id = train_config.get("repo_id", "unknown")
+    # Get metadata from original config
+    dataset_repo_id = "unknown"
+    if train_config is not None:
+        dataset_repo_id = train_config.get("repo_id", "unknown")
     license = config.get("license", "apache-2.0")
 
     tags = config.get("tags", ["robotics", "lerobot", policy_type]) or ["robotics", "lerobot", policy_type]
     tags = set(tags).union({"robotics", "lerobot", policy_type})
     tags = list(tags)
 
-    # 生成模型卡
+    # Generate model card
     card = policy.generate_model_card(
         dataset_repo_id=dataset_repo_id, model_type=policy_type, license=license, tags=tags
     )
 
-    # 在本地保存模型卡
+    # Save model card locally
     card.save(str(output_dir / "README.md"))
     print(f"Model card saved to {output_dir / 'README.md'}")
-    # 如果需要，在单个操作中将所有文件推送到 hub
+    # Push all files to hub in a single operation if requested
     if args.push_to_hub and hub_repo_id:
         api = HfApi()
 
-        # 确定是否应该创建 PR（如果指定了分支，则自动创建）
+        # Determine if we should create a PR (automatically if branch is specified)
         create_pr = args.branch is not None
         target_location = f"branch '{args.branch}'" if args.branch else "main branch"
 
         print(f"Pushing all migrated files to {hub_repo_id} on {target_location}...")
 
-        # 在单个提交中上传所有文件，如果指定了分支，则自动创建 PR
+        # Upload all files in a single commit with automatic PR creation if branch specified
         commit_message = "Migrate policy to PolicyProcessorPipeline system"
         commit_description = None
 
         if create_pr:
-            # 为 PR 主体单独设置提交描述
-            commit_description = """🤖 **自动化策略迁移到 PolicyProcessorPipeline**
+            # Separate commit description for PR body
+            commit_description = """**Automated Policy Migration to PolicyProcessorPipeline**
 
-此 PR 使用现代 PolicyProcessorPipeline 架构将您的模型迁移到新的 LeRobot 策略格式。
+This PR migrates your model to the new LeRobot policy format using the modern PolicyProcessorPipeline architecture.
 
-## 变更内容
+## What Changed
 
-### ✨ **新架构 - PolicyProcessorPipeline**
-您的模型现在使用外部 PolicyProcessorPipeline 组件进行数据处理，而不是内置的归一化层。这提供了：
-- **模块化**：独立的预处理和后处理管道
-- **灵活性**：易于交换、配置和调试处理步骤
-- **兼容性**：与最新的 LeRobot 生态系统兼容
+### **New Architecture - PolicyProcessorPipeline**
+Your model now uses external PolicyProcessorPipeline components for data processing instead of built-in normalization layers. This provides:
+- **Modularity**: Separate preprocessing and postprocessing pipelines
+- **Flexibility**: Easy to swap, configure, and debug processing steps
+- **Compatibility**: Works with the latest LeRobot ecosystem
 
-### 🔧 **归一化提取**
-我们从模型的 state_dict 中提取了归一化统计信息，并移除了内置的归一化层：
-- **提取的模式**：`normalize_inputs.*`、`unnormalize_outputs.*`、`normalize.*`、`unnormalize.*`、`input_normalizer.*`、`output_normalizer.*`
-- **保留的统计信息**：所有特征的均值、标准差、最小值、最大值
-- **干净的模型**：state dict 现在仅包含核心模型权重
+### **Normalization Extraction**
+We've extracted normalization statistics from your model's state_dict and removed the built-in normalization layers:
+- **Extracted patterns**: `normalize_inputs.*`, `unnormalize_outputs.*`, `normalize.*`, `unnormalize.*`, `input_normalizer.*`, `output_normalizer.*`
+- **Statistics preserved**: Mean, std, min, max values for all features
+- **Clean model**: State dict now contains only core model weights
 
-### 📦 **添加的文件**
-- **preprocessor_config.json**：输入预处理管道的配置
-- **postprocessor_config.json**：输出后处理管道的配置
-- **model.safetensors**：不含归一化层的干净模型权重
-- **config.json**：更新的模型配置
-- **train_config.json**：训练配置
-- **README.md**：包含迁移信息的更新模型卡
+### **Files Added**
+- **preprocessor_config.json**: Configuration for input preprocessing pipeline
+- **postprocessor_config.json**: Configuration for output postprocessing pipeline
+- **model.safetensors**: Clean model weights without normalization layers
+- **config.json**: Updated model configuration
+- **train_config.json**: Training configuration
+- **README.md**: Updated model card with migration information
 
-### 🚀 **优势**
-- **向后兼容**：您的模型行为保持不变
-- **面向未来**：与最新的 LeRobot 功能和更新兼容
-- **可调试**：易于检查和修改处理步骤
-- **可移植**：处理器可以跨模型共享和重用
+### **Benefits**
+- **Backward Compatible**: Your model behavior remains identical
+- **Future Ready**: Compatible with latest LeRobot features and updates
+- **Debuggable**: Easy to inspect and modify processing steps
+- **Portable**: Processors can be shared and reused across models
 
-### 💻 **使用方法**
+### **Usage**
 ```python
-# 加载迁移后的模型
+# Load your migrated model
 from lerobot.policies import get_policy_class
 from lerobot.processor import PolicyProcessorPipeline
 
-# 预处理器和后处理器现在是外部的
+# The preprocessor and postprocessor are now external
 preprocessor = PolicyProcessorPipeline.from_pretrained("your-model-repo", config_filename="preprocessor_config.json")
 postprocessor = PolicyProcessorPipeline.from_pretrained("your-model-repo", config_filename="postprocessor_config.json")
 policy = get_policy_class("your-policy-type").from_pretrained("your-model-repo")
 
-# 通过管道处理数据
+# Process data through the pipeline
 processed_batch = preprocessor(raw_batch)
 action = policy(processed_batch)
 final_action = postprocessor(action)
 ```
 
-*由 LeRobot 策略迁移脚本自动生成*"""
+*Generated automatically by the LeRobot policy migration script*"""
 
         upload_kwargs = {
             "repo_id": hub_repo_id,
@@ -626,6 +760,9 @@ final_action = postprocessor(action)
             )
         else:
             print(f"\nView the changes at: https://huggingface.co/{hub_repo_id}")
+
+    # Display final summary about any problematic missing keys
+    display_migration_summary_with_warnings(problematic_missing_keys)
 
 
 if __name__ == "__main__":

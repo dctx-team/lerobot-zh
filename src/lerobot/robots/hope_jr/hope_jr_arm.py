@@ -17,15 +17,15 @@
 import logging
 import time
 from functools import cached_property
-from typing import Any
 
-from lerobot.cameras.utils import make_cameras_from_configs
+from lerobot.cameras import make_cameras_from_configs
 from lerobot.motors import Motor, MotorNormMode
 from lerobot.motors.calibration_gui import RangeFinderGUI
 from lerobot.motors.feetech import (
     FeetechMotorsBus,
 )
-from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+from lerobot.types import RobotAction, RobotObservation
+from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
 from ..robot import Robot
 from ..utils import ensure_safe_goal_position
@@ -56,7 +56,7 @@ class HopeJrArm(Robot):
         )
         self.cameras = make_cameras_from_configs(config.cameras)
 
-        # HACK (临时方案)
+        # HACK
         self.shoulder_pitch = "shoulder_pitch"
         self.other_motors = [m for m in self.bus.motors if m != "shoulder_pitch"]
 
@@ -82,13 +82,12 @@ class HopeJrArm(Robot):
     def is_connected(self) -> bool:
         return self.bus.is_connected and all(cam.is_connected for cam in self.cameras.values())
 
+    @check_if_already_connected
     def connect(self, calibrate: bool = True) -> None:
         """
-        我们假设在连接时，机械臂处于静止位置，
-        并且可以安全地禁用扭矩以运行校准。
+        We assume that at connection time, arm is in a rest position,
+        and torque can be safely disabled to run calibration.
         """
-        if self.is_connected:
-            raise DeviceAlreadyConnectedError(f"{self} already connected")
 
         self.bus.connect(handshake=False)
         if not self.is_calibrated and calibrate:
@@ -105,7 +104,7 @@ class HopeJrArm(Robot):
     def is_calibrated(self) -> bool:
         return self.bus.is_calibrated
 
-    def calibrate(self, limb_name: str = None) -> None:
+    def calibrate(self) -> None:
         groups = {
             "all": list(self.bus.motors.keys()),
             "shoulder": ["shoulder_pitch", "shoulder_yaw", "shoulder_roll"],
@@ -122,17 +121,15 @@ class HopeJrArm(Robot):
             self.bus.configure_motors(maximum_acceleration=30, acceleration=30)
 
     def setup_motors(self) -> None:
-        # TODO: 添加文档字符串
+        # TODO: add docstring
         for motor in reversed(self.bus.motors):
             input(f"Connect the controller board to the '{motor}' motor only and press enter.")
             self.bus.setup_motor(motor)
             print(f"'{motor}' motor id set to {self.bus.motors[motor].id}")
 
-    def get_observation(self) -> dict[str, Any]:
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-
-        # 读取机械臂位置
+    @check_if_not_connected
+    def get_observation(self) -> RobotObservation:
+        # Read arm position
         start = time.perf_counter()
         obs_dict = self.bus.sync_read("Present_Position", self.other_motors)
         obs_dict[self.shoulder_pitch] = self.bus.read("Present_Position", self.shoulder_pitch)
@@ -140,23 +137,21 @@ class HopeJrArm(Robot):
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
 
-        # 从相机捕获图像
+        # Capture images from cameras
         for cam_key, cam in self.cameras.items():
             start = time.perf_counter()
-            obs_dict[cam_key] = cam.async_read()
+            obs_dict[cam_key] = cam.read_latest()
             dt_ms = (time.perf_counter() - start) * 1e3
             logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
 
         return obs_dict
 
-    def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-
+    @check_if_not_connected
+    def send_action(self, action: RobotAction) -> RobotAction:
         goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
 
-        # 当目标位置距离当前位置太远时限制目标位置。
-        # /!\ 由于需要从从动端读取，预期 fps 会较慢。
+        # Cap goal position when too far away from present position.
+        # /!\ Slower fps expected due to reading from the follower.
         if self.config.max_relative_target is not None:
             present_pos = self.bus.sync_read("Present_Position")
             goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
@@ -165,10 +160,8 @@ class HopeJrArm(Robot):
         self.bus.sync_write("Goal_Position", goal_pos)
         return {f"{motor}.pos": val for motor, val in goal_pos.items()}
 
+    @check_if_not_connected
     def disconnect(self):
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-
         self.bus.disconnect(self.config.disable_torque_on_disconnect)
         for cam in self.cameras.values():
             cam.disconnect()

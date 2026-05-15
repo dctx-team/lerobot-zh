@@ -14,11 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-手机遥操作模块
-
-该模块提供基于手机的遥操作功能，支持使用移动设备进行机器人控制。
-"""
-
 from .config_phone import PhoneConfig
 from .teleop_phone import Phone
+
+__all__ = ["Phone", "PhoneConfig"]

@@ -16,43 +16,46 @@ from dataclasses import dataclass
 
 from ..configs import CameraConfig, ColorMode
 
+__all__ = ["CameraConfig", "ColorMode", "Reachy2CameraConfig"]
+
 
 @CameraConfig.register_subclass("reachy2_camera")
 @dataclass
 class Reachy2CameraConfig(CameraConfig):
-    """Reachy 2 相机设备的配置类。
+    """Configuration class for Reachy 2 camera devices.
 
-    此类为 Reachy 2 相机提供配置选项，
-    支持远程操作相机和深度相机。它包括
-    分辨率、帧速率、颜色模式和相机选择的设置。
+    This class provides configuration options for Reachy 2 cameras,
+    supporting both the teleop and depth cameras. It includes settings
+    for resolution, frame rate, color mode, and the selection of the cameras.
 
-    配置示例:
+    Example configurations:
     ```python
-    # 基本配置
+    # Basic configurations
     Reachy2CameraConfig(
         name="teleop",
         image_type="left",
-        ip_address="192.168.0.200",  # 机器人的 IP 地址
-        fps=15,
+        ip_address="192.168.0.200",  # IP address of the robot
+        port=50065,  # Port of the camera server
         width=640,
         height=480,
+        fps=30,  # Not configurable for Reachy 2 cameras
         color_mode=ColorMode.RGB,
-    )  # 左侧远程操作相机，640x480 @ 15FPS
+    )  # Left teleop camera, 640x480 @ 30FPS
     ```
 
-    属性:
-        name: 相机设备的名称。可以是 "teleop" 或 "depth"。
-        image_type: 图像流的类型。对于 "teleop" 相机，可以是 "left" 或 "right"。
-                    对于 "depth" 相机，可以是 "rgb" 或 "depth"。（depth 尚不支持）
-        fps: 彩色流请求的每秒帧数。
-        width: 彩色流请求的帧宽度（像素）。
-        height: 彩色流请求的帧高度（像素）。
-        color_mode: 图像输出的颜色模式（RGB 或 BGR）。默认为 RGB。
-        ip_address: 机器人的 IP 地址。默认为 "localhost"。
-        port: 相机服务器的端口号。默认为 50065。
+    Attributes:
+        name: Name of the camera device. Can be "teleop" or "depth".
+        image_type: Type of image stream. For "teleop" camera, can be "left" or "right".
+                    For "depth" camera, can be "rgb" or "depth". (depth is not supported yet)
+        fps: Requested frames per second for the color stream. Not configurable for Reachy 2 cameras.
+        width: Requested frame width in pixels for the color stream.
+        height: Requested frame height in pixels for the color stream.
+        color_mode: Color mode for image output (RGB or BGR). Defaults to RGB.
+        ip_address: IP address of the robot. Defaults to "localhost".
+        port: Port number for the camera server. Defaults to 50065.
 
-    注意:
-        - 当前仅支持 3 通道彩色输出（RGB/BGR）。
+    Note:
+        - Only 3-channel color output (RGB/BGR) is currently supported.
     """
 
     name: str
@@ -60,9 +63,8 @@ class Reachy2CameraConfig(CameraConfig):
     color_mode: ColorMode = ColorMode.RGB
     ip_address: str | None = "localhost"
     port: int = 50065
-    # use_depth: bool = False
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.name not in ["teleop", "depth"]:
             raise ValueError(f"`name` is expected to be 'teleop' or 'depth', but {self.name} is provided.")
         if (self.name == "teleop" and self.image_type not in ["left", "right"]) or (
@@ -72,7 +74,4 @@ class Reachy2CameraConfig(CameraConfig):
                 f"`image_type` is expected to be 'left' or 'right' for teleop camera, and 'rgb' or 'depth' for depth camera, but {self.image_type} is provided."
             )
 
-        if self.color_mode not in ["rgb", "bgr"]:
-            raise ValueError(
-                f"`color_mode` is expected to be 'rgb' or 'bgr', but {self.color_mode} is provided."
-            )
+        self.color_mode = ColorMode(self.color_mode)

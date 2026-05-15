@@ -16,77 +16,84 @@
 # limitations under the License.
 from dataclasses import dataclass, field
 
-from lerobot.configs.policies import PreTrainedConfig
-from lerobot.configs.types import NormalizationMode
-from lerobot.optim.optimizers import AdamConfig
+from lerobot.configs import NormalizationMode, PreTrainedConfig
+from lerobot.optim import AdamConfig
 
 
 @PreTrainedConfig.register_subclass("tdmpc")
 @dataclass
 class TDMPCConfig(PreTrainedConfig):
-    """TDMPCPolicy的配置类。
+    """Configuration class for TDMPCPolicy.
 
-    默认配置针对xarm_lift_medium_replay训练进行了调优，该训练提供本体感觉和单个相机观测。
+    Defaults are configured for training with xarm_lift_medium_replay providing proprioceptive and single
+    camera observations.
 
-    您最有可能需要更改的参数是那些依赖于环境/传感器的参数。
-    它们是：`input_shapes`、`output_shapes`，可能还有`max_random_shift_ratio`。
+    The parameters you will most likely need to change are the ones which depend on the environment / sensors.
+    Those are: `input_features`, `output_features`, and perhaps `max_random_shift_ratio`.
 
-    参数:
-        n_action_repeats: 重复规划返回的动作的次数。（提示：在Q学习中搜索动作重复，
-            或询问您喜欢的聊天机器人）
-        horizon: 模型预测控制的规划时域。
-        n_action_steps: 从模型预测控制给出的计划中采取的动作步数。这是使用动作重复的替代方法。
-            如果此值设置为大于1，则要求`n_action_repeats == 1`、`use_mpc == True`且
-            `n_action_steps <= horizon`。注意，这种使用计划中多个步骤的方法不在原始实现中。
-        input_shapes: 定义策略输入数据形状的字典。键表示输入数据名称，值是指示对应数据维度的列表。
-            例如，"observation.image"指来自相机的输入，维度为[3, 96, 96]，表示它有三个颜色通道
-            和96x96分辨率。重要的是，`input_shapes`不包括批次维度或时间维度。
-        output_shapes: 定义策略输出数据形状的字典。键表示输出数据名称，值是指示对应数据维度的列表。
-            例如，"action"指输出形状为[14]，表示14维动作。重要的是，`output_shapes`不包括批次维度
-            或时间维度。
-        input_normalization_modes: 字典，键表示模态（例如"observation.state"），值指定要应用的
-            归一化模式。两种可用模式是"mean_std"（减去均值并除以标准差）和"min_max"（重新缩放到
-            [-1, 1]范围）。注意，这里默认为None，表示输入不进行归一化。这是为了与原始实现匹配。
-        output_normalization_modes: 与`normalize_input_modes`类似的字典，但用于反归一化到原始比例。
-            注意，这也用于归一化训练目标。注意：在MPPI/CEM期间使用裁剪到[-1, +1]。因此，建议您
-            坚持使用"min_max"归一化模式。
-        image_encoder_hidden_dim: 用于编码图像的卷积层的通道数。
-        state_encoder_hidden_dim: 用于编码状态向量的MLP的隐藏维度。
-        latent_dim: 观测的潜在嵌入维度。
-        q_ensemble_size: 用于估计不确定性的集成中Q函数估计器的数量。
-        mlp_dim: 用于建模动力学编码器、奖励函数、策略(π)、Q集成和V的MLP的隐藏维度。
-        discount: 强化学习形式的折扣因子(γ)。
-        use_mpc: 是否使用模型预测控制。替代方法是为每一步仅采样策略模型(π)。
-        cem_iterations: MPC中MPPI/CEM循环的迭代次数。
-        max_std: CEM中从高斯PDF采样动作的最大标准差。
-        min_std: 应用于从策略模型(π)采样的动作的噪声的最小标准差。也用作CEM中从高斯PDF
-            采样动作的最小标准差。
-        n_gaussian_samples: 每次CEM迭代从高斯分布中抽取的样本数。必须非零。
-        n_pi_samples: 每次CEM迭代从策略/世界模型展开中抽取的样本数。可以为零。
-        uncertainty_regularizer_coeff: 估计轨迹价值时使用的不确定性正则化系数（FOWM中方程4的λ系数）。
-        n_elites: 每次CEM迭代用于更新高斯参数的精英样本数量。
-        elite_weighting_temperature: 更新CEM的高斯参数时用于softmax加权（按轨迹价值）精英的温度。
-        gaussian_mean_momentum: 用于CEM中优化的高斯参数的均值参数μ的EMA更新的动量(α)。
-            更新计算为μ⁻ ← αμ⁻ + (1-α)μ。
-        max_random_shift_ratio: 训练时应用于图像增强的最大随机偏移（作为图像大小的比例）（以像素为单位）。
-            如果设置为0，则不应用此类增强。注意，假定输入图像为正方形以进行此增强。
-        reward_coeff: 奖励回归损失的损失加权系数。
-        expectile_weight: 用于状态价值函数(V)的期望分位数回归的权重(τ)。v_pred < v_target的权重为τ，
-            v_pred >= v_target的权重为(1-τ)。τ预期在[0, 1]中。将τ设置为更接近1会导致更"乐观"的V。
-            这样做是合理的，因为v_target是通过评估学习的状态-动作价值函数(Q)与样本内动作获得的，
-            这些动作可能并不总是最优的。
-        value_coeff: 状态-动作价值(Q) TD损失和状态价值(V)期望分位数回归损失的损失加权系数。
-        consistency_coeff: 一致性损失的损失加权系数。
-        advantage_scaling: 在对策略(π)估计器的参数进行优势加权回归之前，优势被缩放的因子。
-            注意，指数化的优势被裁剪到100.0。
-        pi_coeff: 动作回归损失的损失加权系数。
-        temporal_decay_coeff: 用于指数衰减未来时间步损失系数的系数。提示：每个损失都是用从当前时间步
-            开始的`horizon`步数的动作计算的。
-        target_model_momentum: 用于目标模型的EMA更新的动量(α)。更新计算为ϕ ← αϕ + (1-α)θ，
-            其中ϕ是目标模型的参数，θ是正在训练的模型的参数。
+    Args:
+        n_action_repeats: The number of times to repeat the action returned by the planning. (hint: Google
+            action repeats in Q-learning or ask your favorite chatbot)
+        horizon: Horizon for model predictive control.
+        n_action_steps: Number of action steps to take from the plan given by model predictive control. This
+            is an alternative to using action repeats. If this is set to more than 1, then we require
+            `n_action_repeats == 1`, `use_mpc == True` and `n_action_steps <= horizon`. Note that this
+            approach of using multiple steps from the plan is not in the original implementation.
+        input_features: A dictionary defining the PolicyFeature of the input data for the policy. The key represents
+            the input data name, and the value is PolicyFeature, which consists of FeatureType and shape attributes.
+        output_features: A dictionary defining the PolicyFeature of the output data for the policy. The key represents
+            the output data name, and the value is PolicyFeature, which consists of FeatureType and shape attributes.
+        normalization_mapping: A dictionary that maps from a str value of FeatureType (e.g., "STATE", "VISUAL") to
+            a corresponding NormalizationMode (e.g., NormalizationMode.MIN_MAX)
+        image_encoder_hidden_dim: Number of channels for the convolutional layers used for image encoding.
+        state_encoder_hidden_dim: Hidden dimension for MLP used for state vector encoding.
+        latent_dim: Observation's latent embedding dimension.
+        q_ensemble_size: Number of Q function estimators to use in an ensemble for uncertainty estimation.
+        mlp_dim: Hidden dimension of MLPs used for modelling the dynamics encoder, reward function, policy
+            (π), Q ensemble, and V.
+        discount: Discount factor (γ) to use for the reinforcement learning formalism.
+        use_mpc: Whether to use model predictive control. The alternative is to just sample the policy model
+            (π) for each step.
+        cem_iterations: Number of iterations for the MPPI/CEM loop in MPC.
+        max_std: Maximum standard deviation for actions sampled from the gaussian PDF in CEM.
+        min_std: Minimum standard deviation for noise applied to actions sampled from the policy model (π).
+            Doubles up as the minimum standard deviation for actions sampled from the gaussian PDF in CEM.
+        n_gaussian_samples: Number of samples to draw from the gaussian distribution every CEM iteration. Must
+            be non-zero.
+        n_pi_samples: Number of samples to draw from the policy / world model rollout every CEM iteration. Can
+            be zero.
+        uncertainty_regularizer_coeff: Coefficient for the uncertainty regularization used when estimating
+            trajectory values (this is the λ coefficient in eqn 4 of FOWM).
+        n_elites: The number of elite samples to use for updating the gaussian parameters every CEM iteration.
+        elite_weighting_temperature: The temperature to use for softmax weighting (by trajectory value) of the
+            elites, when updating the gaussian parameters for CEM.
+        gaussian_mean_momentum: Momentum (α) used for EMA updates of the mean parameter μ of the gaussian
+            parameters optimized in CEM. Updates are calculated as μ⁻ ← αμ⁻ + (1-α)μ.
+        max_random_shift_ratio: Maximum random shift (as a proportion of the image size) to apply to the
+            image(s) (in units of pixels) for training-time augmentation. If set to 0, no such augmentation
+            is applied. Note that the input images are assumed to be square for this augmentation.
+        reward_coeff: Loss weighting coefficient for the reward regression loss.
+        expectile_weight: Weighting (τ) used in expectile regression for the state value function (V).
+            v_pred < v_target is weighted by τ and v_pred >= v_target is weighted by (1-τ). τ is expected to
+            be in [0, 1]. Setting τ closer to 1 results in a more "optimistic" V. This is sensible to do
+            because v_target is obtained by evaluating the learned state-action value functions (Q) with
+            in-sample actions that may not be always optimal.
+        value_coeff: Loss weighting coefficient for both the state-action value (Q) TD loss, and the state
+            value (V) expectile regression loss.
+        consistency_coeff: Loss weighting coefficient for the consistency loss.
+        advantage_scaling: A factor by which the advantages are scaled prior to exponentiation for advantage
+            weighted regression of the policy (π) estimator parameters. Note that the exponentiated advantages
+            are clamped at 100.0.
+        pi_coeff: Loss weighting coefficient for the action regression loss.
+        temporal_decay_coeff: Exponential decay coefficient for decaying the loss coefficient for future time-
+            steps. Hint: each loss computation involves `horizon` steps worth of actions starting from the
+            current time step.
+        target_model_momentum: Momentum (α) used for EMA updates of the target models. Updates are calculated
+            as ϕ ← αϕ + (1-α)θ where ϕ are the parameters of the target model and θ are the parameters of the
+            model being trained.
     """
 
-    # 输入/输出结构。
+    # Input / output structure.
     n_obs_steps: int = 1
     n_action_repeats: int = 2
     horizon: int = 5
@@ -101,17 +108,17 @@ class TDMPCConfig(PreTrainedConfig):
         }
     )
 
-    # 架构/建模。
-    # 神经网络。
+    # Architecture / modeling.
+    # Neural networks.
     image_encoder_hidden_dim: int = 32
     state_encoder_hidden_dim: int = 256
     latent_dim: int = 50
     q_ensemble_size: int = 5
     mlp_dim: int = 512
-    # 强化学习。
+    # Reinforcement learning.
     discount: float = 0.9
 
-    # 推理。
+    # Inference.
     use_mpc: bool = True
     cem_iterations: int = 6
     max_std: float = 2.0
@@ -123,9 +130,9 @@ class TDMPCConfig(PreTrainedConfig):
     elite_weighting_temperature: float = 0.5
     gaussian_mean_momentum: float = 0.1
 
-    # 训练和损失计算。
+    # Training and loss computation.
     max_random_shift_ratio: float = 0.0476
-    # 损失系数。
+    # Loss coefficients.
     reward_coeff: float = 0.5
     expectile_weight: float = 0.9
     value_coeff: float = 0.1
@@ -133,16 +140,16 @@ class TDMPCConfig(PreTrainedConfig):
     advantage_scaling: float = 3.0
     pi_coeff: float = 0.5
     temporal_decay_coeff: float = 0.5
-    # 目标模型。
+    # Target model.
     target_model_momentum: float = 0.995
 
-    # 训练预设
+    # Training presets
     optimizer_lr: float = 3e-4
 
     def __post_init__(self):
         super().__post_init__()
 
-        """输入验证（非详尽）。"""
+        """Input validation (not exhaustive)."""
         if self.n_gaussian_samples <= 0:
             raise ValueError(
                 f"The number of gaussian samples for CEM should be non-zero. Got `{self.n_gaussian_samples=}`"
@@ -174,7 +181,7 @@ class TDMPCConfig(PreTrainedConfig):
         return None
 
     def validate_features(self) -> None:
-        # 目前应该最多只有一个图像键。
+        # There should only be one image key.
         if len(self.image_features) > 1:
             raise ValueError(
                 f"{self.__class__.__name__} handles at most one image for now. Got image keys {self.image_features}."
@@ -183,7 +190,8 @@ class TDMPCConfig(PreTrainedConfig):
         if len(self.image_features) > 0:
             image_ft = next(iter(self.image_features.values()))
             if image_ft.shape[-2] != image_ft.shape[-1]:
-                # TODO(alexander-soare): 此限制仅是因为随机偏移增强中的代码。应该可以移除。
+                # TODO(alexander-soare): This limitation is solely because of code in the random shift
+                # augmentation. It should be able to be removed.
                 raise ValueError(f"Only square images are handled now. Got image shape {image_ft.shape}.")
 
     @property

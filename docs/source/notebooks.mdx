@@ -1,29 +1,29 @@
 # 🤗 LeRobot Notebooks
 
-本仓库包含使用 LeRobot 的示例 notebook。这些 notebook 演示了如何使用标准化策略在真实或仿真数据集上训练策略。
+This repository contains example notebooks for using LeRobot. These notebooks demonstrate how to train policies on real or simulation datasets using standardized policies.
 
 ---
 
-### 训练 ACT
+### Training ACT
 
-[ACT](https://huggingface.co/papers/2304.13705) (Action Chunking Transformer,动作分块 Transformer) 是一种基于 Transformer 的策略架构,用于模仿学习,它处理机器人状态和相机输入以生成平滑的、分块的动作序列。
+[ACT](https://huggingface.co/papers/2304.13705) (Action Chunking Transformer) is a transformer-based policy architecture for imitation learning that processes robot states and camera inputs to generate smooth, chunked action sequences.
 
-我们提供了一个可随时运行的 Google Colab notebook,帮助你使用来自 Hugging Face Hub 的数据集训练 ACT 策略,并可选择记录到 Weights & Biases。
+We provide a ready-to-run Google Colab notebook to help you train ACT policies using datasets from the Hugging Face Hub, with optional logging to Weights & Biases.
 
 | Notebook                                                                                                | Colab                                                                                                                                                                             |
 | :------------------------------------------------------------------------------------------------------ | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [使用 LeRobot 训练 ACT](https://github.com/huggingface/notebooks/blob/main/lerobot/training-act.ipynb) | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/notebooks/blob/main/lerobot/training-act.ipynb) |
+| [Train ACT with LeRobot](https://github.com/huggingface/notebooks/blob/main/lerobot/training-act.ipynb) | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/notebooks/blob/main/lerobot/training-act.ipynb) |
 
-在 NVIDIA A100 GPU 上使用批量大小 `64` 训练 100k 步的预期训练时间:约 1.5 小时。
+Expected training time for 100k steps: ~1.5 hours on an NVIDIA A100 GPU with batch size of `64`.
 
-### 训练 SmolVLA
+### Training SmolVLA
 
-[SmolVLA](https://huggingface.co/papers/2506.01844) 是一个小型但高效的视觉-语言-动作模型。它体积紧凑,拥有 450M 参数,由 Hugging Face 开发。
+[SmolVLA](https://huggingface.co/papers/2506.01844) is a small but efficient Vision-Language-Action model. It is compact in size with 450 M-parameter and is developed by Hugging Face.
 
-我们提供了一个可随时运行的 Google Colab notebook,帮助你使用来自 Hugging Face Hub 的数据集训练 SmolVLA 策略,并可选择记录到 Weights & Biases。
+We provide a ready-to-run Google Colab notebook to help you train SmolVLA policies using datasets from the Hugging Face Hub, with optional logging to Weights & Biases.
 
 | Notebook                                                                                                        | Colab                                                                                                                                                                                 |
 | :-------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [使用 LeRobot 训练 SmolVLA](https://github.com/huggingface/notebooks/blob/main/lerobot/training-smolvla.ipynb) | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/notebooks/blob/main/lerobot/training-smolvla.ipynb) |
+| [Train SmolVLA with LeRobot](https://github.com/huggingface/notebooks/blob/main/lerobot/training-smolvla.ipynb) | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/notebooks/blob/main/lerobot/training-smolvla.ipynb) |
 
-在 NVIDIA A100 GPU 上使用批量大小 `64` 训练 20k 步的预期训练时间:约 5 小时。
+Expected training time for 20k steps: ~5 hours on an NVIDIA A100 GPU with batch size of `64`.

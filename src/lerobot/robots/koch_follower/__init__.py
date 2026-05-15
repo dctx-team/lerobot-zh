@@ -14,12 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Koch从动机器人模块
-
-该模块提供了Koch从动机器人的配置类和控制接口。
-KochFollower是一款用于遥操作的从动机器人系统。
-"""
-
 from .config_koch_follower import KochFollowerConfig
 from .koch_follower import KochFollower
+
+__all__ = ["KochFollower", "KochFollowerConfig"]

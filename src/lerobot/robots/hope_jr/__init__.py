@@ -14,13 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Hope Jr机器人模块
-
-该模块提供了Hope Jr机器人的配置类和控制接口。
-包含机械臂控制（HopeJrArm）和灵巧手控制（HopeJrHand）两个独立组件。
-"""
-
 from .config_hope_jr import HopeJrArmConfig, HopeJrHandConfig
 from .hope_jr_arm import HopeJrArm
 from .hope_jr_hand import HopeJrHand
+
+__all__ = ["HopeJrArm", "HopeJrArmConfig", "HopeJrHand", "HopeJrHandConfig"]

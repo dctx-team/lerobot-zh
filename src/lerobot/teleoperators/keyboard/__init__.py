@@ -14,18 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-键盘遥操作模块
-
-该模块提供基于键盘的遥操作功能，支持关节空间和末端执行器空间的控制。
-"""
-
-from .configuration_keyboard import KeyboardEndEffectorTeleopConfig, KeyboardTeleopConfig
-from .teleop_keyboard import KeyboardEndEffectorTeleop, KeyboardTeleop
+from .configuration_keyboard import (
+    KeyboardEndEffectorTeleopConfig,
+    KeyboardRoverTeleopConfig,
+    KeyboardTeleopConfig,
+)
+from .teleop_keyboard import KeyboardEndEffectorTeleop, KeyboardRoverTeleop, KeyboardTeleop
 
 __all__ = [
     "KeyboardTeleopConfig",
     "KeyboardTeleop",
     "KeyboardEndEffectorTeleopConfig",
     "KeyboardEndEffectorTeleop",
+    "KeyboardRoverTeleopConfig",
+    "KeyboardRoverTeleop",
 ]

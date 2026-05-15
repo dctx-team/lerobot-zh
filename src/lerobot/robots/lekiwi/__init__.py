@@ -14,13 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-LeKiwi机器人模块
-
-该模块提供了LeKiwi机器人的配置类和控制接口。
-包含主机器人类（LeKiwi）和客户端类（LeKiwiClient）以支持分布式控制。
-"""
-
 from .config_lekiwi import LeKiwiClientConfig, LeKiwiConfig
 from .lekiwi import LeKiwi
 from .lekiwi_client import LeKiwiClient
+
+__all__ = ["LeKiwi", "LeKiwiClient", "LeKiwiClientConfig", "LeKiwiConfig"]

@@ -14,22 +14,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# 文档：
+# Docs:
 # hebi: https://docs.hebi.us/tools.html#mobile-io
 # teleop: https://github.com/SpesRobotics/teleop
 
 import logging
 import threading
 import time
+from typing import TYPE_CHECKING
 
-import hebi
 import numpy as np
-from teleop import Teleop
 
-from lerobot.teleoperators.phone.config_phone import PhoneConfig, PhoneOS
-from lerobot.teleoperators.teleoperator import Teleoperator
-from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
+from lerobot.utils.import_utils import _hebi_available, _teleop_available, require_package
 from lerobot.utils.rotation import Rotation
+
+if TYPE_CHECKING or _hebi_available:
+    import hebi
+else:
+    hebi = None
+
+if TYPE_CHECKING or _teleop_available:
+    from teleop import Teleop
+else:
+    Teleop = None
+
+from ..teleoperator import Teleoperator
+from .config_phone import PhoneConfig, PhoneOS
 
 logger = logging.getLogger(__name__)
 
@@ -57,15 +68,15 @@ class BasePhone:
 
     @property
     def feedback_features(self) -> dict[str, type]:
-        # 尚未实现触觉或其他反馈
+        # No haptic or other feedback implemented yet
         pass
 
     def configure(self) -> None:
-        # 手机遥操作不需要额外配置
+        # No additional configuration required for phone teleop
         pass
 
     def send_feedback(self, feedback: dict[str, float]) -> None:
-        # 我们可以在这里添加触觉反馈（振动），但尚未实现
+        # We could add haptic feedback (vibrations) here, but it's not implemented yet
         raise NotImplementedError
 
 
@@ -73,6 +84,8 @@ class IOSPhone(BasePhone, Teleoperator):
     name = "ios_phone"
 
     def __init__(self, config: PhoneConfig):
+        require_package("hebi-py", extra="phone", import_name="hebi")
+        require_package("teleop", extra="phone")
         super().__init__(config)
         self.config = config
         self._group = None
@@ -81,10 +94,8 @@ class IOSPhone(BasePhone, Teleoperator):
     def is_connected(self) -> bool:
         return self._group is not None
 
+    @check_if_already_connected
     def connect(self) -> None:
-        if self.is_connected:
-            raise DeviceAlreadyConnectedError(f"{self} already connected")
-
         logger.info("Connecting to IPhone, make sure to open the HEBI Mobile I/O app.")
         lookup = hebi.Lookup()
         time.sleep(2.0)
@@ -109,13 +120,15 @@ class IOSPhone(BasePhone, Teleoperator):
 
     def _wait_for_capture_trigger(self) -> tuple[np.ndarray, Rotation]:
         """
-        阻塞执行，直到从iOS设备检测到校准触发器。
+        Blocks execution until the calibration trigger is detected from the iOS device.
 
-        此方法进入循环，持续读取手机的状态。它等待用户在HEBI Mobile I/O应用中按住"B1"按钮。
-        一旦按下B1，循环就会中断并返回手机在该时刻的姿态。
+        This method enters a loop, continuously reading the phone's state. It waits for the user to press
+        and hold the 'B1' button in the HEBI Mobile I/O app. Once B1 is pressed, the loop breaks and
+        returns the phone's pose at that exact moment.
 
-        返回：
-            一个元组，包含触发器激活时手机的位置（np.ndarray）和旋转（Rotation）。
+        Returns:
+            A tuple containing the position (np.ndarray) and rotation (Rotation) of the phone at the
+            moment the trigger was activated.
         """
         while True:
             has_pose, position, rotation, fb_pose = self._read_current_pose()
@@ -135,17 +148,19 @@ class IOSPhone(BasePhone, Teleoperator):
 
     def _read_current_pose(self) -> tuple[bool, np.ndarray | None, Rotation | None, object | None]:
         """
-        通过HEBI SDK从连接的iOS设备读取瞬时6自由度姿态。
+        Reads the instantaneous 6-DoF pose from the connected iOS device via the HEBI SDK.
 
-        此方法获取来自HEBI组的最新反馈数据包，提取ARKit位置和方向，并将它们转换为标准格式。
-        它还应用配置的相机偏移量，以将姿态从相机坐标系调整到手机的物理坐标系。
+        This method fetches the latest feedback packet from the HEBI group, extracts the ARKit
+        position and orientation, and converts them into a standard format. It also applies a
+        configured camera offset to adjust the pose from the camera's frame to the phone's
+        physical frame.
 
-        返回：
-            一个元组，包含：
-            - 一个布尔值，指示是否成功读取了有效的姿态。
-            - 3D位置作为NumPy数组，如果不可用则为None。
-            - 方向作为`Rotation`对象，如果不可用则为None。
-            - 原始HEBI反馈对象，用于访问其他数据如按钮按下。
+        Returns:
+            A tuple containing:
+            - A boolean indicating if a valid pose was successfully read.
+            - The 3D position as a NumPy array, or None if not available.
+            - The orientation as a `Rotation` object, or None if not available.
+            - The raw HEBI feedback object for accessing other data like button presses.
         """
         fbk = self._group.get_next_feedback()
         pose = fbk[0]
@@ -153,19 +168,20 @@ class IOSPhone(BasePhone, Teleoperator):
         ar_quat = getattr(pose, "ar_orientation", None)
         if ar_pos is None or ar_quat is None:
             return False, None, None, None
-        # HEBI以w, x, y, z格式提供方向。
-        # Scipy的Rotation期望x, y, z, w格式。
-        quat_xyzw = np.concatenate((ar_quat[1:], [ar_quat[0]]))  # wxyz转换为xyzw
+        # HEBI provides orientation in w, x, y, z format.
+        # Scipy's Rotation expects x, y, z, w.
+        quat_xyzw = np.concatenate((ar_quat[1:], [ar_quat[0]]))  # wxyz to xyzw
         rot = Rotation.from_quat(quat_xyzw)
         pos = ar_pos - rot.apply(self.config.camera_offset)
         return True, pos, rot, pose
 
+    @check_if_not_connected
     def get_action(self) -> dict:
         has_pose, raw_position, raw_rotation, fb_pose = self._read_current_pose()
         if not has_pose or not self.is_calibrated:
             return {}
 
-        # 收集原始输入（iOS上的B1/模拟量，Android上的move/scale）
+        # Collect raw inputs (B1 / analogs on iOS, move/scale on Android)
         raw_inputs: dict[str, float | int | bool] = {}
         io = getattr(fb_pose, "io", None)
         if io is not None:
@@ -183,11 +199,11 @@ class IOSPhone(BasePhone, Teleoperator):
 
         enable = bool(raw_inputs.get("b1", 0))
 
-        # 上升沿时从当前原始姿态立即重新捕获校准
+        # Rising edge then re-capture calibration immediately from current raw pose
         if enable and not self._enabled:
             self._reapply_position_calibration(raw_position)
 
-        # 应用校准
+        # Apply calibration
         pos_cal = self._calib_rot_inv.apply(raw_position - self._calib_pos)
         rot_cal = self._calib_rot_inv * raw_rotation
 
@@ -200,10 +216,8 @@ class IOSPhone(BasePhone, Teleoperator):
             "phone.enabled": self._enabled,
         }
 
+    @check_if_not_connected
     def disconnect(self) -> None:
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-
         self._group = None
 
 
@@ -211,6 +225,8 @@ class AndroidPhone(BasePhone, Teleoperator):
     name = "android_phone"
 
     def __init__(self, config: PhoneConfig):
+        require_package("hebi-py", extra="phone", import_name="hebi")
+        require_package("teleop", extra="phone")
         super().__init__(config)
         self.config = config
         self._teleop = None
@@ -223,10 +239,8 @@ class AndroidPhone(BasePhone, Teleoperator):
     def is_connected(self) -> bool:
         return self._teleop is not None
 
+    @check_if_already_connected
     def connect(self) -> None:
-        if self.is_connected:
-            raise DeviceAlreadyConnectedError(f"{self} already connected")
-
         logger.info("Starting teleop stream for Android...")
         self._teleop = Teleop()
         self._teleop.subscribe(self._android_callback)
@@ -250,13 +264,16 @@ class AndroidPhone(BasePhone, Teleoperator):
 
     def _wait_for_capture_trigger(self) -> tuple[np.ndarray, Rotation]:
         """
-        阻塞执行，直到从Android设备检测到校准触发器。
+        Blocks execution until the calibration trigger is detected from the Android device.
 
-        此方法进入循环，持续检查从WebXR会话接收的最新消息。它等待用户在屏幕上触摸并移动手指，
-        这会生成一个`move`事件。一旦检测到此事件，循环就会中断并返回手机的当前姿态。
+        This method enters a loop, continuously checking the latest message received from the WebXR
+        session. It waits for the user to touch and move their finger on the screen, which generates
+        a `move` event. Once this event is detected, the loop breaks and returns the phone's current
+        pose.
 
-        返回：
-            一个元组，包含触发器激活时手机的位置（np.ndarray）和旋转（Rotation）。
+        Returns:
+            A tuple containing the position (np.ndarray) and rotation (Rotation) of the phone at the
+            moment the trigger was activated.
         """
         while True:
             with self._android_lock:
@@ -271,17 +288,18 @@ class AndroidPhone(BasePhone, Teleoperator):
 
     def _read_current_pose(self) -> tuple[bool, np.ndarray | None, Rotation | None, object | None]:
         """
-        读取从Android设备的WebXR会话接收的最新6自由度姿态。
+        Reads the latest 6-DoF pose received from the Android device's WebXR session.
 
-        此方法访问由`_android_callback`存储的最新姿态数据。它使用线程锁安全地读取共享的
-        `_latest_pose`变量。姿态是一个4x4矩阵，然后被分解为位置和旋转，并应用配置的相机偏移量。
+        This method accesses the most recent pose data stored by the `_android_callback`. It uses a
+        thread lock to safely read the shared `_latest_pose` variable. The pose, a 4x4 matrix, is
+        then decomposed into position and rotation, and the configured camera offset is applied.
 
-        返回：
-            一个元组，包含：
-            - 一个布尔值，指示是否有有效的姿态可用。
-            - 3D位置作为NumPy数组，如果尚未接收到姿态则为None。
-            - 方向作为`Rotation`对象，如果尚未接收到姿态则为None。
-            - 从teleop流接收的原始4x4姿态矩阵。
+        Returns:
+            A tuple containing:
+            - A boolean indicating if a valid pose was available.
+            - The 3D position as a NumPy array, or None if no pose has been received yet.
+            - The orientation as a `Rotation` object, or None if no pose has been received.
+            - The raw 4x4 pose matrix as received from the teleop stream.
         """
         with self._android_lock:
             if self._latest_pose is None:
@@ -294,26 +312,29 @@ class AndroidPhone(BasePhone, Teleoperator):
 
     def _android_callback(self, pose: np.ndarray, message: dict) -> None:
         """
-        处理来自Android teleop流的传入数据的回调函数。
+        Callback function to handle incoming data from the Android teleop stream.
 
-        此方法由`teleop`包的订阅者线程执行，每当从Android手机上的WebXR会话接收到
-        新的姿态和消息时。它使用新数据更新内部状态（`_latest_pose`和`_latest_message`）。
-        使用线程锁来确保这些共享变量被原子地更新，防止与读取它们的主线程发生竞态条件。
+        This method is executed by the `teleop` package's subscriber thread whenever a new
+        pose and message are received from the WebXR session on the Android phone. It updates
+        the internal state (`_latest_pose` and `_latest_message`) with the new data.
+        A thread lock is used to ensure that these shared variables are updated atomically,
+        preventing race conditions with the main thread that reads them.
 
-        参数：
-            pose: 一个4x4的NumPy数组，表示手机的变换矩阵。
-            message: 一个包含附加数据的字典，如按钮按下或触摸事件。
+        Args:
+            pose: A 4x4 NumPy array representing the phone's transformation matrix.
+            message: A dictionary containing additional data, such as button presses or touch events.
         """
         with self._android_lock:
             self._latest_pose = pose
             self._latest_message = message
 
+    @check_if_not_connected
     def get_action(self) -> dict:
         ok, raw_pos, raw_rot, pose = self._read_current_pose()
         if not ok or not self.is_calibrated:
             return {}
 
-        # 收集原始输入（iOS上的B1/模拟量，Android上的move/scale）
+        # Collect raw inputs (B1 / analogs on iOS, move/scale on Android)
         raw_inputs: dict[str, float | int | bool] = {}
         msg = self._latest_message or {}
         raw_inputs["move"] = bool(msg.get("move", False))
@@ -323,11 +344,11 @@ class AndroidPhone(BasePhone, Teleoperator):
 
         enable = bool(raw_inputs.get("move", False))
 
-        # 上升沿时从当前原始姿态立即重新捕获校准
+        # Rising edge then re-capture calibration immediately from current raw pose
         if enable and not self._enabled:
             self._reapply_position_calibration(raw_pos)
 
-        # 应用校准
+        # Apply calibration
         pos_cal = self._calib_rot_inv.apply(raw_pos - self._calib_pos)
         rot_cal = self._calib_rot_inv * raw_rot
 
@@ -340,10 +361,8 @@ class AndroidPhone(BasePhone, Teleoperator):
             "phone.enabled": self._enabled,
         }
 
+    @check_if_not_connected
     def disconnect(self) -> None:
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-
         self._teleop = None
         if self._teleop_thread and self._teleop_thread.is_alive():
             self._teleop_thread.join(timeout=1.0)
@@ -353,11 +372,11 @@ class AndroidPhone(BasePhone, Teleoperator):
 
 class Phone(Teleoperator):
     """
-    基于手机的遥操作器，使用ARKit（iOS通过HEBI Mobile I/O应用）或teleop Python包（Android通过WebXR API）。
-    对于HEBI Mobile I/O，我们还暴露8个模拟输入（a1-a8）和8个数字输入（b1-b8）。
+    Phone-based teleoperator using ARKit (iOS via HEBI Mobile I/O App) or the teleop Python package (Android via WebXR API).
+    For HEBI Mobile I/O we also expose 8 analog (a1-a8) and 8 digital (b1-b8) inputs.
 
-    按住**B1**以启用遥操作。启用时，首次按下B1会捕获参考姿态和旋转，
-    禁用后再次按下时会重新应用位置。
+    Press and hold **B1** to enable teleoperation. While enabled, the first B1 press
+    captures a reference pose and rotation, when disabled and pressed again the position is reapplied.
     """
 
     config_class = PhoneConfig

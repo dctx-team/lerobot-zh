@@ -11,19 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""
-相机模块
-
-本模块提供了 LeRobot 的相机系统基础设施，包括：
-- Camera: 相机基类，定义了统一的相机接口
-- CameraConfig: 相机配置类，用于配置相机参数
-- ColorMode: 颜色模式枚举，定义了支持的颜色空间
-- Cv2Rotation: OpenCV 旋转枚举，用于图像旋转
-- make_cameras_from_configs: 工具函数，用于从配置创建相机实例
-
-支持的相机类型包括 OpenCV 相机、Intel RealSense 相机和 Reachy2 相机。
-"""
 
 from .camera import Camera
-from .configs import CameraConfig, ColorMode, Cv2Rotation
+from .configs import CameraConfig, ColorMode, Cv2Backends, Cv2Rotation
 from .utils import make_cameras_from_configs
+
+# NOTE: Camera submodule configs and implementations (OpenCVCameraConfig, RealSenseCamera, etc.)
+# are intentionally NOT re-exported here to avoid pulling backend-specific dependencies.
+# Import from submodules: ``from lerobot.cameras.opencv import OpenCVCameraConfig``
+
+__all__ = ["Camera", "CameraConfig", "ColorMode", "Cv2Backends", "Cv2Rotation", "make_cameras_from_configs"]

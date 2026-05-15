@@ -13,9 +13,11 @@
 # limitations under the License.
 
 """
-通过遥操作控制机器人的简单脚本。
+Simple script to control a robot from teleoperation.
 
-示例：
+Requires: pip install 'lerobot[hardware]'
+
+Example:
 
 ```shell
 lerobot-teleoperate \
@@ -29,22 +31,22 @@ lerobot-teleoperate \
     --display_data=true
 ```
 
-双臂 so100 遥操作示例：
+Example teleoperation with bimanual so100:
 
 ```shell
 lerobot-teleoperate \
-  --robot.type=bi_so100_follower \
-  --robot.left_arm_port=/dev/tty.usbmodem5A460851411 \
-  --robot.right_arm_port=/dev/tty.usbmodem5A460812391 \
+  --robot.type=bi_so_follower \
+  --robot.left_arm_config.port=/dev/tty.usbmodem5A460822851 \
+  --robot.right_arm_config.port=/dev/tty.usbmodem5A460814411 \
   --robot.id=bimanual_follower \
-  --robot.cameras='{
-    left: {"type": "opencv", "index_or_path": 0, "width": 1920, "height": 1080, "fps": 30},
-    top: {"type": "opencv", "index_or_path": 1, "width": 1920, "height": 1080, "fps": 30},
-    right: {"type": "opencv", "index_or_path": 2, "width": 1920, "height": 1080, "fps": 30}
+  --robot.left_arm_config.cameras='{
+    wrist: {"type": "opencv", "index_or_path": 1, "width": 640, "height": 480, "fps": 30},
+  }' --robot.right_arm_config.cameras='{
+    wrist: {"type": "opencv", "index_or_path": 2, "width": 640, "height": 480, "fps": 30},
   }' \
-  --teleop.type=bi_so100_leader \
-  --teleop.left_arm_port=/dev/tty.usbmodem5A460828611 \
-  --teleop.right_arm_port=/dev/tty.usbmodem5A460826981 \
+  --teleop.type=bi_so_leader \
+  --teleop.left_arm_config.port=/dev/tty.usbmodem5A460852721 \
+  --teleop.right_arm_config.port=/dev/tty.usbmodem5A460819811 \
   --teleop.id=bimanual_leader \
   --display_data=true
 ```
@@ -56,10 +58,9 @@ import time
 from dataclasses import asdict, dataclass
 from pprint import pformat
 
-import rerun as rr
-
-from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
-from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig  # noqa: F401
+from lerobot.cameras.opencv import OpenCVCameraConfig  # noqa: F401
+from lerobot.cameras.realsense import RealSenseCameraConfig  # noqa: F401
+from lerobot.cameras.zmq import ZMQCameraConfig  # noqa: F401
 from lerobot.configs import parser
 from lerobot.processor import (
     RobotAction,
@@ -70,39 +71,57 @@ from lerobot.processor import (
 from lerobot.robots import (  # noqa: F401
     Robot,
     RobotConfig,
-    bi_so100_follower,
+    bi_openarm_follower,
+    bi_so_follower,
+    earthrover_mini_plus,
     hope_jr,
     koch_follower,
     make_robot_from_config,
-    so100_follower,
-    so101_follower,
+    omx_follower,
+    openarm_follower,
+    reachy2,
+    so_follower,
+    unitree_g1 as unitree_g1_robot,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
-    bi_so100_leader,
+    bi_openarm_leader,
+    bi_so_leader,
     gamepad,
     homunculus,
+    keyboard,
     koch_leader,
     make_teleoperator_from_config,
-    so100_leader,
-    so101_leader,
+    omx_leader,
+    openarm_leader,
+    openarm_mini,
+    reachy2_teleoperator,
+    so_leader,
+    unitree_g1,
 )
-from lerobot.utils.robot_utils import busy_wait
+from lerobot.utils.import_utils import register_third_party_plugins
+from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import init_logging, move_cursor_up
-from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
+from lerobot.utils.visualization_utils import init_rerun, log_rerun_data, shutdown_rerun
 
 
 @dataclass
 class TeleoperateConfig:
-    # TODO: pepijn, steven: 如果更多机器人需要多个遥操作器（如 lekiwi），最好在 teleop.py 和 record.py 中通过 List[Teleoperator] 实现此功能
+    # TODO: pepijn, steven: if more robots require multiple teleoperators (like lekiwi) its good to make this possibele in teleop.py and record.py with List[Teleoperator]
     teleop: TeleoperatorConfig
     robot: RobotConfig
-    # 限制最大帧率。
+    # Limit the maximum frames per second.
     fps: int = 60
     teleop_time_s: float | None = None
-    # 在屏幕上显示所有相机画面。
+    # Display all cameras on screen
     display_data: bool = False
+    # Display data on a remote Rerun server
+    display_ip: str | None = None
+    # Port of the remote Rerun server
+    display_port: int | None = None
+    # Whether to  display compressed images in Rerun
+    display_compressed_images: bool = False
 
 
 def teleop_loop(
@@ -114,66 +133,73 @@ def teleop_loop(
     robot_observation_processor: RobotProcessorPipeline[RobotObservation, RobotObservation],
     display_data: bool = False,
     duration: float | None = None,
+    display_compressed_images: bool = False,
 ):
     """
-    此函数持续从遥操作设备读取动作，通过可选的处理管线进行处理，将它们发送到机器人，
-    并可选地显示机器人的状态。循环以指定的频率运行，直到达到设定的持续时间或手动中断。
+    This function continuously reads actions from a teleoperation device, processes them through optional
+    pipelines, sends them to a robot, and optionally displays the robot's state. The loop runs at a
+    specified frequency until a set duration is reached or it is manually interrupted.
 
-    参数：
-        teleop: 提供控制动作的遥操作器设备实例。
-        robot: 被控制的机器人实例。
-        fps: 控制循环的目标频率（帧每秒）。
-        display_data: 如果为 True，获取机器人观测并在控制台和 Rerun 中显示。
-        duration: 遥操作循环的最大持续时间（秒）。如果为 None，循环将无限期运行。
-        teleop_action_processor: 用于处理遥操作器原始动作的可选管线。
-        robot_action_processor: 用于在动作发送到机器人之前进行处理的可选管线。
-        robot_observation_processor: 用于处理机器人原始观测的可选管线。
+    Args:
+        teleop: The teleoperator device instance providing control actions.
+        robot: The robot instance being controlled.
+        fps: The target frequency for the control loop in frames per second.
+        display_data: If True, fetches robot observations and displays them in the console and Rerun.
+        display_compressed_images: If True, compresses images before sending them to Rerun for display.
+        duration: The maximum duration of the teleoperation loop in seconds. If None, the loop runs indefinitely.
+        teleop_action_processor: An optional pipeline to process raw actions from the teleoperator.
+        robot_action_processor: An optional pipeline to process actions before they are sent to the robot.
+        robot_observation_processor: An optional pipeline to process raw observations from the robot.
     """
 
     display_len = max(len(key) for key in robot.action_features)
     start = time.perf_counter()
-
     while True:
         loop_start = time.perf_counter()
 
-        # 获取机器人观测。
-        # 目前实际上除了可视化之外不需要。
-        # teleop_action_processor 可以将 None 作为观测，
-        # 因为它默认是恒等处理器。
+        # Get robot observation
+        # Not really needed for now other than for visualization
+        # teleop_action_processor can take None as an observation
+        # given that it is the identity processor as default
         obs = robot.get_observation()
 
-        # 获取遥操作动作。
+        if robot.name == "unitree_g1":
+            teleop.send_feedback(obs)
+
+        # Get teleop action
         raw_action = teleop.get_action()
 
-        # 通过管线处理遥操作动作。
+        # Process teleop action through pipeline
         teleop_action = teleop_action_processor((raw_action, obs))
 
-        # 通过管线为机器人处理动作。
+        # Process action for robot through pipeline
         robot_action_to_send = robot_action_processor((teleop_action, obs))
 
-        # 将处理后的动作发送到机器人（robot_action_processor.to_output 应该返回 dict[str, Any]）。
+        # Send processed action to robot (robot_action_processor.to_output should return RobotAction)
         _ = robot.send_action(robot_action_to_send)
 
         if display_data:
-            # 通过管线处理机器人观测。
+            # Process robot observation through pipeline
             obs_transition = robot_observation_processor(obs)
 
             log_rerun_data(
                 observation=obs_transition,
                 action=teleop_action,
+                compress_images=display_compressed_images,
             )
 
             print("\n" + "-" * (display_len + 10))
             print(f"{'NAME':<{display_len}} | {'NORM':>7}")
-            # 显示最终发送的机器人动作。
+            # Display the final robot action that was sent
             for motor, value in robot_action_to_send.items():
                 print(f"{motor:<{display_len}} | {value:>7.2f}")
-            move_cursor_up(len(robot_action_to_send) + 5)
+            move_cursor_up(len(robot_action_to_send) + 3)
 
         dt_s = time.perf_counter() - loop_start
-        busy_wait(1 / fps - dt_s)
+        precise_sleep(max(1 / fps - dt_s, 0.0))
         loop_s = time.perf_counter() - loop_start
-        print(f"\ntime: {loop_s * 1e3:.2f}ms ({1 / loop_s:.0f} Hz)")
+        print(f"Teleop loop time: {loop_s * 1e3:.2f}ms ({1 / loop_s:.0f} Hz)")
+        move_cursor_up(1)
 
         if duration is not None and time.perf_counter() - start >= duration:
             return
@@ -184,7 +210,12 @@ def teleoperate(cfg: TeleoperateConfig):
     init_logging()
     logging.info(pformat(asdict(cfg)))
     if cfg.display_data:
-        init_rerun(session_name="teleoperation")
+        init_rerun(session_name="teleoperation", ip=cfg.display_ip, port=cfg.display_port)
+    display_compressed_images = (
+        True
+        if (cfg.display_data and cfg.display_ip is not None and cfg.display_port is not None)
+        else cfg.display_compressed_images
+    )
 
     teleop = make_teleoperator_from_config(cfg.teleop)
     robot = make_robot_from_config(cfg.robot)
@@ -203,17 +234,19 @@ def teleoperate(cfg: TeleoperateConfig):
             teleop_action_processor=teleop_action_processor,
             robot_action_processor=robot_action_processor,
             robot_observation_processor=robot_observation_processor,
+            display_compressed_images=display_compressed_images,
         )
     except KeyboardInterrupt:
         pass
     finally:
         if cfg.display_data:
-            rr.rerun_shutdown()
+            shutdown_rerun()
         teleop.disconnect()
         robot.disconnect()
 
 
 def main():
+    register_third_party_plugins()
     teleoperate()
 
 

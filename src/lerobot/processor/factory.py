@@ -14,20 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from lerobot.types import RobotAction, RobotObservation
+
 from .converters import (
     observation_to_transition,
     robot_action_observation_to_transition,
     transition_to_observation,
     transition_to_robot_action,
 )
-from .core import RobotAction, RobotObservation
 from .pipeline import IdentityProcessorStep, RobotProcessorPipeline
 
 
 def make_default_teleop_action_processor() -> RobotProcessorPipeline[
     tuple[RobotAction, RobotObservation], RobotAction
 ]:
-    """创建默认的远程操作动作处理器管道。"""
     teleop_action_processor = RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction](
         steps=[IdentityProcessorStep()],
         to_transition=robot_action_observation_to_transition,
@@ -39,7 +39,6 @@ def make_default_teleop_action_processor() -> RobotProcessorPipeline[
 def make_default_robot_action_processor() -> RobotProcessorPipeline[
     tuple[RobotAction, RobotObservation], RobotAction
 ]:
-    """创建默认的机器人动作处理器管道。"""
     robot_action_processor = RobotProcessorPipeline[tuple[RobotAction, RobotObservation], RobotAction](
         steps=[IdentityProcessorStep()],
         to_transition=robot_action_observation_to_transition,
@@ -49,7 +48,6 @@ def make_default_robot_action_processor() -> RobotProcessorPipeline[
 
 
 def make_default_robot_observation_processor() -> RobotProcessorPipeline[RobotObservation, RobotObservation]:
-    """创建默认的机器人观察处理器管道。"""
     robot_observation_processor = RobotProcessorPipeline[RobotObservation, RobotObservation](
         steps=[IdentityProcessorStep()],
         to_transition=observation_to_transition,
@@ -59,7 +57,6 @@ def make_default_robot_observation_processor() -> RobotProcessorPipeline[RobotOb
 
 
 def make_default_processors():
-    """创建所有默认处理器（远程操作动作、机器人动作、机器人观察）。"""
     teleop_action_processor = make_default_teleop_action_processor()
     robot_action_processor = make_default_robot_action_processor()
     robot_observation_processor = make_default_robot_observation_processor()

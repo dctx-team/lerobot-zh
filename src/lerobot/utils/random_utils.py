@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import random
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -23,14 +23,14 @@ import numpy as np
 import torch
 from safetensors.torch import load_file, save_file
 
-from lerobot.datasets.utils import flatten_dict, unflatten_dict
-from lerobot.utils.constants import RNG_STATE
+from .constants import RNG_STATE
+from .utils import flatten_dict, unflatten_dict
 
 
 def serialize_python_rng_state() -> dict[str, torch.Tensor]:
     """
-    以 dict[str, torch.Tensor] 的扁平字典形式返回 `random` 的随机数生成器状态，
-    以便使用 `safetensors.save_file()` 或 `torch.save()` 保存。
+    Returns the rng state for `random` in the form of a flat dict[str, torch.Tensor] to be saved using
+    `safetensors.save_file()` or `torch.save()`.
     """
     py_state = random.getstate()
     return {
@@ -41,7 +41,7 @@ def serialize_python_rng_state() -> dict[str, torch.Tensor]:
 
 def deserialize_python_rng_state(rng_state_dict: dict[str, torch.Tensor]) -> None:
     """
-    从 `serialize_python_rng_state()` 产生的字典中恢复 `random` 的随机数生成器状态。
+    Restores the rng state for `random` from a dictionary produced by `serialize_python_rng_state()`.
     """
     py_state = (rng_state_dict["py_rng_version"].item(), tuple(rng_state_dict["py_rng_state"].tolist()), None)
     random.setstate(py_state)
@@ -49,11 +49,11 @@ def deserialize_python_rng_state(rng_state_dict: dict[str, torch.Tensor]) -> Non
 
 def serialize_numpy_rng_state() -> dict[str, torch.Tensor]:
     """
-    以 dict[str, torch.Tensor] 的扁平字典形式返回 `numpy` 的随机数生成器状态，
-    以便使用 `safetensors.save_file()` 或 `torch.save()` 保存。
+    Returns the rng state for `numpy` in the form of a flat dict[str, torch.Tensor] to be saved using
+    `safetensors.save_file()` or `torch.save()`.
     """
     np_state = np.random.get_state()
-    # 确保 numpy 没有破坏性更改
+    # Ensure no breaking changes from numpy
     assert np_state[0] == "MT19937"
     return {
         "np_rng_state_values": torch.tensor(np_state[1], dtype=torch.int64),
@@ -65,7 +65,7 @@ def serialize_numpy_rng_state() -> dict[str, torch.Tensor]:
 
 def deserialize_numpy_rng_state(rng_state_dict: dict[str, torch.Tensor]) -> None:
     """
-    从 `serialize_numpy_rng_state()` 产生的字典中恢复 `numpy` 的随机数生成器状态。
+    Restores the rng state for `numpy` from a dictionary produced by `serialize_numpy_rng_state()`.
     """
     np_state = (
         "MT19937",
@@ -79,8 +79,8 @@ def deserialize_numpy_rng_state(rng_state_dict: dict[str, torch.Tensor]) -> None
 
 def serialize_torch_rng_state() -> dict[str, torch.Tensor]:
     """
-    以 dict[str, torch.Tensor] 的扁平字典形式返回 `torch` 的随机数生成器状态，
-    以便使用 `safetensors.save_file()` 或 `torch.save()` 保存。
+    Returns the rng state for `torch` in the form of a flat dict[str, torch.Tensor] to be saved using
+    `safetensors.save_file()` or `torch.save()`.
     """
     torch_rng_state_dict = {"torch_rng_state": torch.get_rng_state()}
     if torch.cuda.is_available():
@@ -90,7 +90,7 @@ def serialize_torch_rng_state() -> dict[str, torch.Tensor]:
 
 def deserialize_torch_rng_state(rng_state_dict: dict[str, torch.Tensor]) -> None:
     """
-    从 `serialize_torch_rng_state()` 产生的字典中恢复 `torch` 的随机数生成器状态。
+    Restores the rng state for `torch` from a dictionary produced by `serialize_torch_rng_state()`.
     """
     torch.set_rng_state(rng_state_dict["torch_rng_state"])
     if torch.cuda.is_available() and "torch_cuda_rng_state" in rng_state_dict:
@@ -99,8 +99,8 @@ def deserialize_torch_rng_state(rng_state_dict: dict[str, torch.Tensor]) -> None
 
 def serialize_rng_state() -> dict[str, torch.Tensor]:
     """
-    以 dict[str, torch.Tensor] 的扁平字典形式返回 `random`、`numpy` 和 `torch` 的随机数生成器状态，
-    以便使用 `safetensors.save_file()` 或 `torch.save()` 保存。
+    Returns the rng state for `random`, `numpy`, and `torch`, in the form of a flat
+    dict[str, torch.Tensor] to be saved using `safetensors.save_file()` `torch.save()`.
     """
     py_rng_state_dict = serialize_python_rng_state()
     np_rng_state_dict = serialize_numpy_rng_state()
@@ -115,7 +115,8 @@ def serialize_rng_state() -> dict[str, torch.Tensor]:
 
 def deserialize_rng_state(rng_state_dict: dict[str, torch.Tensor]) -> None:
     """
-    从 `serialize_rng_state()` 产生的字典中恢复 `random`、`numpy` 和 `torch` 的随机数生成器状态。
+    Restores the rng state for `random`, `numpy`, and `torch` from a dictionary produced by
+    `serialize_rng_state()`.
     """
     py_rng_state_dict = {k: v for k, v in rng_state_dict.items() if k.startswith("py")}
     np_rng_state_dict = {k: v for k, v in rng_state_dict.items() if k.startswith("np")}
@@ -139,7 +140,7 @@ def load_rng_state(save_dir: Path) -> None:
 
 
 def get_rng_state() -> dict[str, Any]:
-    """获取 `random`、`numpy` 和 `torch` 的随机状态。"""
+    """Get the random state for `random`, `numpy`, and `torch`."""
     random_state_dict = {
         "random_state": random.getstate(),
         "numpy_random_state": np.random.get_state(),
@@ -151,10 +152,10 @@ def get_rng_state() -> dict[str, Any]:
 
 
 def set_rng_state(random_state_dict: dict[str, Any]):
-    """设置 `random`、`numpy` 和 `torch` 的随机状态。
+    """Set the random state for `random`, `numpy`, and `torch`.
 
-    参数:
-        random_state_dict: 由 `get_rng_state` 返回形式的字典。
+    Args:
+        random_state_dict: A dictionary of the form returned by `get_rng_state`.
     """
     random.setstate(random_state_dict["random_state"])
     np.random.set_state(random_state_dict["numpy_random_state"])
@@ -163,26 +164,32 @@ def set_rng_state(random_state_dict: dict[str, Any]):
         torch.cuda.random.set_rng_state(random_state_dict["torch_cuda_random_state"])
 
 
-def set_seed(seed) -> None:
-    """设置随机种子以确保可重复性。"""
+def set_seed(seed, accelerator: Callable | None = None) -> None:
+    """Set seed for reproducibility."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+    if accelerator:
+        from accelerate.utils import set_seed as _accelerate_set_seed
+
+        _accelerate_set_seed(seed)
 
 
 @contextmanager
 def seeded_context(seed: int) -> Generator[None, None, None]:
-    """在进入上下文时设置种子，在退出时恢复先前的随机状态。
+    """Set the seed when entering a context, and restore the prior random state at exit.
 
-    示例用法:
+    Example usage:
 
     ```
-    a = random.random()  # 产生某个随机数
+    a = random.random()  # produces some random number
     with seeded_context(1337):
-        b = random.random()  # 产生另一个随机数
-    c = random.random()  # 产生另一个随机数，但与从未生成 `b` 时相同
+        b = random.random()  # produces some other random number
+    c = random.random()  # produces yet another random number, but the same it would have if we never made `b`
     ```
     """
     random_state_dict = get_rng_state()

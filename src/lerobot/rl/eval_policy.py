@@ -17,32 +17,25 @@ import logging
 
 from lerobot.cameras import opencv  # noqa: F401
 from lerobot.configs import parser
-from lerobot.configs.train import TrainRLServerPipelineConfig
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.policies.factory import make_policy
+from lerobot.datasets import LeRobotDataset
+from lerobot.policies import make_policy
 from lerobot.robots import (  # noqa: F401
     RobotConfig,
     make_robot_from_config,
-    so100_follower,
+    so_follower,
 )
 from lerobot.teleoperators import (
     gamepad,  # noqa: F401
-    so101_leader,  # noqa: F401
+    so_leader,  # noqa: F401
 )
 
 from .gym_manipulator import make_robot_env
+from .train_rl import TrainRLServerPipelineConfig
 
 logging.basicConfig(level=logging.INFO)
 
 
 def eval_policy(env, policy, n_episodes):
-    """评估策略在环境中的表现。
-
-    Args:
-        env: 环境实例
-        policy: 要评估的策略
-        n_episodes: 要运行的剧集数
-    """
     sum_reward_episode = []
     for _ in range(n_episodes):
         obs, _ = env.reset()
@@ -55,17 +48,12 @@ def eval_policy(env, policy, n_episodes):
                 break
         sum_reward_episode.append(episode_reward)
 
-    logging.info(f"20步后的成功情况 {sum_reward_episode}")
-    logging.info(f"成功率 {sum(sum_reward_episode) / len(sum_reward_episode)}")
+    logging.info(f"Success after 20 steps {sum_reward_episode}")
+    logging.info(f"success rate {sum(sum_reward_episode) / len(sum_reward_episode)}")
 
 
 @parser.wrap()
 def main(cfg: TrainRLServerPipelineConfig):
-    """主函数：加载环境、策略和数据集，然后评估策略。
-
-    Args:
-        cfg: 训练管道配置
-    """
     env_cfg = cfg.env
     env = make_robot_env(env_cfg)
     dataset_cfg = cfg.dataset
@@ -77,7 +65,7 @@ def main(cfg: TrainRLServerPipelineConfig):
         # env_cfg=cfg.env,
         ds_meta=dataset_meta,
     )
-    policy.from_pretrained(env_cfg.pretrained_policy_name_or_path)
+    policy = policy.from_pretrained(env_cfg.pretrained_policy_name_or_path)
     policy.eval()
 
     eval_policy(env, policy=policy, n_episodes=10)

@@ -15,7 +15,6 @@
 
 def encode_sign_magnitude(value: int, sign_bit_index: int):
     """
-    符号-数值表示法编码
     https://en.wikipedia.org/wiki/Signed_number_representations#Sign%E2%80%93magnitude
     """
     max_magnitude = (1 << sign_bit_index) - 1
@@ -29,7 +28,6 @@ def encode_sign_magnitude(value: int, sign_bit_index: int):
 
 def decode_sign_magnitude(encoded_value: int, sign_bit_index: int):
     """
-    符号-数值表示法解码
     https://en.wikipedia.org/wiki/Signed_number_representations#Sign%E2%80%93magnitude
     """
     direction_bit = (encoded_value >> sign_bit_index) & 1
@@ -40,7 +38,6 @@ def decode_sign_magnitude(encoded_value: int, sign_bit_index: int):
 
 def encode_twos_complement(value: int, n_bytes: int):
     """
-    二进制补码编码
     https://en.wikipedia.org/wiki/Signed_number_representations#Two%27s_complement
     """
 
@@ -61,7 +58,6 @@ def encode_twos_complement(value: int, n_bytes: int):
 
 def decode_twos_complement(value: int, n_bytes: int) -> int:
     """
-    二进制补码解码
     https://en.wikipedia.org/wiki/Signed_number_representations#Two%27s_complement
     """
     bits = n_bytes * 8

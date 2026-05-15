@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 
-from lerobot.motors import MotorCalibration, MotorsBus
+from .motors_bus import MotorCalibration, MotorsBus
 
 BAR_LEN, BAR_THICKNESS = 450, 8
 HANDLE_R = 10
@@ -54,7 +54,7 @@ class RangeValues:
 
 
 class RangeSlider:
-    """一个电机 = 一个滑块行"""
+    """One motor = one slider row"""
 
     def __init__(self, motor, idx, res, calibration, present, label_pad, base_y):
         import pygame
@@ -139,20 +139,20 @@ class RangeSlider:
     def draw(self, surf):
         import pygame
 
-        # 电机名称显示在 set-min 按钮上方（右对齐）
+        # motor name above set-min button (right-aligned)
         name_surf = self.font.render(self.motor, True, TEXT_COLOR)
         surf.blit(
             name_surf,
             (self.min_btn.right - name_surf.get_width(), self.min_btn.y - name_surf.get_height() - 4),
         )
 
-        # 进度条 + 活动区域
+        # bar + active section
         pygame.draw.rect(surf, BAR_RED, (self.x0, self.y - BAR_THICKNESS // 2, BAR_LEN, BAR_THICKNESS))
         pygame.draw.rect(
             surf, BAR_GREEN, (self.min_x, self.y - BAR_THICKNESS // 2, self.max_x - self.min_x, BAR_THICKNESS)
         )
 
-        # 刻度线
+        # tick
         tick_x = self._pos_from_val(self.tick_val)
         pygame.draw.line(
             surf,
@@ -162,7 +162,7 @@ class RangeSlider:
             2,
         )
 
-        # 括号
+        # brackets
         for x, sign in ((self.min_x, +1), (self.max_x, -1)):
             pygame.draw.line(
                 surf, HANDLE_COLOR, (x, self.y - BRACKET_H // 2), (x, self.y + BRACKET_H // 2), 2
@@ -182,7 +182,7 @@ class RangeSlider:
                 2,
             )
 
-        # 三角形 ▼
+        # triangle ▼
         tri_top = self.y - BAR_THICKNESS // 2 - 2
         pygame.draw.polygon(
             surf,
@@ -194,7 +194,7 @@ class RangeSlider:
             ],
         )
 
-        # 数字标签
+        # numeric labels
         fh = self.font.get_height()
         pos_y = tri_top - TRI_H - 4 - fh
         txts = [
@@ -206,11 +206,11 @@ class RangeSlider:
             s = self.font.render(str(v), True, TEXT_COLOR)
             surf.blit(s, (x - s.get_width() // 2, y))
 
-        # 按钮
+        # buttons
         self._draw_button(surf, self.min_btn, "set min")
         self._draw_button(surf, self.max_btn, "set max")
 
-    # 公共接口
+    # external
     def values(self) -> RangeValues:
         return RangeValues(self.min_v, self.pos_v, self.max_v)
 
@@ -221,7 +221,7 @@ class RangeFinderGUI:
 
         self.bus = bus
         self.groups = groups if groups is not None else {"all": list(bus.motors)}
-        self.group_names = list(groups)
+        self.group_names = list(self.groups)
         self.current_group = self.group_names[0]
 
         if not bus.is_connected:
@@ -230,27 +230,29 @@ class RangeFinderGUI:
         self.calibration = bus.read_calibration()
         self.res_table = bus.model_resolution_table
         self.present_cache = {
-            m: bus.read("Present_Position", m, normalize=False) for motors in groups.values() for m in motors
+            m: bus.read("Present_Position", m, normalize=False)
+            for motors in self.groups.values()
+            for m in motors
         }
 
         pygame.init()
         self.font = pygame.font.Font(None, FONT_SIZE)
 
-        label_pad = max(self.font.size(m)[0] for ms in groups.values() for m in ms)
+        label_pad = max(self.font.size(m)[0] for ms in self.groups.values() for m in ms)
         self.label_pad = label_pad
         width = 40 + label_pad + BAR_LEN + 6 + BTN_W + 10 + SAVE_W + 10
         self.controls_bottom = 10 + SAVE_H
         self.base_y = self.controls_bottom + TOP_GAP
-        height = self.base_y + PADDING_Y * len(groups[self.current_group]) + 40
+        height = self.base_y + PADDING_Y * len(self.groups[self.current_group]) + 40
 
         self.screen = pygame.display.set_mode((width, height))
         pygame.display.set_caption("Motors range finder")
 
-        # UI 矩形控件
+        # ui rects
         self.save_btn = pygame.Rect(width - SAVE_W - 10, 10, SAVE_W, SAVE_H)
         self.load_btn = pygame.Rect(self.save_btn.left - LOAD_W - 10, 10, LOAD_W, SAVE_H)
         self.dd_btn = pygame.Rect(width // 2 - DD_W // 2, 10, DD_W, DD_H)
-        self.dd_open = False  # 下拉菜单是否展开
+        self.dd_open = False  # dropdown expanded?
 
         self.clock = pygame.time.Clock()
         self._build_sliders()
@@ -284,7 +286,7 @@ class RangeFinderGUI:
     def _draw_dropdown(self):
         import pygame
 
-        # 折叠框
+        # collapsed box
         hover = self.dd_btn.collidepoint(pygame.mouse.get_pos())
         pygame.draw.rect(self.screen, DD_COLOR_HL if hover else DD_COLOR, self.dd_btn, border_radius=6)
 
@@ -305,7 +307,7 @@ class RangeFinderGUI:
         if not self.dd_open:
             return
 
-        # 展开列表
+        # expanded list
         for i, name in enumerate(self.group_names):
             item_rect = pygame.Rect(self.dd_btn.left, self.dd_btn.bottom + i * DD_H, DD_W, DD_H)
             clr = DD_COLOR_HL if item_rect.collidepoint(pygame.mouse.get_pos()) else DD_COLOR
@@ -372,25 +374,25 @@ class RangeFinderGUI:
                 for s in self.sliders:
                     s.handle_event(e)
 
-            # 在拖动时实时写入目标位置
+            # live goal write while dragging
             for s in self.sliders:
                 if s.drag_pos:
                     self.bus.write("Goal_Position", s.motor, s.pos_v, normalize=False)
 
-            # 刻度线更新
+            # tick update
             for s in self.sliders:
                 pos = self.bus.read("Present_Position", s.motor, normalize=False)
                 s.set_tick(pos)
                 self.present_cache[s.motor] = pos
 
-            # 绘制界面
+            # ─ drawing
             self.screen.fill(BG_COLOR)
             for s in self.sliders:
                 s.draw(self.screen)
 
             self._draw_dropdown()
 
-            # 加载/保存按钮
+            # load / save buttons
             for rect, text in ((self.load_btn, "LOAD"), (self.save_btn, "SAVE")):
                 clr = BTN_COLOR_HL if rect.collidepoint(pygame.mouse.get_pos()) else BTN_COLOR
                 pygame.draw.rect(self.screen, clr, rect, border_radius=6)

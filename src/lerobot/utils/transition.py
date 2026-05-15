@@ -18,7 +18,7 @@ from typing import TypedDict
 
 import torch
 
-from lerobot.utils.constants import ACTION
+from .constants import ACTION
 
 
 class Transition(TypedDict):
@@ -35,15 +35,15 @@ def move_transition_to_device(transition: Transition, device: str = "cpu") -> Tr
     device = torch.device(device)
     non_blocking = device.type == "cuda"
 
-    # 将 state 张量移动到设备
+    # Move state tensors to device
     transition["state"] = {
         key: val.to(device, non_blocking=non_blocking) for key, val in transition["state"].items()
     }
 
-    # 将 action 移动到设备
+    # Move action to device
     transition[ACTION] = transition[ACTION].to(device, non_blocking=non_blocking)
 
-    # 如果 reward 和 done 是张量，则将它们移动到设备
+    # Move reward and done if they are tensors
     if isinstance(transition["reward"], torch.Tensor):
         transition["reward"] = transition["reward"].to(device, non_blocking=non_blocking)
 
@@ -53,27 +53,27 @@ def move_transition_to_device(transition: Transition, device: str = "cpu") -> Tr
     if isinstance(transition["truncated"], torch.Tensor):
         transition["truncated"] = transition["truncated"].to(device, non_blocking=non_blocking)
 
-    # 将 next_state 张量移动到设备
+    # Move next_state tensors to device
     transition["next_state"] = {
         key: val.to(device, non_blocking=non_blocking) for key, val in transition["next_state"].items()
     }
 
-    # 如果存在 complementary_info 张量，则移动它们
+    # Move complementary_info tensors if present
     if transition.get("complementary_info") is not None:
         for key, val in transition["complementary_info"].items():
             if isinstance(val, torch.Tensor):
                 transition["complementary_info"][key] = val.to(device, non_blocking=non_blocking)
-            elif isinstance(val, (int, float, bool)):
+            elif isinstance(val, (int | float | bool)):
                 transition["complementary_info"][key] = torch.tensor(val, device=device)
             else:
-                raise ValueError(f"complementary_info[{key}] 不支持类型 {type(val)}")
+                raise ValueError(f"Unsupported type {type(val)} for complementary_info[{key}]")
     return transition
 
 
 def move_state_dict_to_device(state_dict, device="cpu"):
     """
-    递归地将（可能）嵌套的 dict/list/tuple 结构中的
-    所有张量移动到 CPU。
+    Recursively move all tensors in a (potentially) nested
+    dict/list/tuple structure to the CPU.
     """
     if isinstance(state_dict, torch.Tensor):
         return state_dict.to(device)

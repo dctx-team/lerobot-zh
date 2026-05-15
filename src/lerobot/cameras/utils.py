@@ -14,21 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import platform
-from pathlib import Path
-from typing import TypeAlias
+from typing import cast
+
+from lerobot.utils.import_utils import make_device_from_device_class
 
 from .camera import Camera
 from .configs import CameraConfig, Cv2Rotation
 
-IndexOrPath: TypeAlias = int | Path
-
 
 def make_cameras_from_configs(camera_configs: dict[str, CameraConfig]) -> dict[str, Camera]:
-    """从配置字典创建相机实例字典。"""
-    cameras = {}
+    cameras: dict[str, Camera] = {}
 
     for key, cfg in camera_configs.items():
+        # TODO(Steven): Consider just using the make_device_from_device_class for all types
         if cfg.type == "opencv":
             from .opencv import OpenCVCamera
 
@@ -44,33 +42,28 @@ def make_cameras_from_configs(camera_configs: dict[str, CameraConfig]) -> dict[s
 
             cameras[key] = Reachy2Camera(cfg)
 
+        elif cfg.type == "zmq":
+            from .zmq.camera_zmq import ZMQCamera
+
+            cameras[key] = ZMQCamera(cfg)
+
         else:
-            raise ValueError(f"相机类型 '{cfg.type}' 无效。")
+            try:
+                cameras[key] = cast(Camera, make_device_from_device_class(cfg))
+            except Exception as e:
+                raise ValueError(f"Error creating camera {key} with config {cfg}: {e}") from e
 
     return cameras
 
 
 def get_cv2_rotation(rotation: Cv2Rotation) -> int | None:
-    """将 Cv2Rotation 枚举转换为 OpenCV 旋转常量。"""
-    import cv2
+    import cv2  # type: ignore  # TODO: add type stubs for OpenCV
 
     if rotation == Cv2Rotation.ROTATE_90:
-        return cv2.ROTATE_90_CLOCKWISE
+        return int(cv2.ROTATE_90_CLOCKWISE)
     elif rotation == Cv2Rotation.ROTATE_180:
-        return cv2.ROTATE_180
+        return int(cv2.ROTATE_180)
     elif rotation == Cv2Rotation.ROTATE_270:
-        return cv2.ROTATE_90_COUNTERCLOCKWISE
+        return int(cv2.ROTATE_90_COUNTERCLOCKWISE)
     else:
         return None
-
-
-def get_cv2_backend() -> int:
-    """根据操作系统返回适当的 OpenCV 后端。"""
-    import cv2
-
-    if platform.system() == "Windows":
-        return cv2.CAP_MSMF  # 在 Windows 上使用 MSMF 而不是 AVFOUNDATION
-    # elif platform.system() == "Darwin":  # macOS
-    #     return cv2.CAP_AVFOUNDATION
-    else:  # Linux 和其他系统
-        return cv2.CAP_ANY

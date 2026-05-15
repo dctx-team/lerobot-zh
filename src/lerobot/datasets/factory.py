@@ -18,40 +18,37 @@ from pprint import pformat
 
 import torch
 
-from lerobot.configs.policies import PreTrainedConfig
+from lerobot.configs import PreTrainedConfig
+from lerobot.configs.rewards import RewardModelConfig
 from lerobot.configs.train import TrainPipelineConfig
-from lerobot.datasets.lerobot_dataset import (
-    LeRobotDataset,
-    LeRobotDatasetMetadata,
-    MultiLeRobotDataset,
-)
-from lerobot.datasets.streaming_dataset import StreamingLeRobotDataset
-from lerobot.datasets.transforms import ImageTransforms
-from lerobot.utils.constants import ACTION, OBS_PREFIX, REWARD
+from lerobot.transforms import ImageTransforms
+from lerobot.utils.constants import ACTION, IMAGENET_STATS, OBS_PREFIX, REWARD
 
-IMAGENET_STATS = {
-    "mean": [[[0.485]], [[0.456]], [[0.406]]],  # (c,1,1)
-    "std": [[[0.229]], [[0.224]], [[0.225]]],  # (c,1,1)
-}
+from .dataset_metadata import LeRobotDatasetMetadata
+from .lerobot_dataset import LeRobotDataset
+from .multi_dataset import MultiLeRobotDataset
+from .streaming_dataset import StreamingLeRobotDataset
 
 
 def resolve_delta_timestamps(
-    cfg: PreTrainedConfig, ds_meta: LeRobotDatasetMetadata
+    cfg: PreTrainedConfig | RewardModelConfig, ds_meta: LeRobotDatasetMetadata
 ) -> dict[str, list] | None:
-    """通过读取 PreTrainedConfig 的 'delta_indices' 属性来解析 delta_timestamps。
+    """Resolves delta_timestamps by reading from the 'delta_indices' properties of the config.
 
-    参数:
-        cfg (PreTrainedConfig): 用于读取 delta_indices 的预训练配置。
-        ds_meta (LeRobotDatasetMetadata): 数据集元数据，从中获取特征和 fps 用于构建
-            delta_timestamps。
+    Args:
+        cfg (PreTrainedConfig | RewardModelConfig): The config to read delta_indices from. Both
+            ``PreTrainedConfig`` and concrete ``RewardModelConfig`` subclasses expose the
+            ``{observation,action,reward}_delta_indices`` properties used below.
+        ds_meta (LeRobotDatasetMetadata): The dataset from which features and fps are used to build
+            delta_timestamps against.
 
-    返回:
-        dict[str, list] | None: delta_timestamps 字典，例如:
+    Returns:
+        dict[str, list] | None: A dictionary of delta_timestamps, e.g.:
             {
                 "observation.state": [-0.04, -0.02, 0]
                 "observation.action": [-0.02, 0, 0.02]
             }
-            如果结果字典为空则返回 `None`。
+            returns `None` if the resulting dict is empty.
     """
     delta_timestamps = {}
     for key in ds_meta.features:
@@ -69,16 +66,16 @@ def resolve_delta_timestamps(
 
 
 def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDataset:
-    """处理在创建数据集之前设置 delta timestamps 和图像变换的逻辑。
+    """Handles the logic of setting up delta timestamps and image transforms before creating a dataset.
 
-    参数:
-        cfg (TrainPipelineConfig): 训练管道配置，包含 DatasetConfig 和 PreTrainedConfig。
+    Args:
+        cfg (TrainPipelineConfig): A TrainPipelineConfig config which contains a DatasetConfig and a PreTrainedConfig.
 
-    异常:
-        NotImplementedError: MultiLeRobotDataset 目前已停用。
+    Raises:
+        NotImplementedError: The MultiLeRobotDataset is currently deactivated.
 
-    返回:
-        LeRobotDataset | MultiLeRobotDataset: 创建的数据集对象。
+    Returns:
+        LeRobotDataset | MultiLeRobotDataset
     """
     image_transforms = (
         ImageTransforms(cfg.dataset.image_transforms) if cfg.dataset.image_transforms.enable else None
@@ -88,7 +85,7 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
         ds_meta = LeRobotDatasetMetadata(
             cfg.dataset.repo_id, root=cfg.dataset.root, revision=cfg.dataset.revision
         )
-        delta_timestamps = resolve_delta_timestamps(cfg.policy, ds_meta)
+        delta_timestamps = resolve_delta_timestamps(cfg.trainable_config, ds_meta)
         if not cfg.dataset.streaming:
             dataset = LeRobotDataset(
                 cfg.dataset.repo_id,
@@ -98,6 +95,8 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
                 image_transforms=image_transforms,
                 revision=cfg.dataset.revision,
                 video_backend=cfg.dataset.video_backend,
+                return_uint8=True,
+                tolerance_s=cfg.tolerance_s,
             )
         else:
             dataset = StreamingLeRobotDataset(
@@ -108,18 +107,20 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
                 image_transforms=image_transforms,
                 revision=cfg.dataset.revision,
                 max_num_shards=cfg.num_workers,
+                tolerance_s=cfg.tolerance_s,
+                return_uint8=True,
             )
     else:
-        raise NotImplementedError("目前不支持 MultiLeRobotDataset。")
+        raise NotImplementedError("The MultiLeRobotDataset isn't supported for now.")
         dataset = MultiLeRobotDataset(
             cfg.dataset.repo_id,
-            # TODO(aliberts): 为多数据集添加适当的支持
+            # TODO(aliberts): add proper support for multi dataset
             # delta_timestamps=delta_timestamps,
             image_transforms=image_transforms,
             video_backend=cfg.dataset.video_backend,
         )
         logging.info(
-            "提供了多个数据集。对提供的数据集应用了以下索引映射: "
+            "Multiple datasets were provided. Applied the following index mapping to the provided datasets: "
             f"{pformat(dataset.repo_id_to_index, indent=2)}"
         )
 

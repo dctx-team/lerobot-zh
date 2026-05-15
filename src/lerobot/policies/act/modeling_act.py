@@ -13,10 +13,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""动作分块Transformer策略
+"""Action Chunking Transformer Policy
 
-根据论文 Learning Fine-Grained Bimanual Manipulation with Low-Cost Hardware (https://huggingface.co/papers/2304.13705)。
-这里的主要变化包括删除未使用的代码、统一命名和添加有用的注释。
+As per Learning Fine-Grained Bimanual Manipulation with Low-Cost Hardware (https://huggingface.co/papers/2304.13705).
+The majority of changes here involve removing unused code, unifying naming, and adding helpful comments.
 """
 
 import math
@@ -33,15 +33,16 @@ from torch import Tensor, nn
 from torchvision.models._utils import IntermediateLayerGetter
 from torchvision.ops.misc import FrozenBatchNorm2d
 
-from lerobot.policies.act.configuration_act import ACTConfig
-from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE
+
+from ..pretrained import PreTrainedPolicy
+from .configuration_act import ACTConfig
 
 
 class ACTPolicy(PreTrainedPolicy):
     """
-    动作分块Transformer策略，根据论文 Learning Fine-Grained Bimanual Manipulation with Low-Cost
-    Hardware (论文: https://huggingface.co/papers/2304.13705, 代码: https://github.com/tonyzhaozh/act)
+    Action Chunking Transformer Policy as per Learning Fine-Grained Bimanual Manipulation with Low-Cost
+    Hardware (paper: https://huggingface.co/papers/2304.13705, code: https://github.com/tonyzhaozh/act)
     """
 
     config_class = ACTConfig
@@ -50,10 +51,12 @@ class ACTPolicy(PreTrainedPolicy):
     def __init__(
         self,
         config: ACTConfig,
+        **kwargs,
     ):
         """
-        参数:
-            config: 策略配置类实例或None，如果为None则使用配置类的默认实例化。
+        Args:
+            config: Policy configuration class instance or None, in which case the default instantiation of
+                    the configuration class is used.
         """
         super().__init__(config)
         config.validate_features()
@@ -67,8 +70,8 @@ class ACTPolicy(PreTrainedPolicy):
         self.reset()
 
     def get_optim_params(self) -> dict:
-        # TODO(aliberts, rcadene): 目前 lr_backbone == lr
-        # 是否应该删除这个，只返回 `self.parameters()`？
+        # TODO(aliberts, rcadene): As of now, lr_backbone == lr
+        # Should we remove this and just `return self.parameters()`?
         return [
             {
                 "params": [
@@ -88,7 +91,7 @@ class ACTPolicy(PreTrainedPolicy):
         ]
 
     def reset(self):
-        """每当环境重置时应调用此方法。"""
+        """This should be called whenever the environment is reset."""
         if self.config.temporal_ensemble_coeff is not None:
             self.temporal_ensembler.reset()
         else:
@@ -96,56 +99,60 @@ class ACTPolicy(PreTrainedPolicy):
 
     @torch.no_grad()
     def select_action(self, batch: dict[str, Tensor]) -> Tensor:
-        """根据环境观察选择单个动作。
+        """Select a single action given environment observations.
 
-        此方法包装了 `select_actions`，以便每次向环境返回一个动作用于执行。它通过管理
-        队列中的动作来工作，仅在队列为空时调用 `select_actions`。
+        This method wraps `select_actions` in order to return one action at a time for execution in the
+        environment. It works by managing the actions in a queue and only calling `select_actions` when the
+        queue is empty.
         """
-        self.eval()  # 将策略保持在eval模式，因为在消费队列时它可能被设置为train模式
+        self.eval()  # keeping the policy in eval mode as it could be set to train mode while queue is consumed
 
         if self.config.temporal_ensemble_coeff is not None:
             actions = self.predict_action_chunk(batch)
             action = self.temporal_ensembler.update(actions)
             return action
 
-        # n_action_steps > 1 时的动作队列逻辑。当 action_queue 耗尽时，通过查询策略来填充它。
+        # Action queue logic for n_action_steps > 1. When the action_queue is depleted, populate it by
+        # querying the policy.
         if len(self._action_queue) == 0:
             actions = self.predict_action_chunk(batch)[:, : self.config.n_action_steps]
 
-            # `self.model.forward` 返回 (batch_size, n_action_steps, action_dim) 张量，但队列
-            # 实际上具有形状 (n_action_steps, batch_size, *)，因此需要转置。
+            # `self.model.forward` returns a (batch_size, n_action_steps, action_dim) tensor, but the queue
+            # effectively has shape (n_action_steps, batch_size, *), hence the transpose.
             self._action_queue.extend(actions.transpose(0, 1))
         return self._action_queue.popleft()
 
     @torch.no_grad()
     def predict_action_chunk(self, batch: dict[str, Tensor]) -> Tensor:
-        """根据环境观察预测一个动作块。"""
+        """Predict a chunk of actions given environment observations."""
         self.eval()
 
         if self.config.image_features:
-            batch = dict(batch)  # 浅拷贝以确保添加键不会修改原始数据
+            batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
 
         actions = self.model(batch)[0]
         return actions
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
-        """通过模型运行批次并计算训练或验证的损失。"""
+        """Run the batch through the model and compute the loss for training or validation."""
         if self.config.image_features:
-            batch = dict(batch)  # 浅拷贝以确保添加键不会修改原始数据
+            batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
 
         actions_hat, (mu_hat, log_sigma_x2_hat) = self.model(batch)
 
-        l1_loss = (
-            F.l1_loss(batch[ACTION], actions_hat, reduction="none") * ~batch["action_is_pad"].unsqueeze(-1)
-        ).mean()
+        abs_err = F.l1_loss(batch[ACTION], actions_hat, reduction="none")
+        valid_mask = ~batch["action_is_pad"].unsqueeze(-1)
+        num_valid = valid_mask.sum() * abs_err.shape[-1]
+        l1_loss = (abs_err * valid_mask).sum() / num_valid.clamp_min(1)
 
         loss_dict = {"l1_loss": l1_loss.item()}
         if self.config.use_vae:
-            # 计算 Dₖₗ(latent_pdf || standard_normal)。注意：在独立计算每个维度的KL散度后，
-            # 我们对潜在维度求和以获得每个批次元素的总KL散度，然后对批次取平均值。
-            # (详见 https://huggingface.co/papers/1312.6114 的附录B)。
+            # Calculate Dₖₗ(latent_pdf || standard_normal). Note: After computing the KL-divergence for
+            # each dimension independently, we sum over the latent dimension to get the total
+            # KL-divergence per batch element, then take the mean over the batch.
+            # (See App. B of https://huggingface.co/papers/1312.6114 for more details).
             mean_kld = (
                 (-0.5 * (1 + log_sigma_x2_hat - mu_hat.pow(2) - (log_sigma_x2_hat).exp())).sum(-1).mean()
             )
@@ -159,19 +166,21 @@ class ACTPolicy(PreTrainedPolicy):
 
 class ACTTemporalEnsembler:
     def __init__(self, temporal_ensemble_coeff: float, chunk_size: int) -> None:
-        """时序集成，如 https://huggingface.co/papers/2304.13705 算法2中所述。
+        """Temporal ensembling as described in Algorithm 2 of https://huggingface.co/papers/2304.13705.
 
-        权重计算为 wᵢ = exp(-temporal_ensemble_coeff * i)，其中 w₀ 是最旧的动作。
-        然后通过除以 Σwᵢ 归一化为总和为1。以下是关于系数如何工作的一些直觉：
-            - 设置为0会均匀加权所有动作。
-            - 设置为正数会给较旧的动作更多权重。
-            - 设置为负数会给较新的动作更多权重。
-        注意：原始ACT工作使用的 `temporal_ensemble_coeff` 默认值为0.01。这导致
-        较旧的动作比较新的动作权重更高（https://github.com/huggingface/lerobot/pull/319 中
-        记录的实验暗示了为什么高权重新动作可能是有害的：这样做可能会削弱动作分块的好处）。
+        The weights are calculated as wᵢ = exp(-temporal_ensemble_coeff * i) where w₀ is the oldest action.
+        They are then normalized to sum to 1 by dividing by Σwᵢ. Here's some intuition around how the
+        coefficient works:
+            - Setting it to 0 uniformly weighs all actions.
+            - Setting it positive gives more weight to older actions.
+            - Setting it negative gives more weight to newer actions.
+        NOTE: The default value for `temporal_ensemble_coeff` used by the original ACT work is 0.01. This
+        results in older actions being weighed more highly than newer actions (the experiments documented in
+        https://github.com/huggingface/lerobot/pull/319 hint at why highly weighing new actions might be
+        detrimental: doing so aggressively may diminish the benefits of action chunking).
 
-        这里我们使用在线方法来计算平均值，而不是缓存动作历史来离线计算平均值。
-        对于简单的1D序列，它看起来像这样：
+        Here we use an online method for computing the average rather than caching a history of actions in
+        order to compute the average offline. For a simple 1D sequence it looks something like:
 
         ```
         import torch
@@ -183,11 +192,11 @@ class ACTTemporalEnsembler:
         exp_weights = torch.exp(-m * torch.arange(len(seq)))
         print(exp_weights)
 
-        # 离线计算
+        # Calculate offline
         avg = (exp_weights * seq).sum() / exp_weights.sum()
         print("offline", avg)
 
-        # 在线计算
+        # Calculate online
         for i, item in enumerate(seq):
             if i == 0:
                 avg = item
@@ -204,38 +213,40 @@ class ACTTemporalEnsembler:
         self.reset()
 
     def reset(self):
-        """重置在线计算变量。"""
+        """Resets the online computation variables."""
         self.ensembled_actions = None
-        # (chunk_size,) 每个时间步序列中集成的动作数量计数。
+        # (chunk_size,) count of how many actions are in the ensemble for each time step in the sequence.
         self.ensembled_actions_count = None
 
     def update(self, actions: Tensor) -> Tensor:
         """
-        接收一个 (batch, chunk_size, action_dim) 的动作序列，更新所有时间步的时序集成，
-        并弹出/返回序列中的下一批动作。
+        Takes a (batch, chunk_size, action_dim) sequence of actions, update the temporal ensemble for all
+        time steps, and pop/return the next batch of actions in the sequence.
         """
         self.ensemble_weights = self.ensemble_weights.to(device=actions.device)
         self.ensemble_weights_cumsum = self.ensemble_weights_cumsum.to(device=actions.device)
         if self.ensembled_actions is None:
-            # 将 `self._ensembled_action` 初始化为回合第一个时间步预测的动作序列。
+            # Initializes `self._ensembled_action` to the sequence of actions predicted during the first
+            # time step of the episode.
             self.ensembled_actions = actions.clone()
-            # 注意：最后一个维度被unsqueeze以确保稍后可以正确广播进行张量操作。
+            # Note: The last dimension is unsqueeze to make sure we can broadcast properly for tensor
+            # operations later.
             self.ensembled_actions_count = torch.ones(
                 (self.chunk_size, 1), dtype=torch.long, device=self.ensembled_actions.device
             )
         else:
-            # self.ensembled_actions 将具有形状 (batch_size, chunk_size - 1, action_dim)。
-            # 计算这些条目的在线更新。
+            # self.ensembled_actions will have shape (batch_size, chunk_size - 1, action_dim). Compute
+            # the online update for those entries.
             self.ensembled_actions *= self.ensemble_weights_cumsum[self.ensembled_actions_count - 1]
             self.ensembled_actions += actions[:, :-1] * self.ensemble_weights[self.ensembled_actions_count]
             self.ensembled_actions /= self.ensemble_weights_cumsum[self.ensembled_actions_count]
             self.ensembled_actions_count = torch.clamp(self.ensembled_actions_count + 1, max=self.chunk_size)
-            # 最后一个动作没有先前的在线平均值，需要连接到末尾。
+            # The last action, which has no prior online average, needs to get concatenated onto the end.
             self.ensembled_actions = torch.cat([self.ensembled_actions, actions[:, -1:]], dim=1)
             self.ensembled_actions_count = torch.cat(
                 [self.ensembled_actions_count, torch.ones_like(self.ensembled_actions_count[-1:])]
             )
-        # "消费"第一个动作。
+        # "Consume" the first action.
         action, self.ensembled_actions, self.ensembled_actions_count = (
             self.ensembled_actions[:, 0],
             self.ensembled_actions[:, 1:],
@@ -245,21 +256,23 @@ class ACTTemporalEnsembler:
 
 
 class ACT(nn.Module):
-    """动作分块Transformer: ACTPolicy的底层神经网络。
+    """Action Chunking Transformer: The underlying neural network for ACTPolicy.
 
-    注意：在此代码中，我们使用术语 `vae_encoder`、'encoder'、`decoder`。含义如下：
-        - `vae_encoder` 是变分自编码器(VAE)文献中的术语，指模型中编码目标数据（动作序列）
-          和条件（机器人关节空间）的部分。
-        - 使用带有 `encoder`（非VAE编码器）和 `decoder`（非VAE解码器）以及交叉注意力的
-          transformer作为VAE解码器。对于这些术语，我们删除 `vae_` 前缀，因为我们有一个选项
-          可以在不使用变分目标的情况下训练此模型（在这种情况下，我们完全删除 `vae_encoder`，
-          并且此模型的任何内容都与VAE无关）。
+    Note: In this code we use the terms `vae_encoder`, 'encoder', `decoder`. The meanings are as follows.
+        - The `vae_encoder` is, as per the literature around variational auto-encoders (VAE), the part of the
+          model that encodes the target data (a sequence of actions), and the condition (the robot
+          joint-space).
+        - A transformer with an `encoder` (not the VAE encoder) and `decoder` (not the VAE decoder) with
+          cross-attention is used as the VAE decoder. For these terms, we drop the `vae_` prefix because we
+          have an option to train this model without the variational objective (in which case we drop the
+          `vae_encoder` altogether, and nothing about this model has anything to do with a VAE).
 
                                  Transformer
-                                 在推理时单独使用
-                                 (在训练时充当VAE解码器)
+                                 Used alone for inference
+                                 (acts as VAE decoder
+                                  during training)
                                 ┌───────────────────────┐
-                                │             输出      │
+                                │             Outputs   │
                                 │                ▲      │
                                 │     ┌─────►┌───────┐  │
                    ┌──────┐     │     │      │Transf.│  │
@@ -272,33 +285,34 @@ class ACT(nn.Module):
               └───▲─────┘ │     │ │       │             │
                   │       │     │ └▲──▲─▲─┘             │
                   │       │     │  │  │ │               │
-                输入      └─────┼──┘  │ 图像嵌入        │
-                                │    状态嵌入           │
+                inputs    └─────┼──┘  │ image emb.      │
+                                │    state emb.         │
                                 └───────────────────────┘
     """
 
     def __init__(self, config: ACTConfig):
-        # BERT风格的VAE编码器，输入tokens为 [cls, robot_state, *action_sequence]。
-        # cls token形成潜在分布的参数（如 [*means, *log_variances]）。
+        # BERT style VAE encoder with input tokens [cls, robot_state, *action_sequence].
+        # The cls token forms parameters of the latent's distribution (like this [*means, *log_variances]).
         super().__init__()
         self.config = config
 
         if self.config.use_vae:
             self.vae_encoder = ACTEncoder(config, is_vae_encoder=True)
             self.vae_encoder_cls_embed = nn.Embedding(1, config.dim_model)
-            # 关节空间配置到隐藏维度的投影层。
+            # Projection layer for joint-space configuration to hidden dimension.
             if self.config.robot_state_feature:
                 self.vae_encoder_robot_state_input_proj = nn.Linear(
                     self.config.robot_state_feature.shape[0], config.dim_model
                 )
-            # 动作（关节空间目标）到隐藏维度的投影层。
+            # Projection layer for action (joint-space target) to hidden dimension.
             self.vae_encoder_action_input_proj = nn.Linear(
                 self.config.action_feature.shape[0],
                 config.dim_model,
             )
-            # 从VAE编码器输出到潜在分布参数空间的投影层。
+            # Projection layer from the VAE encoder's output to the latent distribution's parameter space.
             self.vae_encoder_latent_output_proj = nn.Linear(config.dim_model, config.latent_dim * 2)
-            # VAE编码器输入的固定正弦位置嵌入。为批次维度unsqueeze。
+            # Fixed sinusoidal positional embedding for the input to the VAE encoder. Unsqueeze for batch
+            # dimension.
             num_input_token_encoder = 1 + config.chunk_size
             if self.config.robot_state_feature:
                 num_input_token_encoder += 1
@@ -307,23 +321,24 @@ class ACT(nn.Module):
                 create_sinusoidal_pos_embedding(num_input_token_encoder, config.dim_model).unsqueeze(0),
             )
 
-        # 用于图像特征提取的骨干网络。
+        # Backbone for image feature extraction.
         if self.config.image_features:
             backbone_model = getattr(torchvision.models, config.vision_backbone)(
                 replace_stride_with_dilation=[False, False, config.replace_final_stride_with_dilation],
                 weights=config.pretrained_backbone_weights,
                 norm_layer=FrozenBatchNorm2d,
             )
-            # 注意：这里假设我们使用的是ResNet模型（因此layer4是最终的特征图）。
-            # 注意：此方法的forward返回一个字典：{"feature_map": output}。
+            # Note: The assumption here is that we are using a ResNet model (and hence layer4 is the final
+            # feature map).
+            # Note: The forward method of this returns a dict: {"feature_map": output}.
             self.backbone = IntermediateLayerGetter(backbone_model, return_layers={"layer4": "feature_map"})
 
-        # Transformer（使用变分目标训练时充当VAE解码器）。
+        # Transformer (acts as VAE decoder when training with the variational objective).
         self.encoder = ACTEncoder(config)
         self.decoder = ACTDecoder(config)
 
-        # Transformer编码器输入投影。tokens结构为
-        # [latent, (robot_state), (env_state), (image_feature_map_pixels)]。
+        # Transformer encoder input projections. The tokens will be structured like
+        # [latent, (robot_state), (env_state), (image_feature_map_pixels)].
         if self.config.robot_state_feature:
             self.encoder_robot_state_input_proj = nn.Linear(
                 self.config.robot_state_feature.shape[0], config.dim_model
@@ -337,8 +352,8 @@ class ACT(nn.Module):
             self.encoder_img_feat_input_proj = nn.Conv2d(
                 backbone_model.fc.in_features, config.dim_model, kernel_size=1
             )
-        # Transformer编码器位置嵌入。
-        n_1d_tokens = 1  # 用于潜在变量
+        # Transformer encoder positional embeddings.
+        n_1d_tokens = 1  # for the latent
         if self.config.robot_state_feature:
             n_1d_tokens += 1
         if self.config.env_state_feature:
@@ -347,52 +362,50 @@ class ACT(nn.Module):
         if self.config.image_features:
             self.encoder_cam_feat_pos_embed = ACTSinusoidalPositionEmbedding2d(config.dim_model // 2)
 
-        # Transformer解码器。
-        # transformer解码器的可学习位置嵌入（按照DETR对象查询的风格）。
+        # Transformer decoder.
+        # Learnable positional embedding for the transformer's decoder (in the style of DETR object queries).
         self.decoder_pos_embed = nn.Embedding(config.chunk_size, config.dim_model)
 
-        # transformer解码器输出上的最终动作回归头。
+        # Final action regression head on the output of the transformer's decoder.
         self.action_head = nn.Linear(config.dim_model, self.config.action_feature.shape[0])
 
         self._reset_parameters()
 
     def _reset_parameters(self):
-        """如原始代码中所述，对transformer参数进行Xavier-uniform初始化。"""
+        """Xavier-uniform initialization of the transformer parameters as in the original code."""
         for p in chain(self.encoder.parameters(), self.decoder.parameters()):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, tuple[Tensor, Tensor] | tuple[None, None]]:
-        """通过动作分块Transformer（带可选VAE编码器）的前向传播。
+        """A forward pass through the Action Chunking Transformer (with optional VAE encoder).
 
-        `batch` 应具有以下结构:
+        `batch` should have the following structure:
         {
-            [robot_state_feature] (可选): (B, state_dim) 批次的机器人状态。
+            [robot_state_feature] (optional): (B, state_dim) batch of robot states.
 
-            [image_features]: (B, n_cameras, C, H, W) 批次的图像。
-                和/或
-            [env_state_feature]: (B, env_dim) 批次的环境状态。
+            [image_features]: (B, n_cameras, C, H, W) batch of images.
+                AND/OR
+            [env_state_feature]: (B, env_dim) batch of environment states.
 
-            [action_feature] (可选，仅在使用VAE训练时): (B, chunk_size, action dim) 批次的动作。
+            [action_feature] (optional, only if training with VAE): (B, chunk_size, action dim) batch of actions.
         }
 
-        返回:
-            (B, chunk_size, action_dim) 批次的动作序列
-            包含潜在PDF参数（均值，log(σ²)）的元组，均为 (B, L) 张量，其中L是潜在维度。
+        Returns:
+            (B, chunk_size, action_dim) batch of action sequences
+            Tuple containing the latent PDF's parameters (mean, log(σ²)) both as (B, L) tensors where L is the
+            latent dimension.
         """
         if self.config.use_vae and self.training:
             assert ACTION in batch, (
-                "在训练模式下使用变分目标时必须提供动作。"
+                "actions must be provided when using the variational objective in training mode."
             )
 
-        if OBS_IMAGES in batch:
-            batch_size = batch[OBS_IMAGES][0].shape[0]
-        else:
-            batch_size = batch[OBS_ENV_STATE].shape[0]
+        batch_size = batch[OBS_IMAGES][0].shape[0] if OBS_IMAGES in batch else batch[OBS_ENV_STATE].shape[0]
 
-        # 准备潜在变量以输入到transformer编码器。
+        # Prepare the latent for input to the transformer encoder.
         if self.config.use_vae and ACTION in batch and self.training:
-            # 准备VAE编码器的输入：[cls, *joint_space_configuration, *action_sequence]。
+            # Prepare the input to the VAE encoder: [cls, *joint_space_configuration, *action_sequence].
             cls_embed = einops.repeat(
                 self.vae_encoder_cls_embed.weight, "1 d -> b 1 d", b=batch_size
             )  # (B, 1, D)
@@ -407,13 +420,13 @@ class ACT(nn.Module):
                 vae_encoder_input = [cls_embed, action_embed]
             vae_encoder_input = torch.cat(vae_encoder_input, axis=1)
 
-            # 准备固定位置嵌入。
-            # 注意：detach()不应该是必需的，但保持与原始代码相同以防万一。
+            # Prepare fixed positional embedding.
+            # Note: detach() shouldn't be necessary but leaving it the same as the original code just in case.
             pos_embed = self.vae_encoder_pos_enc.clone().detach()  # (1, S+2, D)
 
-            # 为transformer编码器准备key padding mask。根据是否使用输入状态，
-            # 我们在序列开始有1或2个额外的tokens（cls和robot state）
-            # False表示不是padding token。
+            # Prepare key padding mask for the transformer encoder. We have 1 or 2 extra tokens at the start of the
+            # sequence depending whether we use the input states or not (cls and robot state)
+            # False means not a padding token.
             cls_joint_is_pad = torch.full(
                 (batch_size, 2 if self.config.robot_state_feature else 1),
                 False,
@@ -423,61 +436,62 @@ class ACT(nn.Module):
                 [cls_joint_is_pad, batch["action_is_pad"]], axis=1
             )  # (bs, seq+1 or 2)
 
-            # 通过VAE编码器的前向传播以获得潜在PDF参数。
+            # Forward pass through VAE encoder to get the latent PDF parameters.
             cls_token_out = self.vae_encoder(
                 vae_encoder_input.permute(1, 0, 2),
                 pos_embed=pos_embed.permute(1, 0, 2),
                 key_padding_mask=key_padding_mask,
-            )[0]  # 选择class token，形状为 (B, D)
+            )[0]  # select the class token, with shape (B, D)
             latent_pdf_params = self.vae_encoder_latent_output_proj(cls_token_out)
             mu = latent_pdf_params[:, : self.config.latent_dim]
-            # 这是2log(sigma)。这样做是为了匹配原始实现。
+            # This is 2log(sigma). Done this way to match the original implementation.
             log_sigma_x2 = latent_pdf_params[:, self.config.latent_dim :]
 
-            # 使用重参数化技巧采样潜在变量。
+            # Sample the latent with the reparameterization trick.
             latent_sample = mu + log_sigma_x2.div(2).exp() * torch.randn_like(mu)
         else:
-            # 当不使用VAE编码器时，我们将潜在变量设置为全零。
+            # When not using the VAE encoder, we set the latent to be all zeros.
             mu = log_sigma_x2 = None
-            # TODO(rcadene, alexander-soare): 移除对 `.to` 的调用以加速forward；预计算并使用buffer
+            # TODO(rcadene, alexander-soare): remove call to `.to` to speedup forward ; precompute and use buffer
             latent_sample = torch.zeros([batch_size, self.config.latent_dim], dtype=torch.float32).to(
                 batch[OBS_STATE].device
             )
 
-        # 准备transformer编码器输入。
+        # Prepare transformer encoder inputs.
         encoder_in_tokens = [self.encoder_latent_input_proj(latent_sample)]
         encoder_in_pos_embed = list(self.encoder_1d_feature_pos_embed.weight.unsqueeze(1))
-        # 机器人状态token。
+        # Robot state token.
         if self.config.robot_state_feature:
             encoder_in_tokens.append(self.encoder_robot_state_input_proj(batch[OBS_STATE]))
-        # 环境状态token。
+        # Environment state token.
         if self.config.env_state_feature:
             encoder_in_tokens.append(self.encoder_env_state_input_proj(batch[OBS_ENV_STATE]))
 
         if self.config.image_features:
-            # 对于图像列表，H和W可能变化，但H*W是恒定的。
-            # 注意：如果修改此部分，请在MPS设备上验证梯度保持稳定（无爆炸或NaN）。
+            # For a list of images, the H and W may vary but H*W is constant.
+            # NOTE: If modifying this section, verify on MPS devices that
+            # gradients remain stable (no explosions or NaNs).
             for img in batch[OBS_IMAGES]:
                 cam_features = self.backbone(img)["feature_map"]
                 cam_pos_embed = self.encoder_cam_feat_pos_embed(cam_features).to(dtype=cam_features.dtype)
                 cam_features = self.encoder_img_feat_input_proj(cam_features)
 
-                # 将特征重排为 (sequence, batch, dim)。
+                # Rearrange features to (sequence, batch, dim).
                 cam_features = einops.rearrange(cam_features, "b c h w -> (h w) b c")
                 cam_pos_embed = einops.rearrange(cam_pos_embed, "b c h w -> (h w) b c")
 
-                # 立即扩展而不是累积和连接
-                # 转换为列表以正确扩展
+                # Extend immediately instead of accumulating and concatenating
+                # Convert to list to extend properly
                 encoder_in_tokens.extend(list(cam_features))
                 encoder_in_pos_embed.extend(list(cam_pos_embed))
 
-        # 沿序列维度堆叠所有tokens。
+        # Stack all tokens along the sequence dimension.
         encoder_in_tokens = torch.stack(encoder_in_tokens, axis=0)
         encoder_in_pos_embed = torch.stack(encoder_in_pos_embed, axis=0)
 
-        # 通过transformer模块的前向传播。
+        # Forward pass through the transformer modules.
         encoder_out = self.encoder(encoder_in_tokens, pos_embed=encoder_in_pos_embed)
-        # TODO(rcadene, alexander-soare): 移除对 `device` 的调用；预计算并使用buffer
+        # TODO(rcadene, alexander-soare): remove call to `device` ; precompute and use buffer
         decoder_in = torch.zeros(
             (self.config.chunk_size, batch_size, self.config.dim_model),
             dtype=encoder_in_pos_embed.dtype,
@@ -490,7 +504,7 @@ class ACT(nn.Module):
             decoder_pos_embed=self.decoder_pos_embed.weight.unsqueeze(1),
         )
 
-        # 转回 (B, S, C)。
+        # Move back to (B, S, C).
         decoder_out = decoder_out.transpose(0, 1)
 
         actions = self.action_head(decoder_out)
@@ -499,7 +513,7 @@ class ACT(nn.Module):
 
 
 class ACTEncoder(nn.Module):
-    """便捷模块，用于运行多个编码器层，可能后跟归一化。"""
+    """Convenience module for running multiple encoder layers, maybe followed by normalization."""
 
     def __init__(self, config: ACTConfig, is_vae_encoder: bool = False):
         super().__init__()
@@ -522,7 +536,7 @@ class ACTEncoderLayer(nn.Module):
         super().__init__()
         self.self_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
 
-        # 前馈层。
+        # Feed forward layers.
         self.linear1 = nn.Linear(config.dim_model, config.dim_feedforward)
         self.dropout = nn.Dropout(config.dropout)
         self.linear2 = nn.Linear(config.dim_feedforward, config.dim_model)
@@ -541,7 +555,7 @@ class ACTEncoderLayer(nn.Module):
             x = self.norm1(x)
         q = k = x if pos_embed is None else x + pos_embed
         x = self.self_attn(q, k, value=x, key_padding_mask=key_padding_mask)
-        x = x[0]  # 注意：[0] 仅选择输出，不选择注意力权重
+        x = x[0]  # note: [0] to select just the output, not the attention weights
         x = skip + self.dropout1(x)
         if self.pre_norm:
             skip = x
@@ -558,7 +572,7 @@ class ACTEncoderLayer(nn.Module):
 
 class ACTDecoder(nn.Module):
     def __init__(self, config: ACTConfig):
-        """便捷模块，用于运行多个解码器层，后跟归一化。"""
+        """Convenience module for running multiple decoder layers followed by normalization."""
         super().__init__()
         self.layers = nn.ModuleList([ACTDecoderLayer(config) for _ in range(config.n_decoder_layers)])
         self.norm = nn.LayerNorm(config.dim_model)
@@ -585,7 +599,7 @@ class ACTDecoderLayer(nn.Module):
         self.self_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
         self.multihead_attn = nn.MultiheadAttention(config.dim_model, config.n_heads, dropout=config.dropout)
 
-        # 前馈层。
+        # Feed forward layers.
         self.linear1 = nn.Linear(config.dim_model, config.dim_feedforward)
         self.dropout = nn.Dropout(config.dropout)
         self.linear2 = nn.Linear(config.dim_feedforward, config.dim_model)
@@ -611,19 +625,20 @@ class ACTDecoderLayer(nn.Module):
         encoder_pos_embed: Tensor | None = None,
     ) -> Tensor:
         """
-        参数:
-            x: (Decoder Sequence, Batch, Channel) 输入tokens张量。
-            encoder_out: (Encoder Sequence, B, C) 我们正在交叉注意的编码器最后一层的输出特征。
-            decoder_pos_embed: (ES, 1, C) keys的位置嵌入（来自编码器）。
-            encoder_pos_embed: (DS, 1, C) queries的位置嵌入（来自解码器）。
-        返回:
-            (DS, B, C) 解码器输出特征的张量。
+        Args:
+            x: (Decoder Sequence, Batch, Channel) tensor of input tokens.
+            encoder_out: (Encoder Sequence, B, C) output features from the last layer of the encoder we are
+                cross-attending with.
+            encoder_pos_embed: (ES, 1, C) positional embedding for keys (from the encoder).
+            decoder_pos_embed: (DS, 1, C) positional embedding for the queries (from the decoder).
+        Returns:
+            (DS, B, C) tensor of decoder output features.
         """
         skip = x
         if self.pre_norm:
             x = self.norm1(x)
         q = k = self.maybe_add_pos_embed(x, decoder_pos_embed)
-        x = self.self_attn(q, k, value=x)[0]  # 仅选择输出，不选择注意力权重
+        x = self.self_attn(q, k, value=x)[0]  # select just the output, not the attention weights
         x = skip + self.dropout1(x)
         if self.pre_norm:
             skip = x
@@ -635,7 +650,7 @@ class ACTDecoderLayer(nn.Module):
             query=self.maybe_add_pos_embed(x, decoder_pos_embed),
             key=self.maybe_add_pos_embed(encoder_out, encoder_pos_embed),
             value=encoder_out,
-        )[0]  # 仅选择输出，不选择注意力权重
+        )[0]  # select just the output, not the attention weights
         x = skip + self.dropout2(x)
         if self.pre_norm:
             skip = x
@@ -651,11 +666,11 @@ class ACTDecoderLayer(nn.Module):
 
 
 def create_sinusoidal_pos_embedding(num_positions: int, dimension: int) -> Tensor:
-    """如 Attention is All You Need 中的1D正弦位置嵌入。
+    """1D sinusoidal positional embeddings as in Attention is All You Need.
 
-    参数:
-        num_positions: 所需的token位置数量。
-    返回: (num_positions, dimension) 位置嵌入（第一个维度是批次维度）。
+    Args:
+        num_positions: Number of token positions required.
+    Returns: (num_positions, dimension) position embeddings (the first dimension is the batch dimension).
 
     """
 
@@ -669,40 +684,40 @@ def create_sinusoidal_pos_embedding(num_positions: int, dimension: int) -> Tenso
 
 
 class ACTSinusoidalPositionEmbedding2d(nn.Module):
-    """2D正弦位置嵌入，类似于 Attention Is All You Need 中提出的内容。
+    """2D sinusoidal positional embeddings similar to what's presented in Attention Is All You Need.
 
-    变化在于位置索引在 [0, 2π] 中归一化（不完全是：垂直方向的下界是1/H，
-    水平方向的下界是1/W）。
+    The variation is that the position indices are normalized in [0, 2π] (not quite: the lower bound is 1/H
+    for the vertical direction, and 1/W for the horizontal direction.
     """
 
     def __init__(self, dimension: int):
         """
-        参数:
-            dimension: 嵌入的所需维度。
+        Args:
+            dimension: The desired dimension of the embeddings.
         """
         super().__init__()
         self.dimension = dimension
         self._two_pi = 2 * math.pi
         self._eps = 1e-6
-        # 正弦频率几何级数中的逆"公比"。
+        # Inverse "common ratio" for the geometric progression in sinusoid frequencies.
         self._temperature = 10000
 
     def forward(self, x: Tensor) -> Tensor:
         """
-        参数:
-            x: (B, C, H, W) 批次的2D特征图，用于生成嵌入。
-        返回:
-            (1, C, H, W) 批次的对应正弦位置嵌入。
+        Args:
+            x: A (B, C, H, W) batch of 2D feature map to generate the embeddings for.
+        Returns:
+            A (1, C, H, W) batch of corresponding sinusoidal positional embeddings.
         """
         not_mask = torch.ones_like(x[0, :1])  # (1, H, W)
-        # 注意：这些分别类似于 range(1, H+1) 和 range(1, W+1)，但在大多数实现中
-        # 它们应该是 range(0, H) 和 range(0, W)。保持原样以匹配原始代码。
+        # Note: These are like range(1, H+1) and range(1, W+1) respectively, but in most implementations
+        # they would be range(0, H) and range(0, W). Keeping it at as is to match the original code.
         y_range = not_mask.cumsum(1, dtype=torch.float32)
         x_range = not_mask.cumsum(2, dtype=torch.float32)
 
-        # "归一化"位置索引，使其范围在 [0, 2π]。
-        # 注意：在分母上添加epsilon不应该是必需的，因为通过构造，y_embed和x_range的所有值
-        # 都是非零的。这是原始代码的遗留物。
+        # "Normalize" the position index such that it ranges in [0, 2π].
+        # Note: Adding epsilon on the denominator should not be needed as all values of y_embed and x_range
+        # are non-zero by construction. This is an artifact of the original code.
         y_range = y_range / (y_range[:, -1:, :] + self._eps) * self._two_pi
         x_range = x_range / (x_range[:, :, -1:] + self._eps) * self._two_pi
 
@@ -713,8 +728,8 @@ class ACTSinusoidalPositionEmbedding2d(nn.Module):
         x_range = x_range.unsqueeze(-1) / inverse_frequency  # (1, H, W, 1)
         y_range = y_range.unsqueeze(-1) / inverse_frequency  # (1, H, W, 1)
 
-        # 注意：此堆叠然后展平操作会产生交错的正弦和余弦项。
-        # pos_embed_x 和 pos_embed_y 是 (1, H, W, C // 2)。
+        # Note: this stack then flatten operation results in interleaved sine and cosine terms.
+        # pos_embed_x and pos_embed_y are (1, H, W, C // 2).
         pos_embed_x = torch.stack((x_range[..., 0::2].sin(), x_range[..., 1::2].cos()), dim=-1).flatten(3)
         pos_embed_y = torch.stack((y_range[..., 0::2].sin(), y_range[..., 1::2].cos()), dim=-1).flatten(3)
         pos_embed = torch.cat((pos_embed_y, pos_embed_x), dim=3).permute(0, 3, 1, 2)  # (1, C, H, W)
@@ -723,11 +738,11 @@ class ACTSinusoidalPositionEmbedding2d(nn.Module):
 
 
 def get_activation_fn(activation: str) -> Callable:
-    """根据字符串返回激活函数。"""
+    """Return an activation function given a string."""
     if activation == "relu":
         return F.relu
     if activation == "gelu":
         return F.gelu
     if activation == "glu":
         return F.glu
-    raise RuntimeError(f"activation应该是relu/gelu/glu，而不是{activation}。")
+    raise RuntimeError(f"activation should be relu/gelu/glu, not {activation}.")

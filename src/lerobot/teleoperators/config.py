@@ -21,9 +21,9 @@ import draccus
 
 @dataclass(kw_only=True)
 class TeleoperatorConfig(draccus.ChoiceRegistry, abc.ABC):
-    # 用于区分相同类型的不同遥操作器
+    # Allows to distinguish between different teleoperators of the same type
     id: str | None = None
-    # 存储校准文件的目录
+    # Directory to store calibration file
     calibration_dir: Path | None = None
 
     @property

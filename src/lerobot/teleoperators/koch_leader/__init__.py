@@ -14,11 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Koch Leader 遥操作模块
-
-该模块提供 Koch Leader 主控机械臂的遥操作功能。
-"""
-
 from .config_koch_leader import KochLeaderConfig
 from .koch_leader import KochLeader
+
+__all__ = ["KochLeader", "KochLeaderConfig"]

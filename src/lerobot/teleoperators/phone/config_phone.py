@@ -33,4 +33,4 @@ class PhoneConfig(TeleoperatorConfig):
     phone_os: PhoneOS = PhoneOS.IOS
     camera_offset = np.array(
         [0.0, -0.02, 0.04]
-    )  # iPhone 14 Pro的相机偏离中心2cm，高于中心4cm
+    )  # iPhone 14 Pro camera is 2cm off center and 4cm above center

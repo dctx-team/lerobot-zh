@@ -22,9 +22,9 @@ from ..config import TeleoperatorConfig
 @TeleoperatorConfig.register_subclass("koch_leader")
 @dataclass
 class KochLeaderConfig(TeleoperatorConfig):
-    # 连接到机械臂的端口
+    # Port to connect to the arm
     port: str
 
-    # 将机械臂设置为扭矩模式，夹爪电机设置为此值。这使得可以挤压夹爪，
-    # 并使其自动弹回到打开位置。
+    # Sets the arm in torque mode with the gripper motor set to this value. This makes it possible to squeeze
+    # the gripper and have it spring back to an open position on its own.
     gripper_open_pos: float = 50.0

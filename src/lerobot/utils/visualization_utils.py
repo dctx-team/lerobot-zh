@@ -14,57 +14,82 @@
 
 import numbers
 import os
-from typing import Any
 
 import numpy as np
-import rerun as rr
 
-from .constants import OBS_PREFIX, OBS_STR
+from lerobot.types import RobotAction, RobotObservation
+
+from .constants import ACTION, ACTION_PREFIX, OBS_PREFIX, OBS_STR
+from .import_utils import require_package
 
 
-def init_rerun(session_name: str = "lerobot_control_loop") -> None:
+def init_rerun(
+    session_name: str = "lerobot_control_loop", ip: str | None = None, port: int | None = None
+) -> None:
     """
-    初始化 Rerun SDK 用于可视化控制循环。
+    Initializes the Rerun SDK for visualizing the control loop.
 
     Args:
-        session_name: Rerun 会话的名称,默认为 "lerobot_control_loop"。
+        session_name: Name of the Rerun session.
+        ip: Optional IP for connecting to a Rerun server.
+        port: Optional port for connecting to a Rerun server.
     """
+
+    require_package("rerun-sdk", extra="viz", import_name="rerun")
+    import rerun as rr
+
     batch_size = os.getenv("RERUN_FLUSH_NUM_BYTES", "8000")
     os.environ["RERUN_FLUSH_NUM_BYTES"] = batch_size
     rr.init(session_name)
     memory_limit = os.getenv("LEROBOT_RERUN_MEMORY_LIMIT", "10%")
-    rr.spawn(memory_limit=memory_limit)
+    if ip and port:
+        rr.connect_grpc(url=f"rerun+http://{ip}:{port}/proxy")
+    else:
+        rr.spawn(memory_limit=memory_limit)
+
+
+def shutdown_rerun() -> None:
+    """Shuts down the Rerun SDK gracefully."""
+
+    require_package("rerun-sdk", extra="viz", import_name="rerun")
+    import rerun as rr
+
+    rr.rerun_shutdown()
 
 
 def _is_scalar(x):
-    return (
-        isinstance(x, float)
-        or isinstance(x, numbers.Real)
-        or isinstance(x, (np.integer, np.floating))
-        or (isinstance(x, np.ndarray) and x.ndim == 0)
+    return isinstance(x, (float | numbers.Real | np.integer | np.floating)) or (
+        isinstance(x, np.ndarray) and x.ndim == 0
     )
 
 
 def log_rerun_data(
-    observation: dict[str, Any] | None = None,
-    action: dict[str, Any] | None = None,
+    observation: RobotObservation | None = None,
+    action: RobotAction | None = None,
+    compress_images: bool = False,
 ) -> None:
     """
-    将观测和动作数据记录到 Rerun 用于实时可视化。
+    Logs observation and action data to Rerun for real-time visualization.
 
-    此函数遍历提供的观测和动作字典,并将其内容发送到 Rerun 查看器。它适当地处理不同的数据类型:
-    - 标量值(浮点数、整数)被记录为 `rr.Scalar`。
-    - 类似图像的 3D NumPy 数组(例如,第一维为 1、3 或 4 通道)会从 CHW 格式转置为 HWC 格式,
-      并记录为 `rr.Image`。
-    - 1D NumPy 数组被记录为一系列独立的标量,每个元素都有索引。
-    - 其他多维数组被展平并记录为独立的标量。
+    This function iterates through the provided observation and action dictionaries and sends their contents
+    to the Rerun viewer. It handles different data types appropriately:
+    - Scalars values (floats, ints) are logged as `rr.Scalars`.
+    - 3D NumPy arrays that resemble images (e.g., with 1, 3, or 4 channels first) are transposed
+      from CHW to HWC format, (optionally) compressed to JPEG and logged as `rr.Image` or `rr.EncodedImage`.
+    - 1D NumPy arrays are logged as a series of individual scalars, with each element indexed.
+    - Other multi-dimensional arrays are flattened and logged as individual scalars.
 
-    如果键尚未包含命名空间,则会自动添加 "observation." 或 "action." 前缀。
+    Keys are automatically namespaced with "observation." or "action." if not already present.
 
     Args:
-        observation: 包含要记录的观测数据的可选字典。
-        action: 包含要记录的动作数据的可选字典。
+        observation: An optional dictionary containing observation data to log.
+        action: An optional dictionary containing action data to log.
+        compress_images: Whether to compress images before logging to save bandwidth & memory in exchange for cpu and quality.
     """
+
+    require_package("rerun-sdk", extra="viz", import_name="rerun")
+    import rerun as rr
+
     if observation:
         for k, v in observation.items():
             if v is None:
@@ -72,32 +97,33 @@ def log_rerun_data(
             key = k if str(k).startswith(OBS_PREFIX) else f"{OBS_STR}.{k}"
 
             if _is_scalar(v):
-                rr.log(key, rr.Scalar(float(v)))
+                rr.log(key, rr.Scalars(float(v)))
             elif isinstance(v, np.ndarray):
                 arr = v
-                # 在需要时将 CHW 格式转换为 HWC 格式
+                # Convert CHW -> HWC when needed
                 if arr.ndim == 3 and arr.shape[0] in (1, 3, 4) and arr.shape[-1] not in (1, 3, 4):
                     arr = np.transpose(arr, (1, 2, 0))
                 if arr.ndim == 1:
                     for i, vi in enumerate(arr):
-                        rr.log(f"{key}_{i}", rr.Scalar(float(vi)))
+                        rr.log(f"{key}_{i}", rr.Scalars(float(vi)))
                 else:
-                    rr.log(key, rr.Image(arr), static=True)
+                    img_entity = rr.Image(arr).compress() if compress_images else rr.Image(arr)
+                    rr.log(key, entity=img_entity, static=True)
 
     if action:
         for k, v in action.items():
             if v is None:
                 continue
-            key = k if str(k).startswith("action.") else f"action.{k}"
+            key = k if str(k).startswith(ACTION_PREFIX) else f"{ACTION}.{k}"
 
             if _is_scalar(v):
-                rr.log(key, rr.Scalar(float(v)))
+                rr.log(key, rr.Scalars(float(v)))
             elif isinstance(v, np.ndarray):
                 if v.ndim == 1:
                     for i, vi in enumerate(v):
-                        rr.log(f"{key}_{i}", rr.Scalar(float(vi)))
+                        rr.log(f"{key}_{i}", rr.Scalars(float(vi)))
                 else:
-                    # 对于更高维数组,回退到展平处理
+                    # Fall back to flattening higher-dimensional arrays
                     flat = v.flatten()
                     for i, vi in enumerate(flat):
-                        rr.log(f"{key}_{i}", rr.Scalar(float(vi)))
+                        rr.log(f"{key}_{i}", rr.Scalars(float(vi)))

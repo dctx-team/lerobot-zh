@@ -14,11 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-游戏手柄遥操作模块
-
-该模块提供基于游戏手柄的遥操作功能，支持使用游戏控制器进行机器人控制。
-"""
-
 from .configuration_gamepad import GamepadTeleopConfig
 from .teleop_gamepad import GamepadTeleop
+
+__all__ = ["GamepadTeleop", "GamepadTeleopConfig"]

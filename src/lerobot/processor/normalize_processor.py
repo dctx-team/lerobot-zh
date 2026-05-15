@@ -19,63 +19,74 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from torch import Tensor
 
-from lerobot.configs.types import FeatureType, NormalizationMode, PipelineFeatureType, PolicyFeature
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.configs import FeatureType, NormalizationMode, PipelineFeatureType, PolicyFeature
+from lerobot.types import EnvTransition, PolicyAction, TransitionKey
+
+if TYPE_CHECKING:
+    from lerobot.datasets import LeRobotDataset
+
 from lerobot.utils.constants import ACTION
 
 from .converters import from_tensor_to_numpy, to_tensor
-from .core import EnvTransition, PolicyAction, TransitionKey
-from .pipeline import PolicyProcessorPipeline, ProcessorStep, ProcessorStepRegistry
+from .pipeline import PolicyProcessorPipeline, ProcessorStep, ProcessorStepRegistry, RobotObservation
 
 
 @dataclass
 class _NormalizationMixin:
     """
-    提供归一化和反归一化核心功能的混入类。
+    A mixin class providing core functionality for normalization and unnormalization.
 
-    该类管理归一化统计信息（`stats`），将其转换为张量以进行高效计算，处理设备放置，
-    并实现应用归一化转换（均值/标准差和最小值/最大值）的逻辑。该类设计为由具体的
-    `ProcessorStep` 实现继承，不应直接使用。
+    This class manages normalization statistics (`stats`), converts them to tensors for
+    efficient computation, handles device placement, and implements the logic for
+    applying normalization transformations (mean/std and min/max). It is designed to
+    be inherited by concrete `ProcessorStep` implementations and should not be used
+    directly.
 
-    **统计信息覆盖保护：**
-    当在构造期间显式提供统计信息时（例如，通过 `DataProcessorPipeline.from_pretrained()`
-    中的 overrides），即使调用 `load_state_dict()` 也会保留这些统计信息。这允许用户覆盖
-    已保存模型的归一化统计信息，同时保持模型状态的其余部分不变。
+    **Stats Override Preservation:**
+    When stats are explicitly provided during construction (e.g., via overrides in
+    `DataProcessorPipeline.from_pretrained()`), they are preserved even when
+    `load_state_dict()` is called. This allows users to override normalization
+    statistics from saved models while keeping the rest of the model state intact.
 
-    示例：
+    Examples:
         ```python
-        # 常见用例：使用数据集统计信息覆盖
+        # Common use case: Override with dataset stats
         from lerobot.datasets import LeRobotDataset
 
         dataset = LeRobotDataset("my_dataset")
         pipeline = DataProcessorPipeline.from_pretrained(
             "model_path", overrides={"normalizer_processor": {"stats": dataset.meta.stats}}
         )
-        # 将使用 dataset.meta.stats，而不是已保存模型的统计信息
+        # dataset.meta.stats will be used, not the stats from the saved model
 
-        # 自定义统计信息覆盖
+        # Custom stats override
         custom_stats = {"action": {"mean": [0.0], "std": [1.0]}}
         pipeline = DataProcessorPipeline.from_pretrained(
             "model_path", overrides={"normalizer_processor": {"stats": custom_stats}}
         )
         ```
 
-    属性：
-        features: 将特征名称映射到 `PolicyFeature` 对象的字典，定义要处理的数据结构。
-        norm_map: 将 `FeatureType` 映射到 `NormalizationMode` 的字典，指定每种特征类型
-            使用的归一化方法。
-        stats: 包含每个特征的归一化统计信息（例如，均值、标准差、最小值、最大值）的字典。
-        device: 用于存储和执行张量操作的 PyTorch 设备。
-        eps: 用于防止归一化计算中除零的小 epsilon 值。
-        normalize_observation_keys: 可选的键集合，用于有选择地对特定观测特征应用归一化。
-        _tensor_stats: 内部字典，保存作为 PyTorch 张量的归一化统计信息。
-        _stats_explicitly_provided: 内部标志，跟踪在构造期间是否显式提供了统计信息
-            （用于覆盖保护）。
+    Attributes:
+        features: A dictionary mapping feature names to `PolicyFeature` objects, defining
+            the data structure to be processed.
+        norm_map: A dictionary mapping `FeatureType` to `NormalizationMode`, specifying
+            which normalization method to use for each type of feature.
+        stats: A dictionary containing the normalization statistics (e.g., mean, std,
+            min, max) for each feature.
+        device: The PyTorch device on which to store and perform tensor operations.
+        eps: A small epsilon value to prevent division by zero in normalization
+            calculations.
+        normalize_observation_keys: An optional set of keys to selectively apply
+            normalization to specific observation features.
+        _tensor_stats: An internal dictionary holding the normalization statistics as
+            PyTorch tensors.
+        _stats_explicitly_provided: Internal flag tracking whether stats were explicitly
+            provided during construction (used for override preservation).
     """
 
     features: dict[str, PolicyFeature]
@@ -91,14 +102,16 @@ class _NormalizationMixin:
 
     def __post_init__(self):
         """
-        在数据类构造后初始化混入类。
+        Initializes the mixin after dataclass construction.
 
-        此方法处理从 JSON 兼容格式（枚举变为字符串，元组变为列表）稳健反序列化 `features`
-        和 `norm_map`，并将提供的 `stats` 字典转换为指定设备上的张量字典（`_tensor_stats`）。
+        This method handles the robust deserialization of `features` and `norm_map`
+        from JSON-compatible formats (where enums become strings and tuples become
+        lists) and converts the provided `stats` dictionary into a dictionary of
+        tensors (`_tensor_stats`) on the specified device.
         """
-        # 跟踪统计信息是否被显式提供（不是 None 且不为空）
+        # Track if stats were explicitly provided (not None and not empty)
         self._stats_explicitly_provided = self.stats is not None and bool(self.stats)
-        # 稳健的 JSON 反序列化处理（防护空映射）。
+        # Robust JSON deserialization handling (guard empty maps).
         if self.features:
             first_val = next(iter(self.features.values()))
             if isinstance(first_val, dict):
@@ -109,106 +122,135 @@ class _NormalizationMixin:
                     )
                 self.features = reconstructed
 
-        if self.norm_map:
-            # 如果键是字符串（JSON），则重建枚举映射
-            if all(isinstance(k, str) for k in self.norm_map.keys()):
-                reconstructed = {}
-                for ft_type_str, norm_mode_str in self.norm_map.items():
-                    reconstructed[FeatureType(ft_type_str)] = NormalizationMode(norm_mode_str)
-                self.norm_map = reconstructed
+        # if keys are strings (JSON), rebuild enum map
+        if self.norm_map and all(isinstance(k, str) for k in self.norm_map):
+            reconstructed = {}
+            for ft_type_str, norm_mode_str in self.norm_map.items():
+                reconstructed[FeatureType(ft_type_str)] = NormalizationMode(norm_mode_str)
+            self.norm_map = reconstructed
 
-        # 在初始化期间将统计信息转换为张量并移动到目标设备一次。
+        # Convert stats to tensors and move to the target device once during initialization.
         self.stats = self.stats or {}
         if self.dtype is None:
             self.dtype = torch.float32
         self._tensor_stats = to_tensor(self.stats, device=self.device, dtype=self.dtype)
+        self._reshape_visual_stats()
+
+    def _reshape_visual_stats(self) -> None:
+        """Reshape flat ``(C,)`` visual stats to ``(C, 1, 1)`` for image broadcasting.
+
+        No-op for stats from :func:`~lerobot.datasets.compute_stats.compute_stats`
+        (already ``(C, 1, 1)``). Needed by RL training, which can start without
+        a dataset and supplies stats manually via JSON config.
+        """
+        for key, feature in self.features.items():
+            if feature.type != FeatureType.VISUAL:
+                continue
+            if key not in self._tensor_stats:
+                continue
+            for stat_name, stat_tensor in self._tensor_stats[key].items():
+                if not isinstance(stat_tensor, Tensor) or stat_tensor.ndim != 1:
+                    continue
+                self._tensor_stats[key][stat_name] = stat_tensor.reshape(-1, 1, 1)
 
     def to(
         self, device: torch.device | str | None = None, dtype: torch.dtype | None = None
     ) -> _NormalizationMixin:
         """
-        将处理器的归一化统计信息移动到指定设备。
+        Moves the processor's normalization stats to the specified device.
 
-        参数：
-            device: 目标 PyTorch 设备。
+        Args:
+            device: The target PyTorch device.
 
-        返回：
-            类的实例，允许方法链式调用。
+        Returns:
+            The instance of the class, allowing for method chaining.
         """
         if device is not None:
             self.device = device
         if dtype is not None:
             self.dtype = dtype
         self._tensor_stats = to_tensor(self.stats, device=self.device, dtype=self.dtype)
+        self._reshape_visual_stats()
         return self
 
     def state_dict(self) -> dict[str, Tensor]:
         """
-        将归一化统计信息作为扁平状态字典返回。
+        Returns the normalization statistics as a flat state dictionary.
 
-        在返回之前，所有张量都会移动到 CPU，这是保存状态字典的标准做法。
+        All tensors are moved to the CPU before being returned, which is standard practice
+        for saving state dictionaries.
 
-        返回：
-            扁平字典，从 `'feature_name.stat_name'` 映射到 CPU 上的对应统计信息张量。
+        Returns:
+            A flat dictionary mapping from `'feature_name.stat_name'` to the
+            corresponding statistics tensor on the CPU.
         """
         flat: dict[str, Tensor] = {}
         for key, sub in self._tensor_stats.items():
             for stat_name, tensor in sub.items():
-                flat[f"{key}.{stat_name}"] = tensor.cpu()  # 始终保存到 CPU
+                flat[f"{key}.{stat_name}"] = tensor.cpu()  # Always save to CPU
         return flat
 
     def load_state_dict(self, state: dict[str, Tensor]) -> None:
         """
-        从状态字典加载归一化统计信息。
+        Loads normalization statistics from a state dictionary.
 
-        加载的张量会移动到处理器配置的设备。
+        The loaded tensors are moved to the processor's configured device.
 
-        **统计信息覆盖保护：**
-        如果在构造期间显式提供了统计信息（例如，通过 `DataProcessorPipeline.from_pretrained()`
-        中的 overrides），则会保留这些统计信息并忽略状态字典。这允许用户覆盖归一化统计信息，
-        同时仍然加载模型状态的其余部分。
+        **Stats Override Preservation:**
+        If stats were explicitly provided during construction (e.g., via overrides in
+        `DataProcessorPipeline.from_pretrained()`), they are preserved and the state
+        dictionary is ignored. This allows users to override normalization statistics
+        while still loading the rest of the model state.
 
-        此行为对于用户希望使具有不同统计信息的新数据集适应预训练模型而不重新训练整个模型的
-        场景至关重要。
+        This behavior is crucial for scenarios where users want to adapt a pretrained
+        model to a new dataset with different statistics without retraining the entire
+        model.
 
-        参数：
-            state: 扁平状态字典，键的格式为 `'feature_name.stat_name'`。
+        Args:
+            state: A flat state dictionary with keys in the format
+                   `'feature_name.stat_name'`.
 
-        注意：
-            当由于显式提供而保留统计信息时，仅更新张量表示以确保与当前设备和 dtype 设置一致。
+        Note:
+            When stats are preserved due to explicit provision, only the tensor
+            representation is updated to ensure consistency with the current device
+            and dtype settings.
         """
-        # 如果统计信息在构造期间被显式提供，则保留它们
+        # If stats were explicitly provided during construction, preserve them
         if self._stats_explicitly_provided and self.stats is not None:
-            # 不从 state_dict 加载，保留显式提供的统计信息
-            # 但确保 _tensor_stats 正确初始化
+            # Don't load from state_dict, keep the explicitly provided stats
+            # But ensure _tensor_stats is properly initialized
             self._tensor_stats = to_tensor(self.stats, device=self.device, dtype=self.dtype)  # type: ignore[assignment]
+            self._reshape_visual_stats()
             return
 
-        # 正常行为：从 state_dict 加载统计信息
+        # Normal behavior: load stats from state_dict
         self._tensor_stats.clear()
         for flat_key, tensor in state.items():
             key, stat_name = flat_key.rsplit(".", 1)
-            # 加载到处理器配置的设备。
+            # Load to the processor's configured device.
             self._tensor_stats.setdefault(key, {})[stat_name] = tensor.to(
                 dtype=torch.float32, device=self.device
             )
+        self._reshape_visual_stats()
 
-        # 从张量统计信息重建原始统计信息字典，以与 to() 方法和依赖于 self.stats 的其他函数兼容
+        # Reconstruct the original stats dict from tensor stats for compatibility with to() method
+        # and other functions that rely on self.stats
         self.stats = {}
         for key, tensor_dict in self._tensor_stats.items():
             self.stats[key] = {}
             for stat_name, tensor in tensor_dict.items():
-                # 将张量转换回 python/numpy 格式
+                # Convert tensor back to python/numpy format
                 self.stats[key][stat_name] = from_tensor_to_numpy(tensor)
 
     def get_config(self) -> dict[str, Any]:
         """
-        返回处理器配置的可序列化字典。
+        Returns a serializable dictionary of the processor's configuration.
 
-        此方法在将处理器保存到磁盘时使用，确保其配置可以稍后重建。
+        This method is used when saving the processor to disk, ensuring that its
+        configuration can be reconstructed later.
 
-        返回：
-            包含配置的 JSON 可序列化字典。
+        Returns:
+            A JSON-serializable dictionary containing the configuration.
         """
         config = {
             "eps": self.eps,
@@ -221,37 +263,38 @@ class _NormalizationMixin:
             config["normalize_observation_keys"] = sorted(self.normalize_observation_keys)
         return config
 
-    def _normalize_observation(self, observation: dict[str, Any], inverse: bool) -> dict[str, Tensor]:
+    def _normalize_observation(self, observation: RobotObservation, inverse: bool) -> dict[str, Tensor]:
         """
-        对观测字典中的所有相关特征应用归一化或反归一化。
+        Applies (un)normalization to all relevant features in an observation dictionary.
 
-        参数：
-            observation: 要处理的观测字典。
-            inverse: 如果为 `True`，应用反归一化；否则应用归一化。
+        Args:
+            observation: The observation dictionary to process.
+            inverse: If `True`, applies unnormalization; otherwise, applies normalization.
 
-        返回：
-            包含转换后张量值的新观测字典。
+        Returns:
+            A new observation dictionary with the transformed tensor values.
         """
         new_observation = dict(observation)
         for key, feature in self.features.items():
             if self.normalize_observation_keys is not None and key not in self.normalize_observation_keys:
                 continue
             if feature.type != FeatureType.ACTION and key in new_observation:
-                # 转换为张量但保留原始数据类型以用于适配逻辑
+                # Convert to tensor but preserve original dtype for adaptation logic
                 tensor = torch.as_tensor(new_observation[key])
                 new_observation[key] = self._apply_transform(tensor, key, feature.type, inverse=inverse)
         return new_observation
 
     def _normalize_action(self, action: Tensor, inverse: bool) -> Tensor:
+        # Convert to tensor but preserve original dtype for adaptation logic
         """
-        对动作张量应用归一化或反归一化。
+        Applies (un)normalization to an action tensor.
 
-        参数：
-            action: 要处理的动作张量。
-            inverse: 如果为 `True`，应用反归一化；否则应用归一化。
+        Args:
+            action: The action tensor to process.
+            inverse: If `True`, applies unnormalization; otherwise, applies normalization.
 
-        返回：
-            转换后的动作张量。
+        Returns:
+            The transformed action tensor.
         """
         processed_action = self._apply_transform(action, ACTION, FeatureType.ACTION, inverse=inverse)
         return processed_action
@@ -260,31 +303,42 @@ class _NormalizationMixin:
         self, tensor: Tensor, key: str, feature_type: FeatureType, *, inverse: bool = False
     ) -> Tensor:
         """
-        对张量应用归一化或反归一化转换的核心逻辑。
+        Core logic to apply a normalization or unnormalization transformation to a tensor.
 
-        此方法根据特征类型选择适当的归一化模式（例如，均值/标准差、最小值/最大值），
-        并应用相应的数学运算。
+        This method selects the appropriate normalization mode based on the feature type
+        and applies the corresponding mathematical operation.
 
-        参数：
-            tensor: 要转换的输入张量。
-            key: 与张量对应的特征键。
-            feature_type: 张量的 `FeatureType`。
-            inverse: 如果为 `True`，应用逆转换（反归一化）。
+        Normalization Modes:
+          - MEAN_STD: Centers data around zero with unit variance.
+          - MIN_MAX: Scales data to [-1, 1] range using actual min/max values.
+          - QUANTILES: Scales data to [-1, 1] range using 1st and 99th percentiles (q01/q99).
+          - QUANTILE10: Scales data to [-1, 1] range using 10th and 90th percentiles (q10/q90).
 
-        返回：
-            转换后的张量。
+        Args:
+            tensor: The input tensor to transform.
+            key: The feature key corresponding to the tensor.
+            feature_type: The `FeatureType` of the tensor.
+            inverse: If `True`, applies the inverse transformation (unnormalization).
 
-        异常：
-            ValueError: 如果遇到不支持的归一化模式。
+        Returns:
+            The transformed tensor.
+
+        Raises:
+            ValueError: If an unsupported normalization mode is encountered.
         """
         norm_mode = self.norm_map.get(feature_type, NormalizationMode.IDENTITY)
         if norm_mode == NormalizationMode.IDENTITY or key not in self._tensor_stats:
             return tensor
 
-        if norm_mode not in (NormalizationMode.MEAN_STD, NormalizationMode.MIN_MAX):
+        if norm_mode not in (
+            NormalizationMode.MEAN_STD,
+            NormalizationMode.MIN_MAX,
+            NormalizationMode.QUANTILES,
+            NormalizationMode.QUANTILE10,
+        ):
             raise ValueError(f"Unsupported normalization mode: {norm_mode}")
 
-        # 为了与 Accelerate 兼容：确保统计信息与输入张量在同一设备和数据类型上
+        # For Accelerate compatibility: Ensure stats are on the same device and dtype as the input tensor
         if self._tensor_stats and key in self._tensor_stats:
             first_stat = next(iter(self._tensor_stats[key].values()))
             if first_stat.device != tensor.device or first_stat.dtype != tensor.dtype:
@@ -292,29 +346,78 @@ class _NormalizationMixin:
 
         stats = self._tensor_stats[key]
 
-        if norm_mode == NormalizationMode.MEAN_STD and "mean" in stats and "std" in stats:
+        if norm_mode == NormalizationMode.MEAN_STD:
+            mean = stats.get("mean", None)
+            std = stats.get("std", None)
+            if mean is None or std is None:
+                raise ValueError(
+                    "MEAN_STD normalization mode requires mean and std stats, please update the dataset with the correct stats"
+                )
+
             mean, std = stats["mean"], stats["std"]
-            # 通过添加小的 epsilon 避免除零。
+            # Avoid division by zero by adding a small epsilon.
             denom = std + self.eps
             if inverse:
                 return tensor * std + mean
             return (tensor - mean) / denom
 
-        if norm_mode == NormalizationMode.MIN_MAX and "min" in stats and "max" in stats:
+        if norm_mode == NormalizationMode.MIN_MAX:
+            min_val = stats.get("min", None)
+            max_val = stats.get("max", None)
+            if min_val is None or max_val is None:
+                raise ValueError(
+                    "MIN_MAX normalization mode requires min and max stats, please update the dataset with the correct stats"
+                )
+
             min_val, max_val = stats["min"], stats["max"]
             denom = max_val - min_val
-            # 当 min_val == max_val 时，用小的 epsilon 替换分母以防止除零。
-            # 这始终将等于 min_val 的输入映射到 -1，确保稳定的转换。
+            # When min_val == max_val, substitute the denominator with a small epsilon
+            # to prevent division by zero. This consistently maps an input equal to
+            # min_val to -1, ensuring a stable transformation.
             denom = torch.where(
                 denom == 0, torch.tensor(self.eps, device=tensor.device, dtype=tensor.dtype), denom
             )
             if inverse:
-                # 从 [-1, 1] 映射回 [min, max]
+                # Map from [-1, 1] back to [min, max]
                 return (tensor + 1) / 2 * denom + min_val
-            # 从 [min, max] 映射到 [-1, 1]
+            # Map from [min, max] to [-1, 1]
             return 2 * (tensor - min_val) / denom - 1
 
-        # 如果缺少必要的统计信息，则返回未更改的输入。
+        if norm_mode == NormalizationMode.QUANTILES:
+            q01 = stats.get("q01", None)
+            q99 = stats.get("q99", None)
+            if q01 is None or q99 is None:
+                raise ValueError(
+                    "QUANTILES normalization mode requires q01 and q99 stats, please update the dataset with the correct stats using the `augment_dataset_quantile_stats.py` script"
+                )
+
+            denom = q99 - q01
+            # Avoid division by zero by adding epsilon when quantiles are identical
+            denom = torch.where(
+                denom == 0, torch.tensor(self.eps, device=tensor.device, dtype=tensor.dtype), denom
+            )
+            if inverse:
+                return (tensor + 1.0) * denom / 2.0 + q01
+            return 2.0 * (tensor - q01) / denom - 1.0
+
+        if norm_mode == NormalizationMode.QUANTILE10:
+            q10 = stats.get("q10", None)
+            q90 = stats.get("q90", None)
+            if q10 is None or q90 is None:
+                raise ValueError(
+                    "QUANTILE10 normalization mode requires q10 and q90 stats, please update the dataset with the correct stats using the `augment_dataset_quantile_stats.py` script"
+                )
+
+            denom = q90 - q10
+            # Avoid division by zero by adding epsilon when quantiles are identical
+            denom = torch.where(
+                denom == 0, torch.tensor(self.eps, device=tensor.device, dtype=tensor.dtype), denom
+            )
+            if inverse:
+                return (tensor + 1.0) * denom / 2.0 + q10
+            return 2.0 * (tensor - q10) / denom - 1.0
+
+        # If necessary stats are missing, return input unchanged.
         return tensor
 
 
@@ -322,10 +425,11 @@ class _NormalizationMixin:
 @ProcessorStepRegistry.register(name="normalizer_processor")
 class NormalizerProcessorStep(_NormalizationMixin, ProcessorStep):
     """
-    对转换中的观测和动作应用归一化的处理器步骤。
+    A processor step that applies normalization to observations and actions in a transition.
 
-    此类使用 `_NormalizationMixin` 的逻辑执行正向归一化（例如，缩放数据使其具有零均值和
-    单位方差，或缩放到范围 [-1, 1]）。它通常在将数据馈送到策略之前用于预处理管道。
+    This class uses the logic from `_NormalizationMixin` to perform forward normalization
+    (e.g., scaling data to have zero mean and unit variance, or to the range [-1, 1]).
+    It is typically used in the pre-processing pipeline before feeding data to a policy.
     """
 
     @classmethod
@@ -340,18 +444,18 @@ class NormalizerProcessorStep(_NormalizationMixin, ProcessorStep):
         device: torch.device | str | None = None,
     ) -> NormalizerProcessorStep:
         """
-        使用 `LeRobotDataset` 的统计信息创建 `NormalizerProcessorStep` 实例。
+        Creates a `NormalizerProcessorStep` instance using statistics from a `LeRobotDataset`.
 
-        参数：
-            dataset: 从中提取归一化统计信息的数据集。
-            features: 处理器的特征定义。
-            norm_map: 从特征类型到归一化模式的映射。
-            normalize_observation_keys: 要归一化的观测键的可选集合。
-            eps: 用于数值稳定性的小 epsilon 值。
-            device: 处理器的目标设备。
+        Args:
+            dataset: The dataset from which to extract normalization statistics.
+            features: The feature definition for the processor.
+            norm_map: The mapping from feature types to normalization modes.
+            normalize_observation_keys: An optional set of observation keys to normalize.
+            eps: A small epsilon value for numerical stability.
+            device: The target device for the processor.
 
-        返回：
-            `NormalizerProcessorStep` 的新实例。
+        Returns:
+            A new instance of `NormalizerProcessorStep`.
         """
         return cls(
             features=features,
@@ -365,14 +469,14 @@ class NormalizerProcessorStep(_NormalizationMixin, ProcessorStep):
     def __call__(self, transition: EnvTransition) -> EnvTransition:
         new_transition = transition.copy()
 
-        # 处理观测归一化。
+        # Handle observation normalization.
         observation = new_transition.get(TransitionKey.OBSERVATION)
         if observation is not None:
             new_transition[TransitionKey.OBSERVATION] = self._normalize_observation(
                 observation, inverse=False
             )
 
-        # 处理动作归一化。
+        # Handle action normalization.
         action = new_transition.get(TransitionKey.ACTION)
 
         if action is None:
@@ -395,10 +499,12 @@ class NormalizerProcessorStep(_NormalizationMixin, ProcessorStep):
 @ProcessorStepRegistry.register(name="unnormalizer_processor")
 class UnnormalizerProcessorStep(_NormalizationMixin, ProcessorStep):
     """
-    对观测和动作应用反归一化的处理器步骤。
+    A processor step that applies unnormalization to observations and actions.
 
-    此类反转归一化过程，将数据缩放回其原始范围。它通常在后处理管道中使用，将策略的
-    归一化动作输出转换为机器人或环境可以执行的格式。
+    This class inverts the normalization process, scaling data back to its original
+    range. It is typically used in the post-processing pipeline to convert a policy's
+    normalized action output into a format that can be executed by a robot or
+    environment.
     """
 
     @classmethod
@@ -411,28 +517,28 @@ class UnnormalizerProcessorStep(_NormalizationMixin, ProcessorStep):
         device: torch.device | str | None = None,
     ) -> UnnormalizerProcessorStep:
         """
-        使用 `LeRobotDataset` 的统计信息创建 `UnnormalizerProcessorStep`。
+        Creates an `UnnormalizerProcessorStep` using statistics from a `LeRobotDataset`.
 
-        参数：
-            dataset: 从中提取归一化统计信息的数据集。
-            features: 处理器的特征定义。
-            norm_map: 从特征类型到归一化模式的映射。
-            device: 处理器的目标设备。
+        Args:
+            dataset: The dataset from which to extract normalization statistics.
+            features: The feature definition for the processor.
+            norm_map: The mapping from feature types to normalization modes.
+            device: The target device for the processor.
 
-        返回：
-            `UnnormalizerProcessorStep` 的新实例。
+        Returns:
+            A new instance of `UnnormalizerProcessorStep`.
         """
         return cls(features=features, norm_map=norm_map, stats=dataset.meta.stats, device=device)
 
     def __call__(self, transition: EnvTransition) -> EnvTransition:
         new_transition = transition.copy()
 
-        # 处理观测反归一化。
+        # Handle observation unnormalization.
         observation = new_transition.get(TransitionKey.OBSERVATION)
         if observation is not None:
             new_transition[TransitionKey.OBSERVATION] = self._normalize_observation(observation, inverse=True)
 
-        # 处理动作反归一化。
+        # Handle action unnormalization.
         action = new_transition.get(TransitionKey.ACTION)
 
         if action is None:
@@ -454,23 +560,25 @@ def hotswap_stats(
     policy_processor: PolicyProcessorPipeline, stats: dict[str, dict[str, Any]]
 ) -> PolicyProcessorPipeline:
     """
-    替换现有 `PolicyProcessorPipeline` 实例中的归一化统计信息。
+    Replaces normalization statistics in an existing `PolicyProcessorPipeline` instance.
 
-    此函数创建提供的管道的深拷贝，并更新其包含的任何 `NormalizerProcessorStep` 或
-    `UnnormalizerProcessorStep` 的统计信息。这对于使训练的策略适应具有不同数据分布的
-    新环境或数据集非常有用，而无需重建整个管道。
+    This function creates a deep copy of the provided pipeline and updates the
+    statistics of any `NormalizerProcessorStep` or `UnnormalizerProcessorStep` it
+    contains. This is useful for adapting a trained policy to a new environment or
+    dataset with different data distributions without having to reconstruct the entire
+    pipeline.
 
-    参数：
-        policy_processor: 要修改的策略处理器管道。
-        stats: 要应用的新归一化统计信息字典。
+    Args:
+        policy_processor: The policy processor pipeline to modify.
+        stats: The new dictionary of normalization statistics to apply.
 
-    返回：
-        具有更新统计信息的新 `PolicyProcessorPipeline` 实例。
+    Returns:
+        A new `PolicyProcessorPipeline` instance with the updated statistics.
     """
     rp = deepcopy(policy_processor)
     for step in rp.steps:
         if isinstance(step, _NormalizationMixin):
             step.stats = stats
-            # 在正确的设备上重新初始化 tensor_stats。
+            # Re-initialize tensor_stats on the correct device.
             step._tensor_stats = to_tensor(stats, device=step.device, dtype=step.dtype)  # type: ignore[assignment]
     return rp

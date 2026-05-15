@@ -27,32 +27,32 @@ import torch.distributed as distributed
 import torch.nn.functional as F  # noqa: N812
 from einops import pack, rearrange, reduce, repeat, unpack
 from torch import einsum, nn
-from torch.cuda.amp import autocast
+from torch.amp import autocast
 from torch.optim import Optimizer
 
-from lerobot.policies.vqbet.configuration_vqbet import VQBeTConfig
+from .configuration_vqbet import VQBeTConfig
 
 # ruff: noqa: N806
 
 """
-本文件是 VQ-BeT 的一部分，使用了以下代码库的代码：
+This file is part of a VQ-BeT that utilizes code from the following repositories:
 
-    - Vector Quantize PyTorch 代码采用 MIT 许可证：
-        原始来源：https://github.com/lucidrains/vector-quantize-pytorch
+    - Vector Quantize PyTorch code is licensed under the MIT License:
+        Original source: https://github.com/lucidrains/vector-quantize-pytorch
 
-    - nanoGPT 部分是 Andrej Karpathy 的 nanoGPT 在 PyTorch 中实现的改编版本。
-        原始来源：https://github.com/karpathy/nanoGPT
+    - nanoGPT part is an adaptation of Andrej Karpathy's nanoGPT implementation in PyTorch.
+        Original source: https://github.com/karpathy/nanoGPT
 
-我们还对原始代码进行了一些修改以适应我们的需求。这些更改在下面的代码中有描述。
+We also made some changes to the original code to adapt it to our needs. The changes are described in the code below.
 """
 
 """
-这是 nanoGPT 的一部分，使用了以下代码库的代码：
+This is a part for nanoGPT that utilizes code from the following repository:
 
-    - Andrej Karpathy 的 nanoGPT 在 PyTorch 中的实现。
-        原始来源：https://github.com/karpathy/nanoGPT
+    - Andrej Karpathy's nanoGPT implementation in PyTorch.
+        Original source: https://github.com/karpathy/nanoGPT
 
-    - nanoGPT 代码采用 MIT 许可证：
+    - The nanoGPT code is licensed under the MIT License:
 
     MIT License
 
@@ -76,9 +76,9 @@ from lerobot.policies.vqbet.configuration_vqbet import VQBeTConfig
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE.
 
-    - 我们对原始代码进行了一些修改以适应我们的需求。
+    - We've made some changes to the original code to adapt it to our needs.
 
-        变量名称的更改：
+        Changed variable names:
             - n_head -> gpt_n_head
             - n_embd -> gpt_hidden_dim
             - block_size -> gpt_block_size
@@ -86,9 +86,9 @@ from lerobot.policies.vqbet.configuration_vqbet import VQBeTConfig
 
 
         class GPT(nn.Module):
-            - 删除了未使用的函数 `def generate`、`def estimate_mfu` 和 `def from_pretrained`
-            - 将 `configure_optimizers` 更改为 `def configure_parameters`，使其仅返回模型的参数：我们在训练循环中使用外部优化器。
-            - 在函数 `forward` 中，我们删除了目标损失计算部分，因为它将在训练循环中计算（在通过 bin 预测和 offset 预测头之后）。
+            - removed unused functions `def generate`, `def estimate_mfu`, and `def from_pretrained`
+            - changed the `configure_optimizers` to `def configure_parameters` and made it to return only the parameters of the model: we use an external optimizer in our training loop.
+            - in the function `forward`, we removed target loss calculation parts, since it will be calculated in the training loop (after passing through bin prediction and offset prediction heads).
 
 """
 
@@ -97,14 +97,14 @@ class CausalSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.gpt_hidden_dim % config.gpt_n_head == 0
-        # 对所有头的 key、query、value 投影，但以批处理方式
+        # key, query, value projections for all heads, but in a batch
         self.c_attn = nn.Linear(config.gpt_hidden_dim, 3 * config.gpt_hidden_dim)
-        # 输出投影
+        # output projection
         self.c_proj = nn.Linear(config.gpt_hidden_dim, config.gpt_hidden_dim)
-        # 正则化
+        # regularization
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
-        # 因果掩码以确保注意力仅应用于输入序列的左侧
+        # causal mask to ensure that attention is only applied to the left in the input sequence
         self.register_buffer(
             "bias",
             torch.tril(torch.ones(config.gpt_block_size, config.gpt_block_size)).view(
@@ -119,29 +119,29 @@ class CausalSelfAttention(nn.Module):
             B,
             T,
             C,
-        ) = x.size()  # 批大小，序列长度，嵌入维度（gpt_hidden_dim）
+        ) = x.size()  # batch size, sequence length, embedding dimensionality (gpt_hidden_dim)
 
-        # 计算批中所有头的 query、key、values，并将头向前移动成为批维度
+        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         q, k, v = self.c_attn(x).split(self.gpt_hidden_dim, dim=2)
         k = k.view(B, T, self.gpt_n_head, C // self.gpt_n_head).transpose(1, 2)  # (B, nh, T, hs)
         q = q.view(B, T, self.gpt_n_head, C // self.gpt_n_head).transpose(1, 2)  # (B, nh, T, hs)
         v = v.view(B, T, self.gpt_n_head, C // self.gpt_n_head).transpose(1, 2)  # (B, nh, T, hs)
 
-        # 因果自注意力；自注意力：(B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
         att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float("-inf"))
         att = F.softmax(att, dim=-1)
         att = self.attn_dropout(att)
         y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        y = y.transpose(1, 2).contiguous().view(B, T, C)  # 将所有头的输出并排重新组装
+        y = y.transpose(1, 2).contiguous().view(B, T, C)  # re-assemble all head outputs side by side
 
-        # 输出投影
+        # output projection
         y = self.resid_dropout(self.c_proj(y))
         return y
 
 
 class Block(nn.Module):
-    # GPT 的因果自注意力块
+    # causual self-attention block for GPT
     def __init__(self, config):
         super().__init__()
         self.ln_1 = nn.LayerNorm(config.gpt_hidden_dim)
@@ -162,18 +162,18 @@ class Block(nn.Module):
 
 class GPT(nn.Module):
     """
-    原始注释：
-    GPT 语言模型的完整定义，全部在这个单一文件中。
-    参考：
-    1) OpenAI 发布的官方 GPT-2 TensorFlow 实现：
+    Original comments:
+    Full definition of a GPT Language Model, all of it in this single file.
+    References:
+    1) the official GPT-2 TensorFlow implementation released by OpenAI:
     https://github.com/openai/gpt-2/blob/master/src/model.py
-    2) huggingface/transformers PyTorch 实现：
+    2) huggingface/transformers PyTorch implementation:
     https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
     """
 
     def __init__(self, config: VQBeTConfig):
         """
-        GPT 模型从配置对象获取超参数。更多详情请参阅 configuration_vqbet.py。
+        GPT model gets hyperparameters from a config object. Please refer configuration_vqbet.py for more details.
         """
         super().__init__()
         assert config.gpt_output_dim is not None
@@ -190,13 +190,13 @@ class GPT(nn.Module):
             }
         )
         self.lm_head = nn.Linear(config.gpt_hidden_dim, config.gpt_output_dim, bias=False)
-        # 初始化所有权重，并根据 GPT-2 论文对残差投影应用特殊的缩放初始化
+        # init all weights, and apply a special scaled init to the residual projections, per GPT-2 paper
         self.apply(self._init_weights)
         for pn, p in self.named_parameters():
             if pn.endswith("c_proj.weight"):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * config.gpt_n_layer))
 
-        # 报告参数数量
+        # report number of parameters
         n_params = sum(p.numel() for p in self.parameters())
         print(f"number of parameters: {n_params / 1e6:.2f}M")
 
@@ -207,12 +207,12 @@ class GPT(nn.Module):
             f"Cannot forward sequence of length {t}, block size is only {self.config.gpt_block_size}"
         )
 
-        # 添加到输入嵌入的位置编码
-        pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0)  # 形状 (1, t)
+        # positional encodings that are added to the input embeddings
+        pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0)  # shape (1, t)
 
-        # 前向传播 GPT 模型本身
-        tok_emb = self.transformer.wte(input)  # 形状为 (b, t, gpt_hidden_dim) 的token嵌入
-        pos_emb = self.transformer.wpe(pos)  # 形状为 (1, t, gpt_hidden_dim) 的位置嵌入
+        # forward the GPT model itself
+        tok_emb = self.transformer.wte(input)  # token embeddings of shape (b, t, gpt_hidden_dim)
+        pos_emb = self.transformer.wpe(pos)  # position embeddings of shape (1, t, gpt_hidden_dim)
         x = self.transformer.drop(tok_emb + pos_emb)
         for block in self.transformer.h:
             x = block(x)
@@ -231,67 +231,55 @@ class GPT(nn.Module):
             torch.nn.init.zeros_(module.bias)
             torch.nn.init.ones_(module.weight)
 
-    def crop_block_size(self, gpt_block_size):
-        # 如果需要，进行模型手术以减小块大小
-        # 例如，我们可能会加载 GPT2 预训练模型检查点（块大小为 1024）
-        # 但希望为一些更小、更简单的模型使用更小的块大小
-        assert gpt_block_size <= self.config.gpt_block_size
-        self.config.gpt_block_size = gpt_block_size
-        self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:gpt_block_size])
-        for block in self.transformer.h:
-            block.attn.bias = block.attn.bias[:, :, :gpt_block_size, :gpt_block_size]
-
     def configure_parameters(self):
         """
-        这个冗长的函数不幸地只是在做一件非常简单的事情，并且非常保守：
-        我们将模型的所有参数分为两组：那些将经历权重衰减正则化的参数和那些不会的参数
-        （偏置以及 layernorm/embedding 权重）。
+        This long function is unfortunately doing something very simple and is being very defensive:
+        We are separating out all parameters of the model into two buckets: those that will experience
+        weight decay for regularization and those that won't (biases, and layernorm/embedding weights).
         """
 
-        # 将所有参数分为将会和不会经历正则化权重衰减的参数
+        # separate out all parameters to those that will and won't experience regularizing weight decay
         decay = set()
         no_decay = set()
         whitelist_weight_modules = (torch.nn.Linear,)
         blacklist_weight_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
         for mn, m in self.named_modules():
             for pn, _p in m.named_parameters():
-                fpn = f"{mn}.{pn}" if mn else pn  # 完整的参数名称
+                fpn = f"{mn}.{pn}" if mn else pn  # full param name
                 if pn.endswith("bias"):
-                    # 所有偏置不会被衰减
+                    # all biases will not be decayed
                     no_decay.add(fpn)
                 elif pn.endswith("weight") and isinstance(m, whitelist_weight_modules):
-                    # 白名单模块的权重将被权重衰减
+                    # weights of whitelist modules will be weight decayed
                     decay.add(fpn)
                 elif pn.endswith("weight") and isinstance(m, blacklist_weight_modules):
-                    # 黑名单模块的权重不会被权重衰减
+                    # weights of blacklist modules will NOT be weight decayed
                     no_decay.add(fpn)
 
-        # 验证我们考虑了每个参数
+        # validate that we considered every parameter
         param_dict = dict(self.named_parameters())
         inter_params = decay & no_decay
         union_params = decay | no_decay
-        assert len(inter_params) == 0, "parameters {} made it into both decay/no_decay sets!".format(
-            str(inter_params)
+        assert len(inter_params) == 0, (
+            f"parameters {str(inter_params)} made it into both decay/no_decay sets!"
         )
         assert len(param_dict.keys() - union_params) == 0, (
-            "parameters {} were not separated into either decay/no_decay set!".format(
-                str(param_dict.keys() - union_params),
-            )
+            f"parameters {str(param_dict.keys() - union_params)} were not separated into either decay/no_decay set!"
         )
 
         decay = [param_dict[pn] for pn in sorted(decay)]
         no_decay = [param_dict[pn] for pn in sorted(no_decay)]
-        # 分别返回需要权重衰减的参数和不需要的参数。
+        # return the parameters that require weight decay, and the parameters that don't separately.
         return decay, no_decay
 
 
 """
-本文件是残差向量量化的一部分，使用了以下代码库的代码：
+This file is a part for Residual Vector Quantization that utilizes code from the following repository:
 
-    - Phil Wang 的 vector-quantize-pytorch 在 PyTorch 中的实现。
-        原始来源：https://github.com/lucidrains/vector-quantize-pytorch
+    - Phil Wang's vector-quantize-pytorch implementation in PyTorch.
+        Original source: https://github.com/lucidrains/vector-quantize-pytorch
 
-    - vector-quantize-pytorch 代码采用 MIT 许可证：
+    - The vector-quantize-pytorch code is licensed under the MIT License:
 
         MIT License
 
@@ -315,37 +303,37 @@ class GPT(nn.Module):
         OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
         SOFTWARE.
 
-    - 我们对原始代码进行了一些修改以适应我们的需求。
+    - We've made some changes to the original code to adapt it to our needs.
 
         class ResidualVQ(nn.Module):
-            - 在 __init__ 方法中添加了 `self.register_buffer('freeze_codebook', torch.tensor(False))`：
-                这使用户能够保存码本是否被冻结的指示器。
-            - 更改了函数名称 `get_codes_from_indices` → `get_codebook_vector_from_indices`：
-                这是为了使函数名称更具描述性。
+            - added `self.register_buffer('freeze_codebook', torch.tensor(False))` to the __init__ method:
+                This enables the user to save an indicator whether the codebook is frozen or not.
+            - changed the name of function `get_codes_from_indices` → `get_codebook_vector_from_indices`:
+                This is to make the function name more descriptive.
 
         class VectorQuantize(nn.Module):
-            - 从 __init__ 方法中删除了 `use_cosine_sim` 和 `layernorm_after_project_in` 参数：
-                这些参数在代码中未使用。
-            - 更改了函数名称 `get_codes_from_indices` → `get_codebook_vector_from_indices`：
-                这是为了使函数名称更具描述性。
+            - removed the `use_cosine_sim` and `layernorm_after_project_in` parameters from the __init__ method:
+                These parameters are not used in the code.
+            - changed the name of function `get_codes_from_indices` → `get_codebook_vector_from_indices`:
+                This is to make the function name more descriptive.
 
 """
 
 
 class ResidualVQ(nn.Module):
     """
-    残差 VQ 由多个 VectorQuantize 层组成。
+    Residual VQ is composed of multiple VectorQuantize layers.
 
-    遵循 https://huggingface.co/papers/2107.03312 中的算法 1。
-        "残差向量量化器（也称为多阶段向量量化器 [36]）按如下方式级联 Nq 层 VQ。未量化的输入向量
-        通过第一个 VQ，并计算量化残差。然后通过额外的 Nq-1 个向量量化器序列迭代量化残差，
-        如算法 1 中所述。"
+    Follows Algorithm 1. in https://huggingface.co/papers/2107.03312
+        "Residual Vector Quantizer (a.k.a. multi-stage vector quantizer [36]) cascades Nq layers of VQ as follows. The unquantized input vector is
+        passed through a first VQ and quantization residuals are computed. The residuals are then iteratively quantized by a sequence of additional
+        Nq -1 vector quantizers, as described in Algorithm 1."
 
 
-    self.project_in: 用于将输入投影到码本维度的函数
-    self.project_out: 用于将码本维度投影到输出维度的函数
-    self.layers: VectorQuantize 层的 nn.ModuleList，包含论文中描述的 Nq 层 VQ。
-    self.freeze_codebook: 用于保存码本是否被冻结的指示器的缓冲区。VQ-BeT 将检查此项以确定是否更新码本。
+    self.project_in: function for projecting input to codebook dimension
+    self.project_out: function for projecting codebook dimension to output dimension
+    self.layers: nn.ModuleList of VectorQuantize layers that contains Nq layers of VQ as described in the paper.
+    self.freeze_codebook: buffer to save an indicator whether the codebook is frozen or not. VQ-BeT will check this to determine whether to update the codebook or not.
     """
 
     def __init__(
@@ -389,7 +377,7 @@ class ResidualVQ(nn.Module):
 
         self.register_buffer("freeze_codebook", torch.tensor(False))
         self.quantize_dropout_cutoff_index = quantize_dropout_cutoff_index
-        self.quantize_dropout_multiple_of = quantize_dropout_multiple_of  # encodec 论文提出结构化 dropout，认为这设置为 4
+        self.quantize_dropout_multiple_of = quantize_dropout_multiple_of  # encodec paper proposes structured dropout, believe this was set to 4
 
         if not shared_codebook:
             return
@@ -408,41 +396,41 @@ class ResidualVQ(nn.Module):
         return codebooks
 
     def get_codebook_vector_from_indices(self, indices):
-        # 此函数将返回对应于索引的所有层码本中的代码
+        # this function will return the codes from all codebooks across layers corresponding to the indices
         batch, quantize_dim = indices.shape[0], indices.shape[-1]
 
-        # 也可能接收形状为 'b h w q' 的索引（accept_image_fmap）
+        # may also receive indices in the shape of 'b h w q' (accept_image_fmap)
 
         indices, ps = pack([indices], "b * q")
 
-        # 由于量化 dropout，可以传入粗糙的索引
-        # 并且网络应该能够重建
+        # because of quantize dropout, one can pass in indices that are coarse
+        # and the network should be able to reconstruct
 
         if quantize_dim < self.num_quantizers:
             assert self.quantize_dropout > 0.0, (
-                "如果希望从具有较少精细量化的信号重建，量化 dropout 必须大于 0"
+                "quantize dropout must be greater than 0 if you wish to reconstruct from a signal with less fine quantizations"
             )
             indices = F.pad(indices, (0, self.num_quantizers - quantize_dim), value=-1)
 
-        # 准备收集
+        # get ready for gathering
 
         codebooks = repeat(self.codebooks, "q c d -> q b c d", b=batch)
         gather_indices = repeat(indices, "b n q -> q b n d", d=codebooks.shape[-1])
 
-        # 处理量化器 dropout
+        # take care of quantizer dropout
 
         mask = gather_indices == -1.0
         gather_indices = gather_indices.masked_fill(
             mask, 0
-        )  # 让它获取一个虚拟代码，稍后将被掩码
+        )  # have it fetch a dummy code to be masked out later
 
-        all_codes = codebooks.gather(2, gather_indices)  # 收集所有代码
+        all_codes = codebooks.gather(2, gather_indices)  # gather all codes
 
-        # 掩码掉任何被 dropout 的代码
+        # mask out any codes that were dropout-ed
 
         all_codes = all_codes.masked_fill(mask, 0.0)
 
-        # 如果（accept_image_fmap = True）则返回形状 (quantize, batch, height, width, dimension)
+        # if (accept_image_fmap = True) then return shape (quantize, batch, height, width, dimension)
 
         (all_codes,) = unpack(all_codes, ps, "q b * d")
 
@@ -450,9 +438,9 @@ class ResidualVQ(nn.Module):
 
     def forward(self, x, indices=None, return_all_codes=False, sample_codebook_temp=None):
         """
-        对于给定的输入张量 x，此函数将返回量化输出、量化输出的索引和损失。
-        首先，输入张量 x 被投影到码本维度。然后，输入张量 x 通过 Nq 层 VectorQuantize。
-        每层的残差值被馈送到下一层。
+        For given input tensor x, this function will return the quantized output, the indices of the quantized output, and the loss.
+        First, the input tensor x is projected to the codebook dimension. Then, the input tensor x is passed through Nq layers of VectorQuantize.
+        The residual value of each layer is fed to the next layer.
         """
         num_quant, quant_dropout_multiple_of, return_loss, device = (
             self.num_quantizers,
@@ -473,14 +461,14 @@ class ResidualVQ(nn.Module):
 
         if return_loss:
             assert not torch.any(indices == -1), (
-                "某些残差 vq 索引被 dropout。请使用模块处于 eval 模式时派生的索引来派生交叉熵损失"
+                "some of the residual vq indices were dropped out. please use indices derived when the module is in eval mode to derive cross entropy loss"
             )
             ce_losses = []
 
         should_quantize_dropout = self.training and self.quantize_dropout and not return_loss
 
-        # 在该层索引处 dropout 进一步的残差量化
-        # 同时准备空索引和损失
+        # sample a layer index at which to dropout further residual quantization
+        # also prepare null indices and loss
 
         if should_quantize_dropout:
             rand_quantize_dropout_index = randrange(self.quantize_dropout_cutoff_index, num_quant)
@@ -496,7 +484,7 @@ class ResidualVQ(nn.Module):
             null_indices = torch.full(null_indices_shape, -1.0, device=device, dtype=torch.long)
             null_loss = torch.full((1,), 0.0, device=device, dtype=x.dtype)
 
-        # 遍历各层
+        # go through the layers
 
         for quantizer_index, layer in enumerate(self.layers):
             if should_quantize_dropout and quantizer_index > rand_quantize_dropout_index:
@@ -528,26 +516,26 @@ class ResidualVQ(nn.Module):
             all_indices.append(embed_indices)
             all_losses.append(loss)
 
-        # 如有需要，进行输出投影
+        # project out, if needed
 
         quantized_out = self.project_out(quantized_out)
 
-        # 是否提前返回交叉熵损失
+        # whether to early return the cross entropy loss
 
         if return_loss:
             return quantized_out, sum(ce_losses)
 
-        # 堆叠所有损失和索引
+        # stack all losses and indices
 
         all_losses, all_indices = map(partial(torch.stack, dim=-1), (all_losses, all_indices))
 
         ret = (quantized_out, all_indices, all_losses)
 
         if return_all_codes:
-            # 是否返回跨层所有码本的所有代码
+            # whether to return all codes from all codebooks across layers
             all_codes = self.get_codebook_vector_from_indices(all_indices)
 
-            # 将以形状 (quantizer, batch, sequence length, codebook dimension) 返回所有代码
+            # will return all codes in shape (quantizer, batch, sequence length, codebook dimension)
             ret = (*ret, all_codes)
 
         return ret
@@ -577,18 +565,18 @@ class VectorQuantize(nn.Module):
         stochastic_sample_codes=False,
         sample_codebook_temp=1.0,
         straight_through=False,
-        reinmax=False,  # 使用 reinmax 改进直通，假设直通在所有情况下都有帮助
+        reinmax=False,  # using reinmax for improved straight-through, assuming straight through helps at all
         sync_codebook=None,
         sync_affine_param=False,
         ema_update=True,
         learnable_codebook=False,
         in_place_codebook_optimizer: Callable[
             ..., Optimizer
-        ] = None,  # 如果使用 learnable_codebook，用于更新码本嵌入的优化器
+        ] = None,  # Optimizer used to update the codebook embedding if using learnable_codebook
         affine_param=False,
         affine_param_batch_decay=0.99,
         affine_param_codebook_decay=0.9,
-        sync_update_v=0.0,  # 控制同步更新规则 (21) 的乐观与悲观更新的 v 参数 https://minyoungg.github.io/vqtorch/assets/draft_050523.pdf
+        sync_update_v=0.0,  # the v that controls optimistic vs pessimistic update for synchronous update rule (21) https://minyoungg.github.io/vqtorch/assets/draft_050523.pdf
     ):
         super().__init__()
         self.dim = dim
@@ -604,7 +592,7 @@ class VectorQuantize(nn.Module):
 
         self.eps = eps
         self.commitment_weight = commitment_weight
-        self.commitment_use_cross_entropy_loss = commitment_use_cross_entropy_loss  # 是否使用交叉熵损失到码本作为承诺损失
+        self.commitment_use_cross_entropy_loss = commitment_use_cross_entropy_loss  # whether to use cross entropy loss to codebook as commitment loss
 
         self.learnable_codebook = learnable_codebook
 
@@ -614,10 +602,10 @@ class VectorQuantize(nn.Module):
         self.orthogonal_reg_active_codes_only = orthogonal_reg_active_codes_only
         self.orthogonal_reg_max_codes = orthogonal_reg_max_codes
 
-        assert not (ema_update and learnable_codebook), "可学习码本与 EMA 更新不兼容"
+        assert not (ema_update and learnable_codebook), "learnable codebook not compatible with EMA update"
 
         assert 0 <= sync_update_v <= 1.0
-        assert not (sync_update_v > 0.0 and not learnable_codebook), "必须打开可学习码本"
+        assert not (sync_update_v > 0.0 and not learnable_codebook), "learnable codebook must be turned on"
 
         self.sync_update_v = sync_update_v
 
@@ -733,7 +721,7 @@ class VectorQuantize(nn.Module):
         need_transpose = not self.channel_last and not self.accept_image_fmap
         should_inplace_optimize = self.in_place_codebook_optimizer is not None
 
-        # 重排输入
+        # rearrange inputs
 
         if self.accept_image_fmap:
             height, width = x.shape[-2:]
@@ -742,21 +730,21 @@ class VectorQuantize(nn.Module):
         if need_transpose:
             x = rearrange(x, "b d n -> b n d")
 
-        # 投影输入
+        # project input
 
         x = self.project_in(x)
 
-        # 处理多头分离码本
+        # handle multi-headed separate codebooks
 
         if is_multiheaded:
             ein_rhs_eq = "h b n d" if self.separate_codebook_per_head else "1 (b h) n d"
             x = rearrange(x, f"b n (h d) -> {ein_rhs_eq}", h=heads)
 
-        # 用于余弦相似度的 l2 范数，否则为恒等
+        # l2norm for cosine sim, otherwise identity
 
         x = self._codebook.transform_input(x)
 
-        # 码本前向 kwargs
+        # codebook forward kwargs
 
         codebook_forward_kwargs = {
             "sample_codebook_temp": sample_codebook_temp,
@@ -764,11 +752,11 @@ class VectorQuantize(nn.Module):
             "freeze_codebook": freeze_codebook,
         }
 
-        # 量化
+        # quantize
 
         quantize, embed_ind, distances = self._codebook(x, **codebook_forward_kwargs)
 
-        # 一步就地更新
+        # one step in-place update
 
         if should_inplace_optimize and self.training and not freeze_codebook:
             if mask is not None:
@@ -792,26 +780,26 @@ class VectorQuantize(nn.Module):
             self.in_place_codebook_optimizer.step()
             self.in_place_codebook_optimizer.zero_grad()
 
-            # 再次量化
+            # quantize again
 
             quantize, embed_ind, distances = self._codebook(x, **codebook_forward_kwargs)
 
         if self.training:
-            # 确定用于承诺损失的代码
+            # determine code to use for commitment loss
             maybe_detach = torch.detach if not self.learnable_codebook or freeze_codebook else identity
 
             commit_quantize = maybe_detach(quantize)
 
-            # 直通
+            # straight through
 
             quantize = x + (quantize - x).detach()
 
             if self.sync_update_v > 0.0:
-                # https://minyoungg.github.io/vqtorch/assets/draft_050523.pdf 中的 (21)
+                # (21) in https://minyoungg.github.io/vqtorch/assets/draft_050523.pdf
                 quantize = quantize + self.sync_update_v * (quantize - quantize.detach())
 
-        # 用于计算距离矩阵的交叉熵损失的函数
-        # 用于 (1) naturalspeech2 训练残差 vq 潜变量接近正确代码 和 (2) 基于交叉熵的承诺损失
+        # function for calculating cross entropy loss to distance matrix
+        # used for (1) naturalspeech2 training residual vq latents to be close to the correct codes and (2) cross-entropy based commitment loss
 
         def calculate_ce_loss(codes):
             if not is_multiheaded:
@@ -827,12 +815,12 @@ class VectorQuantize(nn.Module):
 
             return ce_loss
 
-        # 如果返回传入代码的交叉熵损失
+        # if returning cross entropy loss on codes that were passed in
 
         if return_loss:
             return quantize, calculate_ce_loss(indices)
 
-        # 转换嵌入索引
+        # transform embedding indices
 
         if is_multiheaded:
             if self.separate_codebook_per_head:
@@ -846,7 +834,7 @@ class VectorQuantize(nn.Module):
         if only_one:
             embed_ind = rearrange(embed_ind, "b 1 -> b")
 
-        # 聚合损失
+        # aggregate loss
 
         loss = torch.tensor([0.0], device=device, requires_grad=self.training)
 
@@ -863,7 +851,7 @@ class VectorQuantize(nn.Module):
                     commit_loss = calculate_ce_loss(embed_ind)
                 else:
                     if mask is not None:
-                        # 使用可变长度序列
+                        # with variable lengthed sequences
                         commit_loss = F.mse_loss(commit_quantize, x, reduction="none")
 
                         loss_mask = mask
@@ -884,11 +872,11 @@ class VectorQuantize(nn.Module):
             if self.has_codebook_orthogonal_loss:
                 codebook = self._codebook.embed
 
-                # 仅计算此批次激活代码的正交损失
+                # only calculate orthogonal loss for the activated codes for this batch
 
                 if self.orthogonal_reg_active_codes_only:
                     assert not (is_multiheaded and self.separate_codebook_per_head), (
-                        "仅针对激活代码的正交正则化尚不兼容多头分离码本"
+                        "orthogonal regularization for only active codes not compatible with multi-headed with separate codebooks yet"
                     )
                     unique_code_ids = torch.unique(embed_ind)
                     codebook = codebook[:, unique_code_ids]
@@ -902,7 +890,7 @@ class VectorQuantize(nn.Module):
                 orthogonal_reg_loss = orthogonal_loss_fn(codebook)
                 loss = loss + orthogonal_reg_loss * self.orthogonal_reg_weight
 
-        # 处理多头量化嵌入
+        # handle multi-headed quantized embeddings
 
         if is_multiheaded:
             if self.separate_codebook_per_head:
@@ -910,11 +898,11 @@ class VectorQuantize(nn.Module):
             else:
                 quantize = rearrange(quantize, "1 (b h) n d -> b n (h d)", h=heads)
 
-        # 输出投影
+        # project out
 
         quantize = self.project_out(quantize)
 
-        # 重排量化嵌入
+        # rearrange quantized embeddings
 
         if need_transpose:
             quantize = rearrange(quantize, "b n d -> b d n")
@@ -925,7 +913,7 @@ class VectorQuantize(nn.Module):
         if only_one:
             quantize = rearrange(quantize, "b 1 d -> b d")
 
-        # 如果掩码，仅返回掩码为 True 的量化结果
+        # if masking, only return quantized for where mask has True
 
         if mask is not None:
             quantize = torch.where(rearrange(mask, "... -> ... 1"), quantize, orig_input)
@@ -1000,14 +988,14 @@ def gumbel_sample(
     one_hot = F.one_hot(ind, size).type(dtype)
 
     assert not (reinmax and not straight_through), (
-        "reinmax 只能在使用直通 gumbel softmax 时打开"
+        "reinmax can only be turned on if using straight through gumbel softmax"
     )
 
     if not straight_through or temperature <= 0.0 or not training:
         return ind, one_hot
 
-    # 使用 reinmax 获得更好的二阶精度 - https://huggingface.co/papers/2304.08612
-    # 算法 2
+    # use reinmax for better second-order accuracy - https://huggingface.co/papers/2304.08612
+    # algorithm 2
 
     if reinmax:
         π0 = logits.softmax(dim=dim)
@@ -1156,7 +1144,7 @@ def batched_embedding(indices, embeds):
 
 
 def orthogonal_loss_fn(t):
-    # 来自 https://huggingface.co/papers/2112.00384 的方程 (2)
+    # eq (2) from https://huggingface.co/papers/2112.00384
     h, n = t.shape[:2]
     normed_codes = F.normalize(t, p=2, dim=-1)
     cosine_sim = einsum("h i d, h j d -> h i j", normed_codes, normed_codes)
@@ -1210,7 +1198,7 @@ class EuclideanCodebook(nn.Module):
         self.sample_codebook_temp = sample_codebook_temp
 
         assert not (use_ddp and num_codebooks > 1 and kmeans_init), (
-            "kmeans 初始化目前在分布式环境中与多个码本不兼容"
+            "kmeans init is not compatible with multiple codebooks in distributed environment for now"
         )
 
         self.sample_fn = sample_vectors_distributed if use_ddp and sync_kmeans else batched_sample_vectors
@@ -1227,7 +1215,7 @@ class EuclideanCodebook(nn.Module):
         else:
             self.register_buffer("embed", embed)
 
-        # 仿射相关参数
+        # affine related params
 
         self.affine_param = affine_param
         self.sync_affine_param = sync_affine_param
@@ -1293,7 +1281,7 @@ class EuclideanCodebook(nn.Module):
 
         var_fn = partial(torch.var, unbiased=False)
 
-        # 计算码本均值和方差
+        # calculate codebook mean and variance
 
         embed = rearrange(embed, "h ... d -> h (...) d")
 
@@ -1309,7 +1297,7 @@ class EuclideanCodebook(nn.Module):
                 self.affine_param_codebook_decay,
             )
 
-        # 准备批量数据，取决于是否有掩码
+        # prepare batch data, which depends on whether it has masking
 
         data = rearrange(data, "h ... d -> h (...) d")
 
@@ -1317,7 +1305,7 @@ class EuclideanCodebook(nn.Module):
             c = data.shape[0]
             data = rearrange(data[mask], "(c n) d -> c n d", c=c)
 
-        # 计算批量均值和方差
+        # calculate batch mean and variance
 
         if not self.sync_affine_param:
             self.update_with_decay(
@@ -1334,12 +1322,12 @@ class EuclideanCodebook(nn.Module):
 
         num_vectors, device, dtype = data.shape[-2], data.device, data.dtype
 
-        # 向量数量，用于分母
+        # number of vectors, for denominator
 
         num_vectors = torch.tensor([num_vectors], device=device, dtype=dtype)
         distributed.all_reduce(num_vectors)
 
-        # 计算分布式均值
+        # calculate distributed mean
 
         batch_sum = reduce(data, "h n d -> h 1 d", "sum")
         distributed.all_reduce(batch_sum)
@@ -1347,7 +1335,7 @@ class EuclideanCodebook(nn.Module):
 
         self.update_with_decay("batch_mean", batch_mean, self.affine_param_batch_decay)
 
-        # 计算分布式方差
+        # calculate distributed variance
 
         variance_number = reduce((data - batch_mean) ** 2, "h n d -> h 1 d", "sum")
         distributed.all_reduce(variance_number)
@@ -1382,7 +1370,7 @@ class EuclideanCodebook(nn.Module):
         batch_samples = rearrange(batch_samples, "h ... d -> h (...) d")
         self.replace(batch_samples, batch_mask=expired_codes)
 
-    @autocast(enabled=False)
+    @autocast("cuda", enabled=False)
     def forward(self, x, sample_codebook_temp=None, mask=None, freeze_codebook=False):
         needs_codebook_dim = x.ndim < 4
         sample_codebook_temp = (

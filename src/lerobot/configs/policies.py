@@ -14,91 +14,105 @@
 import abc
 import builtins
 import json
-import logging
 import os
 import tempfile
 from dataclasses import dataclass, field
+from logging import getLogger
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import draccus
 from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import CONFIG_NAME
 from huggingface_hub.errors import HfHubHTTPError
 
-from lerobot.configs.types import FeatureType, PolicyFeature
-from lerobot.optim.optimizers import OptimizerConfig
-from lerobot.optim.schedulers import LRSchedulerConfig
+from lerobot.optim import LRSchedulerConfig, OptimizerConfig
 from lerobot.utils.constants import ACTION, OBS_STATE
+from lerobot.utils.device_utils import auto_select_torch_device, is_amp_available, is_torch_device_available
 from lerobot.utils.hub import HubMixin
-from lerobot.utils.utils import auto_select_torch_device, is_amp_available, is_torch_device_available
+
+from .types import FeatureType, PolicyFeature
 
 T = TypeVar("T", bound="PreTrainedConfig")
+logger = getLogger(__name__)
 
 
 @dataclass
-class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):
+class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):  # type: ignore[misc,name-defined] #TODO: draccus issue
     """
-    策略模型的基础配置类。
+    Base configuration class for policy models.
 
-    参数:
-        n_obs_steps: 传递给策略的观察值所对应的环境步数(包括当前步和之前的额外步)。
-        input_shapes: 定义策略输入数据形状的字典。
-        output_shapes: 定义策略输出数据形状的字典。
-        input_normalization_modes: 键表示模态,值指定要应用的归一化模式的字典。
-        output_normalization_modes: 类似于 `input_normalization_modes` 的字典,但用于反归一化到原始尺度。
+    Args:
+        n_obs_steps: Number of environment steps worth of observations to pass to the policy (takes the
+            current step and additional steps going back).
+        input_features: A dictionary defining the PolicyFeature of the input data for the policy. The key represents
+            the input data name, and the value is PolicyFeature, which consists of FeatureType and shape attributes.
+        output_features: A dictionary defining the PolicyFeature of the output data for the policy. The key represents
+            the output data name, and the value is PolicyFeature, which consists of FeatureType and shape attributes.
+        normalization_mapping: A dictionary that maps from a str value of FeatureType (e.g., "STATE", "VISUAL") to
+            a corresponding NormalizationMode (e.g., NormalizationMode.MIN_MAX)
     """
 
     n_obs_steps: int = 1
 
-    input_features: dict[str, PolicyFeature] = field(default_factory=dict)
-    output_features: dict[str, PolicyFeature] = field(default_factory=dict)
+    # `input_features` can be set to None/null in order to infer those values from the dataset.
+    input_features: dict[str, PolicyFeature] | None = field(default_factory=dict)
+    output_features: dict[str, PolicyFeature] | None = field(default_factory=dict)
 
-    device: str | None = None  # cuda | cpu | mp
-    # `use_amp` 决定是否在训练和评估中使用自动混合精度 (AMP)。使用 AMP 时,会使用自动梯度缩放。
+    device: str | None = None  # e.g. "cuda", "cuda:0", "cpu", or "mps"
+    # `use_amp` determines whether to use Automatic Mixed Precision (AMP) for training and evaluation. With AMP,
+    # automatic gradient scaling is used.
     use_amp: bool = False
 
-    push_to_hub: bool = True
+    # Whether the policy employed PEFT for training.
+    use_peft: bool = False
+
+    push_to_hub: bool = True  # type: ignore[assignment] # TODO: use a different name to avoid override
     repo_id: str | None = None
 
-    # 在 Hugging Face hub 上传到私有仓库。
+    # Upload on private repository on the Hugging Face hub.
     private: bool | None = None
-    # 为您在 hub 上的策略添加标签。
+    # Add tags to your policy on the hub.
     tags: list[str] | None = None
-    # 为您在 hub 上的策略添加许可证。
+    # Add tags to your policy on the hub.
     license: str | None = None
+    # Either the repo ID of a model hosted on the Hub or a path to a directory containing weights
+    # saved using `Policy.save_pretrained`. If not provided, the policy is initialized from scratch.
+    pretrained_path: Path | None = None
 
-    def __post_init__(self):
-        self.pretrained_path = None
+    def __post_init__(self) -> None:
         if not self.device or not is_torch_device_available(self.device):
             auto_device = auto_select_torch_device()
-            logging.warning(f"设备 '{self.device}' 不可用。切换到 '{auto_device}'。")
+            logger.warning(f"Device '{self.device}' is not available. Switching to '{auto_device}'.")
             self.device = auto_device.type
 
-        # 如有必要,自动停用 AMP
+        # Automatically deactivate AMP if necessary
         if self.use_amp and not is_amp_available(self.device):
-            logging.warning(
-                f"自动混合精度 (amp) 在设备 '{self.device}' 上不可用。正在停用 AMP。"
+            logger.warning(
+                f"Automatic Mixed Precision (amp) is not available on device '{self.device}'. Deactivating AMP."
             )
             self.use_amp = False
 
     @property
     def type(self) -> str:
-        return self.get_choice_name(self.__class__)
+        choice_name = self.get_choice_name(self.__class__)
+        if not isinstance(choice_name, str):
+            raise TypeError(f"Expected string from get_choice_name, got {type(choice_name)}")
+        return choice_name
 
     @property
     @abc.abstractmethod
-    def observation_delta_indices(self) -> list | None:
+    def observation_delta_indices(self) -> list | None:  # type: ignore[type-arg] #TODO: No implementation
         raise NotImplementedError
 
     @property
     @abc.abstractmethod
-    def action_delta_indices(self) -> list | None:
+    def action_delta_indices(self) -> list | None:  # type: ignore[type-arg]    #TODO: No implementation
         raise NotImplementedError
 
     @property
     @abc.abstractmethod
-    def reward_delta_indices(self) -> list | None:
+    def reward_delta_indices(self) -> list | None:  # type: ignore[type-arg]    #TODO: No implementation
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -115,6 +129,8 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):
 
     @property
     def robot_state_feature(self) -> PolicyFeature | None:
+        if not self.input_features:
+            return None
         for ft_name, ft in self.input_features.items():
             if ft.type is FeatureType.STATE and ft_name == OBS_STATE:
                 return ft
@@ -122,6 +138,8 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):
 
     @property
     def env_state_feature(self) -> PolicyFeature | None:
+        if not self.input_features:
+            return None
         for _, ft in self.input_features.items():
             if ft.type is FeatureType.ENV:
                 return ft
@@ -129,10 +147,14 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):
 
     @property
     def image_features(self) -> dict[str, PolicyFeature]:
+        if not self.input_features:
+            return {}
         return {key: ft for key, ft in self.input_features.items() if ft.type is FeatureType.VISUAL}
 
     @property
     def action_feature(self) -> PolicyFeature | None:
+        if not self.output_features:
+            return None
         for ft_name, ft in self.output_features.items():
             if ft.type is FeatureType.ACTION and ft_name == ACTION:
                 return ft
@@ -148,13 +170,13 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):
         pretrained_name_or_path: str | Path,
         *,
         force_download: bool = False,
-        resume_download: bool = None,
-        proxies: dict | None = None,
+        resume_download: bool | None = None,
+        proxies: dict[Any, Any] | None = None,
         token: str | bool | None = None,
         cache_dir: str | Path | None = None,
         local_files_only: bool = False,
         revision: str | None = None,
-        **policy_kwargs,
+        **policy_kwargs: Any,
     ) -> T:
         model_id = str(pretrained_name_or_path)
         config_file: str | None = None
@@ -162,7 +184,7 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):
             if CONFIG_NAME in os.listdir(model_id):
                 config_file = os.path.join(model_id, CONFIG_NAME)
             else:
-                print(f"{CONFIG_NAME} not found in {Path(model_id).resolve()}")
+                logger.error(f"{CONFIG_NAME} not found in {Path(model_id).resolve()}")
         else:
             try:
                 config_file = hf_hub_download(
@@ -181,11 +203,15 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):
                     f"{CONFIG_NAME} not found on the HuggingFace Hub in {model_id}"
                 ) from e
 
-        # HACK: 解析原始配置以获取配置子类,以便我们可以应用 cli 覆盖。
-        # 这非常不美观,理想情况下我们希望能够使用 draccus 原生支持这一点
-        # 类似于 --policy.path (除了 --policy.type 之外)
+        # HACK: Parse the original config to get the config subclass, so that we can
+        # apply cli overrides.
+        # This is very ugly, ideally we'd like to be able to do that natively with draccus
+        # something like --policy.path (in addition to --policy.type)
         with draccus.config_type("json"):
             orig_config = draccus.parse(cls, config_file, args=[])
+
+        if config_file is None:
+            raise FileNotFoundError(f"{CONFIG_NAME} not found in {model_id}")
 
         with open(config_file) as f:
             config = json.load(f)

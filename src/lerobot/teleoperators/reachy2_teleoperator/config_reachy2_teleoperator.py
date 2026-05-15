@@ -22,14 +22,14 @@ from ..config import TeleoperatorConfig
 @TeleoperatorConfig.register_subclass("reachy2_teleoperator")
 @dataclass
 class Reachy2TeleoperatorConfig(TeleoperatorConfig):
-    # 用作遥操作器的 Reachy 2 机器人的 IP 地址
+    # IP address of the Reachy 2 robot used as teleoperator
     ip_address: str | None = "localhost"
 
-    # 是否使用关节的当前位置作为动作
-    # 如果为 False，将使用关节的目标位置
+    # Whether to use the present position of the joints as actions
+    # if False, the goal position of the joints will be used
     use_present_position: bool = False
 
-    # 使用机器人的哪些部分
+    # Which parts of the robot to use
     with_mobile_base: bool = True
     with_l_arm: bool = True
     with_r_arm: bool = True
@@ -45,7 +45,7 @@ class Reachy2TeleoperatorConfig(TeleoperatorConfig):
             or self.with_antennas
         ):
             raise ValueError(
-                "未使用任何 Reachy2Teleoperator 部分。\n"
-                "必须将机器人的至少一个部分设置为 True "
+                "No Reachy2Teleoperator part used.\n"
+                "At least one part of the robot must be set to True "
                 "(with_mobile_base, with_l_arm, with_r_arm, with_neck, with_antennas)"
             )

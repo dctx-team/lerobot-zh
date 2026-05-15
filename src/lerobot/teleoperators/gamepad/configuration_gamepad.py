@@ -22,8 +22,4 @@ from ..config import TeleoperatorConfig
 @TeleoperatorConfig.register_subclass("gamepad")
 @dataclass
 class GamepadTeleopConfig(TeleoperatorConfig):
-    """游戏手柄远程操作配置类。
-
-    用于配置游戏手柄远程操作器的参数。
-    """
-    use_gripper: bool = True  # 是否使用夹爪
+    use_gripper: bool = True

@@ -15,59 +15,62 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..configs import CameraConfig, ColorMode, Cv2Rotation
+from ..configs import CameraConfig, ColorMode, Cv2Backends, Cv2Rotation
+
+__all__ = ["OpenCVCameraConfig", "ColorMode", "Cv2Rotation", "Cv2Backends"]
 
 
 @CameraConfig.register_subclass("opencv")
 @dataclass
 class OpenCVCameraConfig(CameraConfig):
-    """基于 OpenCV 的相机设备或视频文件的配置类。
+    """Configuration class for OpenCV-based camera devices or video files.
 
-    此类为通过 OpenCV 访问的相机提供配置选项，
-    支持物理相机设备和视频文件。它包含用于
-    分辨率、帧率、颜色模式和图像旋转的设置。
+    This class provides configuration options for cameras accessed through OpenCV,
+    supporting both physical camera devices and video files. It includes settings
+    for resolution, frame rate, color mode, and image rotation.
 
-    配置示例：
+    Example configurations:
     ```python
-    # 基本配置
+    # Basic configurations
     OpenCVCameraConfig(0, 30, 1280, 720)   # 1280x720 @ 30FPS
     OpenCVCameraConfig(/dev/video4, 60, 640, 480)   # 640x480 @ 60FPS
 
-    # 高级配置
-    OpenCVCameraConfig(128422271347, 30, 640, 480, rotation=Cv2Rotation.ROTATE_90)     # 带 90° 旋转
+    # Advanced configurations with FOURCC format
+    OpenCVCameraConfig(128422271347, 30, 640, 480, rotation=Cv2Rotation.ROTATE_90, fourcc="MJPG")     # With 90° rotation and MJPG format
+    OpenCVCameraConfig(0, 30, 1280, 720, fourcc="YUYV")     # With YUYV format
     ```
 
-    属性：
-        index_or_path: 表示相机设备索引的整数，
-                      或指向视频文件的 Path 对象。
-        fps: 彩色流的请求每秒帧数。
-        width: 彩色流的请求帧宽度（像素）。
-        height: 彩色流的请求帧高度（像素）。
-        color_mode: 图像输出的颜色模式（RGB 或 BGR）。默认为 RGB。
-        rotation: 图像旋转设置（0°、90°、180° 或 270°）。默认为无旋转。
-        warmup_s: 从 connect 返回前读取帧的时间（秒）
+    Attributes:
+        index_or_path: Either an integer representing the camera device index,
+                      or a Path object pointing to a video file.
+        fps: Requested frames per second for the color stream.
+        width: Requested frame width in pixels for the color stream.
+        height: Requested frame height in pixels for the color stream.
+        color_mode: Color mode for image output (RGB or BGR). Defaults to RGB.
+        rotation: Image rotation setting (0°, 90°, 180°, or 270°). Defaults to no rotation.
+        warmup_s: Time reading frames before returning from connect (in seconds)
+        fourcc: FOURCC code for video format (e.g., "MJPG", "YUYV", "I420"). Defaults to None (auto-detect).
+        backend: OpenCV backend identifier (https://docs.opencv.org/3.4/d4/d15/group__videoio__flags__base.html). Defaults to ANY.
 
-    注意：
-        - 目前仅支持 3 通道彩色输出（RGB/BGR）。
+    Note:
+        - Only 3-channel color output (RGB/BGR) is currently supported.
+        - FOURCC codes must be 4-character strings (e.g., "MJPG", "YUYV"). Some common FOUCC codes: https://learn.microsoft.com/en-us/windows/win32/medfound/video-fourccs#fourcc-constants
+        - Setting FOURCC can help achieve higher frame rates on some cameras.
     """
 
     index_or_path: int | Path
     color_mode: ColorMode = ColorMode.RGB
     rotation: Cv2Rotation = Cv2Rotation.NO_ROTATION
     warmup_s: int = 1
+    fourcc: str | None = None
+    backend: Cv2Backends = Cv2Backends.ANY
 
-    def __post_init__(self):
-        if self.color_mode not in (ColorMode.RGB, ColorMode.BGR):
-            raise ValueError(
-                f"`color_mode` is expected to be {ColorMode.RGB.value} or {ColorMode.BGR.value}, but {self.color_mode} is provided."
-            )
+    def __post_init__(self) -> None:
+        self.color_mode = ColorMode(self.color_mode)
+        self.rotation = Cv2Rotation(self.rotation)
+        self.backend = Cv2Backends(self.backend)
 
-        if self.rotation not in (
-            Cv2Rotation.NO_ROTATION,
-            Cv2Rotation.ROTATE_90,
-            Cv2Rotation.ROTATE_180,
-            Cv2Rotation.ROTATE_270,
-        ):
+        if self.fourcc is not None and (not isinstance(self.fourcc, str) or len(self.fourcc) != 4):
             raise ValueError(
-                f"`rotation` is expected to be in {(Cv2Rotation.NO_ROTATION, Cv2Rotation.ROTATE_90, Cv2Rotation.ROTATE_180, Cv2Rotation.ROTATE_270)}, but {self.rotation} is provided."
+                f"`fourcc` must be a 4-character string (e.g., 'MJPG', 'YUYV'), but '{self.fourcc}' is provided."
             )

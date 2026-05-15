@@ -18,22 +18,22 @@ from typing import Any
 
 import torch
 
-from lerobot.configs.types import PipelineFeatureType, PolicyFeature
-from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
 from lerobot.processor import (
     AddBatchDimensionProcessorStep,
-    ComplementaryDataProcessorStep,
     DeviceProcessorStep,
+    NewLineTaskProcessorStep,
     NormalizerProcessorStep,
     PolicyAction,
     PolicyProcessorPipeline,
-    ProcessorStepRegistry,
     RenameObservationsProcessorStep,
     TokenizerProcessorStep,
     UnnormalizerProcessorStep,
+    policy_action_to_transition,
+    transition_to_policy_action,
 )
-from lerobot.processor.converters import policy_action_to_transition, transition_to_policy_action
 from lerobot.utils.constants import POLICY_POSTPROCESSOR_DEFAULT_NAME, POLICY_PREPROCESSOR_DEFAULT_NAME
+
+from .configuration_smolvla import SmolVLAConfig
 
 
 def make_smolvla_pre_post_processors(
@@ -44,32 +44,32 @@ def make_smolvla_pre_post_processors(
     PolicyProcessorPipeline[PolicyAction, PolicyAction],
 ]:
     """
-    为 SmolVLA 策略构建预处理器和后处理器管道。
+    Constructs pre-processor and post-processor pipelines for the SmolVLA policy.
 
-    预处理管道通过以下步骤为模型准备输入数据：
-    1.  重命名特征以匹配预训练配置。
-    2.  基于数据集统计信息对输入和输出特征进行归一化。
-    3.  添加批次维度。
-    4.  确保语言任务描述以换行符结尾。
-    5.  对语言任务描述进行分词。
-    6.  将所有数据移动到指定设备。
+    The pre-processing pipeline prepares input data for the model by:
+    1.  Renaming features to match pretrained configurations.
+    2.  Normalizing input and output features based on dataset statistics.
+    3.  Adding a batch dimension.
+    4.  Ensuring the language task description ends with a newline character.
+    5.  Tokenizing the language task description.
+    6.  Moving all data to the specified device.
 
-    后处理管道处理模型的输出，步骤包括：
-    1.  将数据移动到 CPU。
-    2.  将输出动作反归一化到原始尺度。
+    The post-processing pipeline handles the model's output by:
+    1.  Moving data to the CPU.
+    2.  Unnormalizing the output actions to their original scale.
 
-    参数：
-        config: SmolVLA 策略的配置对象。
-        dataset_stats: 用于归一化的统计信息字典。
+    Args:
+        config: The configuration object for the SmolVLA policy.
+        dataset_stats: A dictionary of statistics for normalization.
 
-    返回：
-        包含配置好的预处理器和后处理器管道的元组。
+    Returns:
+        A tuple containing the configured pre-processor and post-processor pipelines.
     """
 
     input_steps = [
-        RenameObservationsProcessorStep(rename_map={}),  # 模拟与预训练处理器相同的行为
+        RenameObservationsProcessorStep(rename_map={}),  # To mimic the same processor as pretrained one
         AddBatchDimensionProcessorStep(),
-        SmolVLANewLineProcessor(),
+        NewLineTaskProcessorStep(),
         TokenizerProcessorStep(
             tokenizer_name=config.vlm_model_name,
             padding=config.pad_language_to,
@@ -101,40 +101,3 @@ def make_smolvla_pre_post_processors(
             to_output=transition_to_policy_action,
         ),
     )
-
-
-@ProcessorStepRegistry.register(name="smolvla_new_line_processor")
-class SmolVLANewLineProcessor(ComplementaryDataProcessorStep):
-    """
-    确保 'task' 描述以换行符结尾的处理器步骤。
-
-    对于某些分词器（例如 PaliGemma）来说，这个步骤是必要的，因为它们期望
-    提示的末尾有一个换行符。它可以处理单个字符串任务和字符串任务列表。
-    """
-
-    def complementary_data(self, complementary_data):
-        if "task" not in complementary_data:
-            return complementary_data
-
-        task = complementary_data["task"]
-        if task is None:
-            return complementary_data
-
-        new_complementary_data = dict(complementary_data)
-
-        # 处理字符串和字符串列表两种情况
-        if isinstance(task, str):
-            # 单个字符串：如果不存在则添加换行符
-            if not task.endswith("\n"):
-                new_complementary_data["task"] = f"{task}\n"
-        elif isinstance(task, list) and all(isinstance(t, str) for t in task):
-            # 字符串列表：如果不存在则为每个字符串添加换行符
-            new_complementary_data["task"] = [t if t.endswith("\n") else f"{t}\n" for t in task]
-        # 如果 task 既不是字符串也不是字符串列表，则保持不变
-
-        return new_complementary_data
-
-    def transform_features(
-        self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
-    ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
-        return features

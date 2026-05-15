@@ -16,23 +16,28 @@
 
 from dataclasses import dataclass, field
 
-from lerobot.configs.types import FeatureType, PipelineFeatureType, PolicyFeature
-from lerobot.processor import ProcessorStepRegistry, RobotAction, RobotActionProcessorStep
-from lerobot.teleoperators.phone.config_phone import PhoneOS
+from lerobot.configs import FeatureType, PipelineFeatureType, PolicyFeature
+from lerobot.processor import ProcessorStepRegistry, RobotActionProcessorStep
+from lerobot.types import RobotAction
+
+from .config_phone import PhoneOS
 
 
 @ProcessorStepRegistry.register("map_phone_action_to_robot_action")
 @dataclass
 class MapPhoneActionToRobotAction(RobotActionProcessorStep):
     """
-    将校准后的手机姿态动作映射到标准化的机器人动作输入。
+    Maps calibrated phone pose actions to standardized robot action inputs.
 
-    此处理器步骤充当手机遥操作器输出和机器人期望的动作格式之间的桥梁。
-    它将手机的6自由度姿态（位置和旋转）重新映射到机器人的目标末端执行器姿态，
-    应用必要的轴反转和交换。它还解释平台特定的按钮按下以生成夹爪命令。
+    This processor step acts as a bridge between the phone teleoperator's output
+    and the robot's expected action format. It remaps the phone's 6-DoF pose
+    (position and rotation) to the robot's target end-effector pose, applying
+    necessary axis inversions and swaps. It also interprets platform-specific
+    button presses to generate a gripper command.
 
-    属性：
-        platform: 手机的操作系统（iOS或Android），用于确定夹爪的正确按钮映射。
+    Attributes:
+        platform: The operating system of the phone (iOS or Android), used
+            to determine the correct button mappings for the gripper.
     """
 
     # TODO(Steven): Gripper vel could be output of phone_teleop directly
@@ -41,18 +46,18 @@ class MapPhoneActionToRobotAction(RobotActionProcessorStep):
 
     def action(self, action: RobotAction) -> RobotAction:
         """
-        处理手机动作字典以创建机器人动作字典。
+        Processes the phone action dictionary to create a robot action dictionary.
 
-        参数：
-            act: 来自手机遥操作器的输入动作字典。
+        Args:
+            act: The input action dictionary from the phone teleoperator.
 
-        返回：
-            为机器人控制器格式化的新动作字典。
+        Returns:
+            A new action dictionary formatted for the robot controller.
 
-        引发：
-            ValueError: 如果输入动作中缺少'pos'或'rot'键。
+        Raises:
+            ValueError: If 'pos' or 'rot' keys are missing from the input action.
         """
-        # 从动作中弹出它们
+        # Pop them from the action
         enabled = bool(action.pop("phone.enabled"))
         pos = action.pop("phone.pos")
         rot = action.pop("phone.rot")
@@ -61,9 +66,9 @@ class MapPhoneActionToRobotAction(RobotActionProcessorStep):
         if pos is None or rot is None:
             raise ValueError("pos and rot must be present in action")
 
-        rotvec = rot.as_rotvec()  # 绝对方向作为旋转向量
+        rotvec = rot.as_rotvec()  # Absolute orientation as rotvec
 
-        # 将某些输入映射到某些动作
+        # Map certain inputs to certain actions
         if self.platform == PhoneOS.IOS:
             gripper_vel = float(inputs.get("a3", 0.0))
         else:
@@ -71,9 +76,9 @@ class MapPhoneActionToRobotAction(RobotActionProcessorStep):
             b = float(inputs.get("reservedButtonB", 0.0))
             gripper_vel = (
                 a - b
-            )  # 如果按下a则为正，如果按下b则为负，如果都按或都不按则为0
+            )  # Positive if a is pressed, negative if b is pressed, 0 if both or neither are pressed
 
-        # 对于某些动作，我们需要反转轴
+        # For some actions we need to invert the axis
         action["enabled"] = enabled
         action["target_x"] = -pos[1] if enabled else 0.0
         action["target_y"] = pos[0] if enabled else 0.0
@@ -81,7 +86,7 @@ class MapPhoneActionToRobotAction(RobotActionProcessorStep):
         action["target_wx"] = rotvec[1] if enabled else 0.0
         action["target_wy"] = rotvec[0] if enabled else 0.0
         action["target_wz"] = -rotvec[2] if enabled else 0.0
-        action["gripper_vel"] = gripper_vel  # 禁用时仍发送夹爪动作
+        action["gripper_vel"] = gripper_vel  # Still send gripper action when disabled
         return action
 
     def transform_features(

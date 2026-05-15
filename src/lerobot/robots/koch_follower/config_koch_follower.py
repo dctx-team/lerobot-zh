@@ -22,18 +22,18 @@ from ..config import RobotConfig
 @RobotConfig.register_subclass("koch_follower")
 @dataclass
 class KochFollowerConfig(RobotConfig):
-    # 连接到机械臂的端口
+    # Port to connect to the arm
     port: str
 
     disable_torque_on_disconnect: bool = True
 
-    # `max_relative_target` 出于安全目的限制相对位置目标向量的幅度。
-    # 将其设置为正标量以对所有电机使用相同的值，或者设置为字典将电机
-    # 名称映射到该电机的 max_relative_target 值。
+    # `max_relative_target` limits the magnitude of the relative positional target vector for safety purposes.
+    # Set this to a positive scalar to have the same value for all motors, or a dictionary that maps motor
+    # names to the max_relative_target value for that motor.
     max_relative_target: float | dict[str, float] | None = None
 
-    # 相机
+    # cameras
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
 
-    # 设置为 `True` 以向后兼容以前的策略/数据集
+    # Set to `True` for backward compatibility with previous policies/dataset
     use_degrees: bool = False

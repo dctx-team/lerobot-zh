@@ -14,8 +14,7 @@
 
 from dataclasses import dataclass, field
 
-from lerobot.cameras import CameraConfig
-from lerobot.cameras.configs import ColorMode
+from lerobot.cameras import CameraConfig, ColorMode
 from lerobot.cameras.reachy2_camera import Reachy2CameraConfig
 
 from ..config import RobotConfig
@@ -24,50 +23,58 @@ from ..config import RobotConfig
 @RobotConfig.register_subclass("reachy2")
 @dataclass
 class Reachy2RobotConfig(RobotConfig):
-    # `max_relative_target` 出于安全考虑限制相对位置目标向量的幅度。
-    # 将此设置为正标量，以对所有电机使用相同的值。
+    # `max_relative_target` limits the magnitude of the relative positional target vector for safety purposes.
+    # Set this to a positive scalar to have the same value for all motors.
     max_relative_target: float | None = None
 
-    # Reachy 2 机器人的 IP 地址
+    # IP address of the Reachy 2 robot
     ip_address: str | None = "localhost"
+    # Port of the Reachy 2 robot
+    port: int = 50065
 
-    # 如果为 True，将在断开连接前向机器人发送 turn_off_smoothly()。
+    # If True, turn_off_smoothly() will be sent to the robot before disconnecting.
     disable_torque_on_disconnect: bool = False
 
-    # 外部命令控制的标签
-    # 如果使用外部命令系统控制机器人，则设置为 True，
-    # 例如官方遥操作应用程序：https://github.com/pollen-robotics/Reachy2Teleoperation
-    # 如果为 True，robot.send_action() 将不会向机器人发送命令。
+    # Tag for external commands control
+    # Set to True if you use an external commands system to control the robot,
+    # such as the official teleoperation application: https://github.com/pollen-robotics/Reachy2Teleoperation
+    # If True, robot.send_action() will not send commands to the robot.
     use_external_commands: bool = False
 
-    # 机器人部件
-    # 设置为 False 可不将相应的关节部件添加到机器人的关节列表中。
-    # 默认情况下，所有部件都设置为 True。
+    # Robot parts
+    # Set to False to not add the corresponding joints part to the robot list of joints.
+    # By default, all parts are set to True.
     with_mobile_base: bool = True
     with_l_arm: bool = True
     with_r_arm: bool = True
     with_neck: bool = True
     with_antennas: bool = True
 
-    # 机器人相机
-    # 如果要在观测中使用相应的相机，请设置为 True。
-    # 默认情况下，仅使用遥操作相机。
-    with_left_teleop_camera: bool = True
-    with_right_teleop_camera: bool = True
+    # Robot cameras
+    # Set to True if you want to use the corresponding cameras in the observations.
+    # By default, no camera is used.
+    with_left_teleop_camera: bool = False
+    with_right_teleop_camera: bool = False
     with_torso_camera: bool = False
 
+    # Camera parameters
+    camera_width: int = 640
+    camera_height: int = 480
+
+    # For cameras other than the 3 default Reachy 2 cameras.
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        # 添加与机器人具有相同 ip_address 的相机
+        # Add cameras with same ip_address as the robot
         if self.with_left_teleop_camera:
             self.cameras["teleop_left"] = Reachy2CameraConfig(
                 name="teleop",
                 image_type="left",
                 ip_address=self.ip_address,
-                fps=15,
-                width=640,
-                height=480,
+                port=self.port,
+                width=self.camera_width,
+                height=self.camera_height,
+                fps=30,  # Not configurable for Reachy 2 cameras
                 color_mode=ColorMode.RGB,
             )
         if self.with_right_teleop_camera:
@@ -75,9 +82,10 @@ class Reachy2RobotConfig(RobotConfig):
                 name="teleop",
                 image_type="right",
                 ip_address=self.ip_address,
-                fps=15,
-                width=640,
-                height=480,
+                port=self.port,
+                width=self.camera_width,
+                height=self.camera_height,
+                fps=30,  # Not configurable for Reachy 2 cameras
                 color_mode=ColorMode.RGB,
             )
         if self.with_torso_camera:
@@ -85,9 +93,10 @@ class Reachy2RobotConfig(RobotConfig):
                 name="depth",
                 image_type="rgb",
                 ip_address=self.ip_address,
-                fps=15,
-                width=640,
-                height=480,
+                port=self.port,
+                width=self.camera_width,
+                height=self.camera_height,
+                fps=30,  # Not configurable for Reachy 2 cameras
                 color_mode=ColorMode.RGB,
             )
 
@@ -101,7 +110,7 @@ class Reachy2RobotConfig(RobotConfig):
             or self.with_antennas
         ):
             raise ValueError(
-                "没有使用任何 Reachy2Robot 部件。\n"
-                "机器人的至少一个部件必须设置为 True "
+                "No Reachy2Robot part used.\n"
+                "At least one part of the robot must be set to True "
                 "(with_mobile_base, with_l_arm, with_r_arm, with_neck, with_antennas)"
             )
