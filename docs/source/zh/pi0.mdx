@@ -1,0 +1,135 @@
+# π₀ (Pi0)
+
+π₀ 是来自 Physical Intelligence 的**用于通用机器人控制的视觉-语言-动作模型**。LeRobot 实现改编自他们的开源 [OpenPI](https://github.com/Physical-Intelligence/openpi) 仓库。
+
+## 模型概述
+
+π₀ 代表了机器人技术的突破，是 [Physical Intelligence](https://www.physicalintelligence.company/blog/pi0) 开发的第一个通用机器人基础模型。与为重复运动编程的传统狭义专家机器人程序不同，π₀ 旨在成为一个通才策略，可以理解视觉输入、解释自然语言指令并控制各种不同的机器人执行各种任务。
+
+<img
+  src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/lerobot-pi0%20(1).png"
+  alt="Pi0 概述"
+  width="85%"
+/>
+
+### 物理智能的愿景
+
+正如 Physical Intelligence 所描述的，虽然 AI 在数字领域取得了显著成功，从下棋到药物发现，但人类智能在物理世界中仍然大大超过 AI。套用莫拉维克悖论，赢得一场国际象棋比赛对 AI 来说是一个"简单"的问题，但折叠衬衫或清理桌子需要解决一些有史以来最困难的工程问题。π₀ 代表了开发人工物理智能的第一步，使用户能够简单地要求机器人执行他们想要的任何任务，就像他们可以使用大型语言模型一样。
+
+### 架构和方法
+
+π₀ 结合了几个关键创新：
+
+- **流匹配**：使用一种新颖的方法，通过流匹配（扩散模型的变体）用连续动作输出增强预训练的 VLM
+- **跨实体训练**：在来自 8 个不同机器人平台的数据上训练，包括 UR5e、双臂 UR5e、Franka、双臂 Trossen、双臂 ARX、移动 Trossen 和移动 Fibocom
+- **互联网规模预训练**：从预训练的 3B 参数视觉-语言模型继承语义知识
+- **高频控制**：以高达 50 Hz 的频率输出电机命令，用于实时灵巧操作
+
+## 安装要求
+
+1. 按照我们的[安装指南](./installation)安装 LeRobot。
+2. 通过运行以下命令安装 Pi0 依赖项：
+
+   ```bash
+   pip install -e ".[pi]"
+   ```
+
+## 训练数据和能力
+
+π₀ 在迄今为止最大的机器人交互数据集上训练，结合了三个关键数据源：
+
+1. **互联网规模预训练**：来自网络的视觉-语言数据，用于语义理解
+2. **Open X-Embodiment 数据集**：开源机器人操作数据集
+3. **Physical Intelligence 数据集**：跨 8 个不同机器人的灵巧任务的大型多样化数据集
+
+## 使用
+
+要在 LeRobot 中使用 π₀，请将策略类型指定为：
+
+```python
+policy.type=pi0
+```
+
+## 训练
+
+对于训练 π₀，您可以使用标准 LeRobot 训练脚本和适当的配置：
+
+```bash
+lerobot-train \
+    --dataset.repo_id=your_dataset \
+    --policy.type=pi0 \
+    --output_dir=./outputs/pi0_training \
+    --job_name=pi0_training \
+    --policy.pretrained_path=lerobot/pi0_base \
+    --policy.repo_id=your_repo_id \
+    --policy.compile_model=true \
+    --policy.gradient_checkpointing=true \
+    --policy.dtype=bfloat16 \
+    --policy.freeze_vision_encoder=false \
+    --policy.train_expert_only=false \
+    --steps=3000 \
+    --policy.device=cuda \
+    --batch_size=32
+```
+
+### 关键训练参数
+
+- **`--policy.compile_model=true`**：启用模型编译以加快训练速度
+- **`--policy.gradient_checkpointing=true`**：在训练期间显著减少内存使用
+- **`--policy.dtype=bfloat16`**：使用混合精度训练以提高效率
+- **`--batch_size=32`**：训练的批量大小，根据您的 GPU 内存调整此值
+- **`--policy.pretrained_path=lerobot/pi0_base`**：您想要微调的基础 π₀ 模型，选项有：
+  - [lerobot/pi0_base](https://huggingface.co/lerobot/pi0_base)
+  - [lerobot/pi0_libero](https://huggingface.co/lerobot/pi0_libero)（专门在 Libero 数据集上训练）
+
+### 训练参数说明
+
+| 参数               | 默认值 | 描述                                 |
+| ----------------------- | ------- | ------------------------------------------- |
+| `freeze_vision_encoder` | `false` | 不冻结视觉编码器            |
+| `train_expert_only`     | `false` | 不冻结 VLM，训练所有参数 |
+
+**💡 提示**：设置 `train_expert_only=true` 会冻结 VLM 并仅训练动作专家和投影，允许以减少的内存使用进行微调。
+
+## 相对动作
+
+默认情况下，π₀ 预测绝对动作。您可以启用**相对动作**，以便模型预测相对于当前机器人状态的偏移。这可以提高某些设置的训练稳定性。
+
+要使用相对动作，首先通过 CLI 在相对空间中重新计算数据集统计信息：
+
+```bash
+lerobot-edit-dataset \
+    --repo_id your_dataset \
+    --operation.type recompute_stats \
+    --operation.relative_action true \
+    --operation.chunk_size 50 \
+    --operation.relative_exclude_joints "['gripper']" \
+    --push_to_hub true
+```
+
+或者在 Python 中等效地：
+
+```python
+from lerobot.datasets import LeRobotDataset, recompute_stats
+
+dataset = LeRobotDataset("your_dataset")
+recompute_stats(dataset, relative_action=True, chunk_size=50, relative_exclude_joints=["gripper"])
+dataset.push_to_hub()
+```
+
+`chunk_size` 应与您的策略的 `chunk_size` 匹配（π₀ 的默认值为 50）。`relative_exclude_joints` 列出应保持在绝对空间中的关节名称（例如夹爪命令）。使用 `--push_to_hub true` 将更新的统计信息上传到 Hub。
+
+然后启用相对动作进行训练：
+
+```bash
+lerobot-train \
+    --dataset.repo_id=your_dataset \
+    --policy.type=pi0 \
+    --policy.use_relative_actions=true \
+    --policy.relative_exclude_joints='["gripper"]' \
+    ...
+```
+
+## 许可证
+
+此模型遵循 **Apache 2.0 许可证**，与原始 [OpenPI 仓库](https://github.com/Physical-Intelligence/openpi)一致。
