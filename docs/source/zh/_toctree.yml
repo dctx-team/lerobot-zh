@@ -1,0 +1,168 @@
+- sections:
+  - local: index
+    title: LeRobot
+  - local: installation
+    title: 安装
+  - local: cheat-sheet
+    title: 速查表
+  title: 开始使用
+- sections:
+  - local: il_robots
+    title: 机器人模仿学习
+  - local: bring_your_own_policies
+    title: 添加策略
+  - local: integrate_hardware
+    title: 集成您的硬件
+  - local: hilserl
+    title: 使用强化学习训练机器人
+  - local: hilserl_sim
+    title: 在仿真中训练强化学习
+  - local: multi_gpu_training
+    title: 多 GPU 训练
+  - local: hil_data_collection
+    title: 人在环数据收集
+  - local: peft_training
+    title: 使用 PEFT 训练（如 LoRA）
+  - local: rename_map
+    title: 使用重命名映射和空摄像头
+  title: "教程"
+- sections:
+  - local: hardware_guide
+    title: 计算硬件指南
+  - local: torch_accelerators
+    title: PyTorch 加速器
+  title: "计算与硬件"
+- sections:
+  - local: lerobot-dataset-v3
+    title: 使用 LeRobotDataset
+  - local: porting_datasets_v3
+    title: 移植大型数据集
+  - local: using_dataset_tools
+    title: 使用数据集工具
+  - local: dataset_subtask
+    title: 在数据集中使用子任务
+  - local: video_encoding_parameters
+    title: 视频编码参数
+  - local: streaming_video_encoding
+    title: 流式视频编码
+  title: "数据集"
+- sections:
+  - local: act
+    title: ACT
+  - local: smolvla
+    title: SmolVLA
+  - local: pi0
+    title: π₀ (Pi0)
+  - local: pi0fast
+    title: π₀-FAST (Pi0Fast)
+  - local: pi05
+    title: π₀.₅ (Pi05)
+  - local: eo1
+    title: EO-1
+  - local: groot
+    title: NVIDIA GR00T N1.5
+  - local: xvla
+    title: X-VLA
+  - local: multi_task_dit
+    title: 多任务 DiT 策略
+  - local: walloss
+    title: WALL-OSS
+  title: "策略"
+- sections:
+  - local: sarm
+    title: SARM
+  title: "奖励模型"
+- sections:
+  - local: inference
+    title: 策略部署 (lerobot-rollout)
+  - local: async
+    title: 使用异步推理
+  - local: rtc
+    title: 实时分块 (RTC)
+  title: "推理"
+- sections:
+  - local: envhub
+    title: Hub 上的环境
+  - local: envhub_leisaac
+    title: 在仿真中控制和训练机器人 (LeIsaac)
+  title: "仿真"
+- sections:
+  - local: adding_benchmarks
+    title: 添加新基准测试
+  - local: libero
+    title: LIBERO
+  - local: libero_plus
+    title: LIBERO-plus
+  - local: metaworld
+    title: Meta-World
+  - local: robotwin
+    title: RoboTwin 2.0
+  - local: robocasa
+    title: RoboCasa365
+  - local: robocerebra
+    title: RoboCerebra
+  - local: robomme
+    title: RoboMME
+  - local: envhub_isaaclab_arena
+    title: NVIDIA IsaacLab Arena 环境
+  - local: vlabench
+    title: VLABench
+  title: "基准测试"
+- sections:
+  - local: introduction_processors
+    title: 机器人处理器简介
+  - local: debug_processor_pipeline
+    title: 调试处理器管道
+  - local: implement_your_own_processor
+    title: 实现您自己的处理器
+  - local: processors_robots_teleop
+    title: 机器人和遥操作器的处理器
+  - local: env_processor
+    title: 环境处理器
+  - local: action_representations
+    title: 动作表示
+  title: "机器人处理器"
+- sections:
+  - local: so101
+    title: SO-101
+  - local: so100
+    title: SO-100
+  - local: koch
+    title: Koch v1.1
+  - local: lekiwi
+    title: LeKiwi
+  - local: hope_jr
+    title: Hope Jr
+  - local: reachy2
+    title: Reachy 2
+  - local: unitree_g1
+    title: Unitree G1
+  - local: earthrover_mini_plus
+    title: Earth Rover Mini
+  - local: omx
+    title: OMX
+  - local: openarm
+    title: OpenArm
+  title: "机器人"
+- sections:
+  - local: phone_teleop
+    title: 手机
+  title: "遥操作器"
+- sections:
+  - local: cameras
+    title: 摄像头
+  title: "传感器"
+- sections:
+  - local: notebooks
+    title: Notebooks
+  - local: feetech
+    title: 更新 Feetech 固件
+  - local: damiao
+    title: Damiao 电机和 CAN 总线
+  title: "资源"
+- sections:
+  - local: contributing
+    title: 为 LeRobot 做贡献
+  - local: backwardcomp
+    title: 向后兼容性
+  title: "关于"
