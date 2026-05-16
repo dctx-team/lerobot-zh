@@ -3,9 +3,10 @@
 ## 总体进度
 
 - **总文档数**: 69 个 .mdx 文件
-- **已完成**: 21 个
-- **进度**: 30%
-- **剩余**: 48 个
+- **已完成**: 29 个
+- **进度**: 42%
+- **剩余**: 40 个
+- **当前批次**: 正在翻译环境/基准测试文档（12个）
 
 ## 已完成翻译的文档
 
@@ -28,9 +29,17 @@
 - ✅ notebooks.mdx - Jupyter 笔记本
 - ✅ inference.mdx - 策略部署
 
-### 机器人硬件 (2)
+### 机器人硬件 (10)
 - ✅ so100.mdx - SO-100 机器人
 - ✅ so101.mdx - SO-101 机器人
+- ✅ koch.mdx - Koch v1.1 机器人
+- ✅ unitree_g1.mdx - Unitree G1 人形机器人
+- ✅ reachy2.mdx - Reachy 2 人形机器人
+- ✅ hope_jr.mdx - HopeJR 机器人
+- ✅ lekiwi.mdx - LeKiwi 移动机器人
+- ✅ openarm.mdx - OpenArm 7自由度手臂
+- ✅ earthrover_mini_plus.mdx - EarthRover Mini Plus
+- ✅ omx.mdx - OMX 机器人
 
 ### 策略文档 (5)
 - ✅ pi0.mdx - π₀ 策略
@@ -39,19 +48,9 @@
 - ✅ eo1.mdx - EO-1 策略
 - ✅ groot.mdx - NVIDIA GR00T N1.5 策略
 
-## 待翻译文档 (48)
+## 待翻译文档 (40)
 
-### 硬件相关 (8)
-- ⏳ koch.mdx
-- ⏳ lekiwi.mdx
-- ⏳ reachy2.mdx
-- ⏳ unitree_g1.mdx
-- ⏳ hope_jr.mdx
-- ⏳ openarm.mdx
-- ⏳ omx.mdx
-- ⏳ earthrover_mini_plus.mdx
-
-### 环境/基准测试 (9)
+### 环境/基准测试 (9) - 🔄 翻译中
 - ⏳ libero.mdx
 - ⏳ libero_plus.mdx
 - ⏳ metaworld.mdx
@@ -114,10 +113,11 @@
 
 ## 提交记录
 
-- 2026-05-16: 实施 i18n 基础设施
-- 2026-05-16: 翻译第一批 10 个文档（教程类）
-- 2026-05-16: 翻译第二批 5 个文档（策略类）
-- 2026-05-16: 继续翻译中...
+- 2026-05-16 09:00: 实施 i18n 基础设施
+- 2026-05-16 09:30: 翻译第一批 10 个文档（教程类）
+- 2026-05-16 10:00: 翻译第二批 5 个文档（策略类）
+- 2026-05-16 10:30: 翻译第三批 8 个文档（硬件类）
+- 2026-05-16 11:00: 正在翻译第四批 12 个文档（环境/基准测试）
 
 ## 下一步计划
 
