@@ -1,0 +1,223 @@
+# 动作表示
+
+本指南解释了 LeRobot 中机器人动作的不同表示方式、它们之间的关系以及何时使用每种方式。
+
+## 关节空间 vs 末端执行器空间
+
+在讨论动作表示之前，了解动作可以存在的两个坐标空间会有所帮助。
+
+### 关节空间
+
+关节空间动作直接指定每个电机的目标位置。对于带夹爪的 6 自由度机械臂，关节空间动作可能如下所示：
+
+```
+action = [shoulder_pan: 45.0, shoulder_lift: -20.0, elbow: -30.0, wrist_pitch: 10.0, wrist_roll: 0.0, wrist_yaw: 5.0, gripper: 0.8]
+```
+
+关节空间是 LeRobot 的默认设置。它简单、不需要运动学模型，并且直接映射到电机命令。大多数初学者设置（SO-100、Koch）使用关节空间动作。
+
+### 末端执行器 (EE) 空间
+
+末端执行器空间动作指定机器人工具尖端（夹爪）在笛卡尔坐标中的期望位置和方向：
+
+```
+action = [x: 0.25, y: -0.10, z: 0.15, wx: 0.0, wy: 0.0, wz: 0.1, gripper: 0.8]
+```
+
+EE 空间对于抓取和放置等任务更直观，因为它直接描述了夹爪应该去哪里，但它需要运动学模型（URDF）来在 EE 姿态和关节角度之间进行转换。
+
+### 空间之间的转换
+
+LeRobot 提供了处理器步骤，用于使用正向和逆向运动学在关节空间和 EE 空间之间进行转换。这些基于 `RobotKinematics` 构建，它加载机器人的 URDF 模型。
+
+```python
+from lerobot.model.kinematics import RobotKinematics
+from lerobot.robots.so_follower.robot_kinematic_processor import (
+    ForwardKinematicsJointsToEE,
+    InverseKinematicsEEToJoints,
+)
+
+kinematics = RobotKinematics(
+    urdf_path="./SO101/so101_new_calib.urdf",
+    target_frame_name="gripper_frame_link",
+    joint_names=["shoulder", "elbow", "wrist_pitch", "wrist_roll", "wrist_yaw"],
+)
+
+# 关节 → EE（用于观测："我的夹爪在哪里？"）
+fk_step = ForwardKinematicsJointsToEE(kinematics=kinematics, motor_names=[...])
+
+# EE → 关节（用于动作："将我的夹爪移动到这里"）
+ik_step = InverseKinematicsEEToJoints(kinematics=kinematics, motor_names=[...])
+```
+
+有关在 SO-100 机械臂上使用 EE 空间动作进行记录、回放和评估的完整工作示例，请参见 [`examples/so100_to_so100_EE/`](https://github.com/huggingface/lerobot/tree/main/examples/so100_to_so100_EE)。
+
+## 绝对、相对和增量动作
+
+无论您是在关节空间还是 EE 空间工作，动作值都可以用三种不同的方式表示。术语遵循 [UMI (Chi et al., 2024)](https://arxiv.org/abs/2402.10329)。
+
+### 绝对动作（LeRobot 默认）
+
+每个动作直接指定目标位置。
+
+**示例**（关节空间，块大小为 4）：
+
+```
+current_state = [45.0, -30.0, 10.0]
+
+action_chunk = [
+    [46.0, -29.0, 11.0],   # 移动到 46, -29, 11
+    [47.5, -27.0, 12.0],   # 移动到 47.5, -27, 12
+    [49.0, -25.0, 13.5],   # 移动到 49, -25, 13.5
+    [50.0, -24.0, 15.0],   # 移动到 50, -24, 15
+]
+```
+
+每个值都是机器人坐标系中的目标位置。简单直接，但需要一致的全局坐标系。这是 LeRobot 的默认设置。
+
+### 相对动作（OpenPI / pi0 使用）
+
+块中的每个动作都是相对于**预测时刻的当前状态**的偏移量。块中的所有动作共享相同的参考点：
+
+```
+current_state = [45.0, -30.0, 10.0]
+
+relative_chunk = [
+    [1.0,  1.0, 1.0],   # 从当前位置 +1 → 目标 46, -29, 11
+    [2.5,  3.0, 2.0],   # 从当前位置 +2.5 → 目标 47.5, -27, 12
+    [4.0,  5.0, 3.5],   # 从当前位置 +4 → 目标 49, -25, 13.5
+    [5.0,  6.0, 5.0],   # 从当前位置 +5 → 目标 50, -24, 15
+]
+```
+
+转换很简单：`relative = absolute - current_state`。要恢复绝对值：`absolute = relative + current_state`。
+
+**为什么使用相对动作？** 模型学习预测以零为中心的偏移量，这更容易归一化并导致更稳定的训练。因为每个块都引用相同的当前状态，所以块之间不会累积误差。
+
+### 增量动作（顺序差分）
+
+每个动作都是相对于**前一个动作**的偏移量（或对于第一步，相对于当前状态）：
+
+```
+current_state = [45.0, -30.0, 10.0]
+
+delta_chunk = [
+    [1.0,  1.0, 1.0],   # 当前 → 46, -29, 11
+    [1.5,  2.0, 1.0],   # 前一个动作 → 47.5, -27, 12
+    [1.5,  2.0, 1.5],   # 前一个动作 → 49, -25, 13.5
+    [1.0,  1.0, 1.5],   # 前一个动作 → 50, -24, 15
+]
+```
+
+这里每一步都相对于前一步。要恢复绝对位置，您必须累加所有先前的增量，这意味着误差会随时间累积。UMI 明确反对这种表示方式，原因就在于此。
+
+### 可视化比较
+
+下图（基于 [UMI, Chi et al., 2024](https://arxiv.org/abs/2402.10329) 的图）说明了关键区别。使用**相对轨迹**，块中的每个动作都指向相同的原点（当前状态），因此新的推理步骤会干净地重置参考。使用**增量**，每个动作都依赖于前一个动作，因此误差会累积。**绝对**动作需要一致的全局坐标系。
+
+<img
+  src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/action_representations_umi.png"
+  alt="相对轨迹作为动作表示（UMI, Chi et al., 2024）"
+  width="85%"
+/>
+
+## 在 LeRobot 中使用相对动作
+
+LeRobot 提供 `RelativeActionsProcessorStep` 在处理器管道内部在绝对动作和相对动作之间进行转换。这就是 pi0、pi0.5 和 pi0_fast 支持相对动作的方式。
+
+> **注意：** 所有 pi 模型（pi0、pi0.5、pi0_fast）在归一化**之前**应用相对转换（`relative → normalize`），因此归一化器始终看到增量（相对）值。这意味着在使用 `use_relative_actions=true` 训练时，**所有这些模型都需要相对动作统计信息**。在 pi0_fast 中，`RelativeActionsProcessorStep` 仅修改动作——状态观测保持不变——因此 `NormalizerProcessorStep` 仍然在状态标记器之前运行，标记器继续按预期接收归一化状态。
+
+### 工作原理
+
+在**训练**（预处理）期间，动作在模型看到它们之前从绝对转换为相对：
+
+```
+原始绝对动作 → RelativeActionsProcessorStep → 归一化 → 模型
+```
+
+在**推理**（后处理）期间，模型预测在发送到机器人之前转换回绝对：
+
+```
+模型输出 → 反归一化 → AbsoluteActionsProcessorStep → 机器人
+```
+
+`AbsoluteActionsProcessorStep` 从其配对的 `RelativeActionsProcessorStep` 读取缓存的当前状态，因此两者必须连接在一起（由策略工厂自动处理）。
+
+### 为 pi 系列（pi0、pi0.5、pi0_fast）启用相对动作
+
+**步骤 1**：为您的数据集预计算相对动作统计信息：
+
+```bash
+lerobot-edit-dataset \
+    --repo_id your_dataset \
+    --operation.type recompute_stats \
+    --operation.relative_action true \
+    --operation.chunk_size 50 \
+    --operation.relative_exclude_joints "['gripper']"
+```
+
+**步骤 2**：启用相对动作进行训练：
+
+```bash
+lerobot-train \
+    --dataset.repo_id=your_dataset \
+    --policy.type=pi0 \
+    --policy.use_relative_actions=true \
+    --policy.relative_exclude_joints='["gripper"]'
+```
+
+`relative_exclude_joints` 参数指定应保持在绝对空间中的关节。例如，夹爪命令通常是二进制的（打开/关闭），不会从相对编码中受益。
+
+### 将相对动作与 RTC 结合
+
+[RTC](https://arxiv.org/abs/2506.07339) 以高频率运行策略推理，并在预测时将动作发送到机器人，而不是等待完整的块。相对动作和 RTC 完全兼容：因为相对模式下的每个块都引用**相同的**当前状态（在推理开始时捕获），即使机器人已经移动，块中的每个预测动作仍然是有效的偏移量。不需要特殊处理——`RelativeActionsProcessorStep` 每次推理调用缓存一次状态，`AbsoluteActionsProcessorStep` 将其应用于流式输出中的每个动作。
+
+### 将相对动作与 EE 空间结合
+
+相对动作在关节空间和 EE 空间中都有效。例如，如果您的数据集存储 EE 动作，相对编码会将它们转换为相对于当前 EE 姿态的偏移量：
+
+```
+current_ee_state = [x: 0.25, y: -0.10, z: 0.15, gripper: 0.8]
+
+absolute_ee_chunk = [
+    [0.26, -0.09, 0.16, 0.8],
+    [0.28, -0.07, 0.18, 0.8],
+]
+
+relative_ee_chunk = [
+    [0.01,  0.01, 0.01, 0.0],   # 相对于当前 EE 姿态的偏移量
+    [0.03,  0.03, 0.03, 0.0],   # 相对于当前 EE 姿态的偏移量
+]
+```
+
+## 处理管道摘要
+
+以下是不同处理器的组合方式。每个箭头都是一个处理器步骤，它们可以在 `RobotProcessorPipeline` 或 `PolicyProcessorPipeline` 中链接：
+
+```
+                    ┌─────────────────────────────────────────┐
+   动作空间         │   关节空间  ←──IK──→  EE 空间          │
+                    │   ForwardKinematicsJointsToEE           │
+                    │   InverseKinematicsEEToJoints           │
+                    └─────────────────────────────────────────┘
+
+                    ┌─────────────────────────────────────────┐
+   表示方式         │   绝对  ←────→  相对                    │
+                    │   RelativeActionsProcessorStep (预处理) │
+                    │   AbsoluteActionsProcessorStep (后处理) │
+                    └─────────────────────────────────────────┘
+
+                    ┌─────────────────────────────────────────┐
+   归一化           │   原始  ←────→  归一化                  │
+                    │   NormalizerProcessorStep (预处理)      │
+                    │   UnnormalizerProcessorStep (后处理)    │
+                    └─────────────────────────────────────────┘
+```
+
+典型的训练预处理器可能链接：`原始绝对关节动作 → 相对 → 归一化`。典型的推理后处理器：`反归一化 → 绝对 → （可选地 IK 到关节）`。
+
+## 参考文献
+
+- [Universal Manipulation Interface (UMI)](https://arxiv.org/abs/2402.10329) - Chi et al., 2024。定义相对轨迹动作表示并将其与绝对和增量动作进行比较。
+- [处理器介绍](./introduction_processors) - LeRobot 中处理器管道的工作原理。
+- [`examples/so100_to_so100_EE/`](https://github.com/huggingface/lerobot/tree/main/examples/so100_to_so100_EE) - 使用 EE 空间动作进行记录和评估的完整示例。

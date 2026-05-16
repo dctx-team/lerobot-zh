@@ -1,0 +1,112 @@
+# 视频编码参数
+
+当启用视频存储时，LeRobot 将每个摄像头流存储为 **MP4** 文件，而不是为每个时间步保存一个图像文件。视频编码跨时间压缩，与一堆 PNG 相比，通常可以减少数据集大小和 I/O，同时保持 MP4——一种每个播放器和加载器都能理解的格式。
+
+将帧编码为 MP4 是一个完整的 FFmpeg 管道：编码器选择、像素格式、GOP/关键帧、质量与速度，以及可选的额外编码器标志。这些旋钮中的大多数都可以通过 `camera_encoder` 进行用户调整，这是一个嵌套的 `VideoEncoderConfig`（`lerobot.configs.video.VideoEncoderConfig`），通过 PyAV 传递。
+
+您可以使用 `--dataset.camera_encoder.<field>` 从 CLI 设置这些参数（例如使用 `lerobot-record` 或 `lerobot-rollout`）。相同的块适用于该运行中的每个摄像头视频流。
+
+<Tip>
+  视频存储必须打开才能使 `camera_encoder` 产生任何效果——
+  在 Python API 中为 `use_videos=True`，或在 CLI 上为 `--dataset.video=true`（记录默认值）。关闭视频后，输入保持为图像，`camera_encoder` 被忽略。
+</Tip>
+
+有关**何时**写入帧与编码（流式与回合后）、队列和其他顶级 `--dataset.*` 开关的详细信息，请参见[流式视频编码](./streaming_video_encoding)。有关编码参数比较和实验，请参见 [video-benchmark Space](https://huggingface.co/spaces/lerobot/video-benchmark)。
+
+---
+
+## 示例
+
+```bash
+lerobot-record \
+    --robot.type=so100_follower \
+    --robot.port=/dev/tty.usbmodem58760431541 \
+    --robot.cameras="{laptop: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
+    --robot.id=black \
+    --teleop.type=so100_leader \
+    --teleop.port=/dev/tty.usbmodem58760431551 \
+    --teleop.id=blue \
+    --dataset.repo_id=<my_username>/<my_dataset_name> \
+    --dataset.num_episodes=2 \
+    --dataset.single_task="Grab the cube" \
+    --dataset.streaming_encoding=true \
+    --dataset.encoder_threads=2 \
+    --dataset.camera_encoder.vcodec=h264 \
+    --dataset.camera_encoder.preset=fast \
+    --dataset.camera_encoder.extra_options={"tune": "film", "profile:v": "high", "bf": 2} \
+    --display_data=true
+```
+
+---
+
+## 调优参数
+
+<Tip warning={true}>
+默认值经过调整以平衡典型机器人数据集的**压缩比**、**视觉质量**和**解码/查找速度**。更改它们可能会影响记录（CPU 负载、丢帧）和训练（解码吞吐量、图像质量）。
+
+只有在有特定原因时才覆盖这些参数，并在依赖新设置之前测量对管道的影响。
+
+</Tip>
+
+以下所有标志在 CLI 上都以 `--dataset.camera_encoder.` 为前缀。
+
+| 参数            | 类型             | 默认值        | 描述                                                                                                                                                                                   |
+| --------------- | ---------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vcodec`        | `str`            | `"libsvtav1"` | 视频编解码器名称。`"auto"` 从固定的偏好列表中选择第一个可用的硬件编码器，回退到 `libsvtav1`。                                                                                         |
+| `pix_fmt`       | `str`            | `"yuv420p"`   | 输出像素格式。必须由您的 FFmpeg 构建中选择的编解码器支持。                                                                                                                            |
+| `g`             | `int`            | `2`           | GOP 大小——每 `g` 帧一个关键帧。作为 FFmpeg 选项 `g` 发出。                                                                                                                            |
+| `crf`           | `int` 或 `float` | `30`          | 抽象质量值，按编解码器映射（见下面的[映射](#mapping-videoencoderconfig--ffmpeg-options)）。较低 → 较高质量/较大输出，其中映射是单调的。                                               |
+| `preset`        | `int` 或 `str`   | `12` \*       | 编码器速度预设；含义取决于编解码器。<br/>\* 当未设置且 `vcodec=libsvtav1` 时，LeRobot 默认为 `12`。                                                                                   |
+| `fast_decode`   | `int`            | `0`           | `libsvtav1`：`0–2`，通过 `svtav1-params` 传递。<br/>`h264` / `hevc`（软件）：如果 `>0`，设置 `tune=fastdecode`。<br/>其他编解码器：通常未使用。                                      |
+| `video_backend` | `str`            | `"pyav"`      | 目前仅为视频编码实现了 `"pyav"`。                                                                                                                                                      |
+| `extra_options` | `dict`           | `{}`          | 在上述结构化字段之后合并的额外 FFmpeg 或编解码器特定选项。不能覆盖这些字段已设置的键。                                                                                                 |
+
+---
+
+## 在数据集元数据中的持久化
+
+在视频流的第一个回合编码后，编码器配置被**持久化到数据集元数据**（`meta/info.json`）中的每个视频特征下，与从文件本身探测的值一起。对于视频特征 `observation.images.<camera>`，`info.json` 中的布局是：
+
+```json
+{
+  "features": {
+    "observation.images.laptop": {
+      "dtype": "video",
+      "shape": [480, 640, 3],
+      "info": {
+        "video.height": 480,
+        "video.width": 640,
+        "video.codec": "h264",
+        "video.pix_fmt": "yuv420p",
+        "video.fps": 30,
+        "video.channels": 3,
+        "video.is_depth_map": false,
+        "video.g": 2,
+        "video.crf": 30,
+        "video.preset": "fast",
+        "video.fast_decode": 0,
+        "video.video_backend": "pyav",
+        "video.extra_options": { "tune": "film", "profile:v": "high", "bf": 2 }
+      }
+    }
+  }
+}
+```
+
+两个来源贡献到 `info` 块：
+
+- **流派生**（使用 PyAV 从编码的 MP4 读回）：`video.height`、`video.width`、`video.codec`、`video.pix_fmt`、`video.fps`、`video.channels`、`video.is_depth_map`，如果存在音频流，还有 `audio.*`。
+- **编码器派生**（取自 `VideoEncoderConfig`）：`video.g`、`video.crf`、`video.preset`、`video.fast_decode`、`video.video_backend`、`video.extra_options`。
+
+<Tip>
+  此块被填充**一次**，来自**第一个**回合。它假设数据集中的每个回合都使用相同的 `camera_encoder` 进行编码。不支持在记录过程中更改编码器设置——`info.json` 将仅反映用于第一个回合的参数。
+</Tip>
+
+---
+
+## 合并数据集
+
+使用 `merge_datasets` 聚合数据集时，视频文件按原样连接（无重新编码），并且 `info.json` 中的编码器字段按键合并：
+
+- **流派生字段必须匹配**跨源：`video.codec`、`video.pix_fmt`、`video.height`、`video.width`、`video.fps`。否则 FFmpeg 的 concat 解复用器会失败。
+- **编码器调优字段松散合并**：`video.g`、`video.crf`、`video.preset`、`video.fast_decode`、`video.extra_options`。如果每个源都同意，则保留该值；如果不同意，则设置为 `null`（或 `video.extra_options` 为 `{}`）并记录警告。
