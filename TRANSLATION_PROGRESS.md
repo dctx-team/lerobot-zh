@@ -3,10 +3,10 @@
 ## 总体进度
 
 - **总文档数**: 69 个 .mdx 文件
-- **已完成**: 29 个
-- **进度**: 42%
-- **剩余**: 40 个
-- **当前批次**: 正在翻译环境/基准测试文档（12个）
+- **已完成**: 37 个
+- **进度**: 54%
+- **剩余**: 32 个
+- **当前批次**: 正在翻译策略和数据集文档（10个）
 
 ## 已完成翻译的文档
 
@@ -48,9 +48,23 @@
 - ✅ eo1.mdx - EO-1 策略
 - ✅ groot.mdx - NVIDIA GR00T N1.5 策略
 
-## 待翻译文档 (40)
+### 环境/基准测试 (12)
+- ✅ libero.mdx - LIBERO 基准测试
+- ✅ libero_plus.mdx - LIBERO-plus 扩展
+- ✅ metaworld.mdx - Meta-World 基准测试
+- ✅ robocasa.mdx - RoboCasa365 基准测试
+- ✅ robotwin.mdx - RoboTwin 2.0 基准测试
+- ✅ robocerebra.mdx - RoboCerebra 基准测试
+- ✅ robomme.mdx - RoboMME 基准测试
+- ✅ vlabench.mdx - VLABench 基准测试
+- ✅ envhub.mdx - Hub 上的环境
+- ✅ envhub_leisaac.mdx - LeIsaac 仿真环境
+- ✅ envhub_isaaclab_arena.mdx - IsaacLab Arena 环境
+- ✅ adding_benchmarks.mdx - 添加新基准测试
 
-### 环境/基准测试 (9) - 🔄 翻译中
+## 待翻译文档 (32)
+
+### 策略相关 (5) - 🔄 翻译中
 - ⏳ libero.mdx
 - ⏳ libero_plus.mdx
 - ⏳ metaworld.mdx
