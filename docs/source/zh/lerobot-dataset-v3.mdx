@@ -1,0 +1,317 @@
+# LeRobotDataset v3.0
+
+`LeRobotDataset v3.0` 是机器人学习数据的标准化格式。它提供对多模态时间序列数据、传感运动信号和多相机视频的统一访问，以及用于索引、搜索和在 Hugging Face Hub 上可视化的丰富元数据。
+
+本文档将指导您：
+
+- 理解 v3.0 设计和目录布局
+- 记录数据集并推送到 Hub
+- 使用 `LeRobotDataset` 加载数据集进行训练
+- 使用 `StreamingLeRobotDataset` 流式传输数据集而无需下载
+- 在训练期间应用图像转换进行数据增强
+- 将现有 `v2.1` 数据集迁移到 `v3.0`
+
+## `v3` 的新功能
+
+- **基于文件的存储**：每个 Parquet/MP4 文件包含多个回合（v2 每个回合使用一个文件）。
+- **关系元数据**：回合边界和查找通过元数据解析，而不是文件名。
+- **Hub 原生流式传输**：使用 `StreamingLeRobotDataset` 直接从 Hub 消费数据集。
+- **降低文件系统压力**：更少、更大的文件 ⇒ 更快的初始化和更少的大规模问题。
+- **统一组织**：清晰的目录布局，数据和视频之间具有一致的路径模板。
+
+## 安装
+
+`LeRobotDataset v3.0` 将包含在 `lerobot >= 0.4.0` 中。
+
+在稳定版本发布之前，您可以按照[从源代码构建说明](./installation#from-source)使用主分支。
+
+## 记录数据集
+
+运行以下命令使用 SO-101 记录数据集并推送到 Hub：
+
+```bash
+lerobot-record \
+  --robot.type=so101_follower \
+  --robot.port=/dev/tty.usbmodem585A0076841 \
+  --robot.id=my_awesome_follower_arm \
+  --robot.cameras="{ front: {type: opencv, index_or_path: 0, width: 1920, height: 1080, fps: 30}}" \
+  --teleop.type=so101_leader \
+  --teleop.port=/dev/tty.usbmodem58760431551 \
+  --teleop.id=my_awesome_leader_arm \
+  --display_data=true \
+  --dataset.repo_id=${HF_USER}/record-test \
+  --dataset.num_episodes=5 \
+  --dataset.single_task="Grab the black cube" \
+  --dataset.streaming_encoding=true \
+  # --dataset.camera_encoder.vcodec=auto \
+  --dataset.encoder_threads=2
+```
+
+有关更多详细信息，请参阅[记录指南](./il_robots#record-a-dataset)。
+
+## 格式设计
+
+v3 的核心原则是**将存储与用户 API 解耦**：数据高效存储（少量大文件），而公共 API 公开直观的回合级访问。
+
+`v3` 有三个支柱：
+
+1. **表格数据**：低维、高频信号（状态、动作、时间戳）存储在 **Apache Parquet** 中。通过 `datasets` 堆栈进行内存映射或流式访问。
+2. **视觉数据**：相机帧连接并编码为 **MP4**。来自同一回合的帧被分组；视频按相机分片以获得实用大小。
+3. **元数据**：描述模式（特征名称、数据类型、形状）、帧率、归一化统计信息和**回合分段**（到共享 Parquet/MP4 文件的起始/结束偏移量）的 JSON/Parquet 记录。
+
+> 为了扩展到数百万个回合，来自多个回合的表格行和视频帧被**连接**到更大的文件中。回合特定的视图通过**元数据**重建，而不是文件边界。
+
+<div style="display:flex; justify-content:center; gap:12px; flex-wrap:wrap;">
+  <figure style="margin:0; text-align:center;">
+    <img
+      src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobotdataset-v3/asset1datasetv3.png"
+      alt="LeRobotDataset v3 图表"
+      width="220"
+    />
+    <figcaption style="font-size:0.9em; color:#666;">
+      从基于回合到基于文件的数据集
+    </figcaption>
+  </figure>
+</div>
+
+### 目录布局（简化）
+
+- **`meta/info.json`**：规范模式（特征、形状/数据类型）、FPS、代码库版本和**路径模板**以定位数据/视频分片。
+- **`meta/stats.json`**：用于归一化的全局特征统计信息（均值/标准差/最小值/最大值）；作为 `dataset.meta.stats` 公开。
+- **`meta/tasks.jsonl`**：映射到整数 ID 的自然语言任务描述，用于任务条件策略。
+- **`meta/episodes/`**：每个回合的记录（长度、任务、偏移量）存储为**分块 Parquet** 以实现可扩展性。
+- **`data/`**：逐帧 **Parquet** 分片；每个文件通常包含**多个回合**。
+- **`videos/`**：每个相机的 **MP4** 分片；每个文件通常包含**多个回合**。
+
+## 加载数据集进行训练
+
+`LeRobotDataset` 返回 PyTorch 张量的 Python 字典，并与 `torch.utils.data.DataLoader` 集成。以下是显示其使用的代码示例：
+
+```python
+import torch
+from lerobot.datasets import LeRobotDataset
+
+repo_id = "yaak-ai/L2D-v3"
+
+# 1) 从 Hub 加载（本地缓存）
+dataset = LeRobotDataset(repo_id)
+
+# 2) 按索引随机访问
+sample = dataset[100]
+print(sample)
+# {
+#   'observation.state': tensor([...]),
+#   'action': tensor([...]),
+#   'observation.images.front_left': tensor([C, H, W]),
+#   'timestamp': tensor(1.234),
+#   ...
+# }
+
+# 3) 通过 delta_timestamps 的时间窗口（相对于 t 的秒数）
+delta_timestamps = {
+    "observation.images.front_left": [-0.2, -0.1, 0.0]  # 当前帧之前 0.2s 和 0.1s
+}
+
+dataset = LeRobotDataset(repo_id, delta_timestamps=delta_timestamps)
+
+# 访问索引现在返回指定键的堆栈
+sample = dataset[100]
+print(sample["observation.images.front_left"].shape)  # [T, C, H, W]，其中 T=3
+
+# 4) 使用 DataLoader 包装进行训练
+batch_size = 16
+data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size)
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+for batch in data_loader:
+    observations = batch["observation.state"].to(device)
+    actions = batch["action"].to(device)
+    images = batch["observation.images.front_left"].to(device)
+    # model.forward(batch)
+```
+
+## 流式传输数据集（无需下载）
+
+使用 `StreamingLeRobotDataset` 直接从 Hub 迭代，无需本地副本。这允许流式传输大型数据集，而无需将它们下载到磁盘或加载到内存中，这是新数据集格式的关键特性。
+
+```python
+from lerobot.datasets import StreamingLeRobotDataset
+
+repo_id = "yaak-ai/L2D-v3"
+dataset = StreamingLeRobotDataset(repo_id)  # 直接从 Hub 流式传输
+```
+
+<div style="display:flex; justify-content:center; gap:12px; flex-wrap:wrap;">
+  <figure style="margin:0; text-align:center;">
+    <img
+      src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobotdataset-v3/streaming-lerobot.png"
+      alt="StreamingLeRobotDataset"
+      width="520"
+    />
+    <figcaption style="font-size:0.9em; color:#666;">
+      直接从 Hub 流式传输以进行即时训练。
+    </figcaption>
+  </figure>
+</div>
+
+## 图像转换
+
+图像转换是在训练期间应用于相机帧的数据增强，以提高模型的鲁棒性和泛化能力。LeRobot 支持各种转换，包括亮度、对比度、饱和度、色调和锐度调整。
+
+### 在数据集创建/记录期间使用转换
+
+目前，转换仅在**训练时**应用，而不是在记录期间。当您创建或记录数据集时，原始图像存储时不带转换。这允许您稍后尝试不同的增强，而无需重新记录数据。
+
+### 向现有数据集添加转换（API）
+
+在加载数据集进行训练时使用 `image_transforms` 参数：
+
+```python
+from lerobot.datasets import LeRobotDataset
+from lerobot.transforms import ImageTransforms, ImageTransformsConfig, ImageTransformConfig
+
+# 选项 1：使用默认转换配置（默认禁用）
+transforms_config = ImageTransformsConfig(
+    enable=True,  # 启用转换
+    max_num_transforms=3,  # 每帧最多应用 3 个转换
+    random_order=False,  # 按标准顺序应用
+)
+transforms = ImageTransforms(transforms_config)
+
+dataset = LeRobotDataset(
+    repo_id="your-username/your-dataset",
+    image_transforms=transforms
+)
+
+# 选项 2：创建自定义转换配置
+custom_transforms_config = ImageTransformsConfig(
+    enable=True,
+    max_num_transforms=2,
+    random_order=True,
+    tfs={
+        "brightness": ImageTransformConfig(
+            weight=1.0,
+            type="ColorJitter",
+            kwargs={"brightness": (0.7, 1.3)}  # 调整亮度范围
+        ),
+        "contrast": ImageTransformConfig(
+            weight=2.0,  # 更高的权重 = 更有可能被选择
+            type="ColorJitter",
+            kwargs={"contrast": (0.8, 1.2)}
+        ),
+        "sharpness": ImageTransformConfig(
+            weight=0.5,  # 更低的权重 = 不太可能被选择
+            type="SharpnessJitter",
+            kwargs={"sharpness": (0.3, 2.0)}
+        ),
+    }
+)
+
+dataset = LeRobotDataset(
+    repo_id="your-username/your-dataset",
+    image_transforms=ImageTransforms(custom_transforms_config)
+)
+
+# 选项 3：使用纯 torchvision 转换
+from torchvision.transforms import v2
+
+torchvision_transforms = v2.Compose([
+    v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+    v2.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),
+])
+
+dataset = LeRobotDataset(
+    repo_id="your-username/your-dataset",
+    image_transforms=torchvision_transforms
+)
+```
+
+### 可用的转换类型
+
+LeRobot 提供几种转换类型：
+
+- **`ColorJitter`**：调整亮度、对比度、饱和度和色调
+- **`SharpnessJitter`**：随机调整图像锐度
+- **`Identity`**：无转换（用于测试）
+
+您还可以通过将任何 `torchvision.transforms.v2` 转换直接传递给 `image_transforms` 参数来使用它。
+
+### 配置选项
+
+- **`enable`**：启用/禁用转换（默认：`False`）
+- **`max_num_transforms`**：每帧应用的最大转换数（默认：`3`）
+- **`random_order`**：以随机顺序应用转换 vs 标准顺序（默认：`False`）
+- **`weight`**：每个转换的采样概率（更高 = 更有可能，如果权重之和不为 1，它们将被归一化）
+- **`kwargs`**：转换特定参数（例如亮度范围）
+
+### 可视化转换
+
+使用可视化脚本预览转换如何影响您的数据：
+
+```bash
+lerobot-imgtransform-viz \
+  --repo-id=your-username/your-dataset \
+  --output-dir=./transform_examples \
+  --n-examples=5
+```
+
+这会保存显示每个转换效果的示例图像，帮助您调整参数。
+
+### 最佳实践
+
+- **从保守开始**：从小范围开始（例如亮度 0.9-1.1）并逐渐增加
+- **先测试**：使用可视化脚本确保转换看起来合理
+- **监控训练**：如果过于激进，强大的增强可能会损害性能
+- **匹配您的领域**：如果您的机器人在不同的照明下运行，使用亮度/对比度转换
+- **明智地组合**：同时使用太多转换可能会使训练不稳定
+
+## 迁移 `v2.1` → `v3.0`
+
+转换器将每个回合的文件聚合到更大的分片中，并写入回合偏移量/元数据。使用以下说明转换您的数据集。
+
+```bash
+# 支持 v3 的预发布版本：
+pip install "https://github.com/huggingface/lerobot/archive/33cad37054c2b594ceba57463e8f11ee374fa93c.zip"
+
+# 转换 Hub 上托管的现有 v2.1 数据集：
+python -m lerobot.datasets.v30.convert_dataset_v21_to_v30 --repo-id=<HF_USER/DATASET_ID>
+```
+
+**它做什么**
+
+- 聚合 parquet 文件：`episode-0000.parquet`、`episode-0001.parquet`、… → **`file-0000.parquet`**、…
+- 聚合 mp4 文件：`episode-0000.mp4`、`episode-0001.mp4`、… → **`file-0000.mp4`**、…
+- 使用每个回合的长度、任务和字节/帧偏移量更新 `meta/episodes/*`（分块 Parquet）。
+
+## 常见问题
+
+### 在推送之前始终调用 `finalize()`
+
+创建或记录数据集时，您**必须**调用 `dataset.finalize()` 以正确关闭 parquet 写入器。有关更多详细信息，请参阅 [PR #1903](https://github.com/huggingface/lerobot/pull/1903)。
+
+```python
+from lerobot.datasets import LeRobotDataset
+
+# 创建数据集并记录回合
+dataset = LeRobotDataset.create(...)
+
+for episode in range(num_episodes):
+    # 记录帧
+    for frame in episode_data:
+        dataset.add_frame(frame)
+    dataset.save_episode()
+
+# 在完成记录后和 push_to_hub() 之前调用 finalize()
+dataset.finalize()  # 关闭 parquet 写入器，写入元数据页脚
+dataset.push_to_hub()
+```
+
+**为什么这是必要的？**
+
+Dataset v3.0 使用带有缓冲元数据的增量 parquet 写入以提高效率。`finalize()` 方法：
+
+- 将任何缓冲的回合元数据刷新到磁盘
+- 关闭 parquet 写入器以写入页脚元数据，否则 parquet 文件将损坏
+- 确保数据集对加载有效
+
+如果不调用 `finalize()`，您的 parquet 文件将不完整，数据集将无法正确加载。

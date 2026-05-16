@@ -1,0 +1,267 @@
+# 人在环路数据收集
+
+人在环路（HIL）数据收集允许你通过在真实机器人上部署训练好的策略来改进它，同时人类操作员监控并在需要时进行干预。干预数据（恢复动作和纠正）与自主片段一起记录，产生更丰富的训练数据集，教会策略如何处理失败。
+
+---
+
+## 为什么需要人在环路？
+
+标准的行为克隆仅在成功的演示上训练策略。在部署期间，小错误可能会累积并将机器人推入训练期间从未见过的状态（分布偏移）。HIL 数据收集通过以下方式解决这个问题：
+
+- 在真实机器人上运行训练好的策略
+- 当机器人即将失败时让人类干预
+- 将人类的恢复和纠正记录为训练数据
+- 在组合数据集上微调策略
+
+这产生了一个不仅知道如何执行任务，而且知道如何在出错时恢复的策略。
+
+---
+
+## 工作原理
+
+在 HIL 会话期间，人类操作员在每个片段中遵循此循环：
+
+1. **观察**策略自主运行
+2. **暂停**当失败即将发生时，机器人保持其位置
+3. **接管控制**并遥操作机器人回到良好状态（恢复），然后纠正行为
+4. **将控制权返回给策略**，策略恢复自主执行
+5. 在片段期间根据需要重复步骤 2-4
+6. **结束片段**当任务完成时，保存并继续下一个推出
+
+自主和人类控制的片段都被记录。策略和人类可以在单个片段内多次交替控制，片段在每次交接后从当前状态继续（不需要仅因为发生干预而重置）。这在一个连续轨迹中捕获自主执行、恢复和纠正。收集后，组合数据集（原始演示 + HIL 数据）用于微调策略。
+
+这个过程可以迭代重复：部署、收集、微调、重复。每一轮都针对当前策略的失败模式。
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  策略 v0（在演示上训练）                                           │
+│       ↓                                                                 │
+│  HIL 收集（针对当前失败模式）→ 微调 → 策略 v1  │
+│       ↓                                                                 │
+│  HIL 收集（针对新失败模式）→ 微调 → 策略 v2      │
+│       ↓                                                                 │
+│  ...（重复直到性能满意）                            │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 硬件要求
+
+### 遥操作器要求
+
+`lerobot-rollout --strategy.type=dagger` 模式需要**具有主动电机的遥操作器**，可以：
+
+- 以编程方式启用/禁用扭矩
+- 移动到目标位置（在暂停时镜像机器人状态）
+
+**兼容的遥操作器：**
+
+- `openarm_mini` - OpenArm Mini
+- `so_leader` - SO100 / SO101 leader 臂
+
+> [!IMPORTANT]
+> 提供的命令默认为 `bi_openarm_follower` + `openarm_mini`。
+> `so_follower` + `so_leader` 配置也已注册，可以通过 CLI 标志使用。
+
+---
+
+## 脚本
+
+使用 `lerobot-rollout` 和 `--strategy.type=dagger` 进行 HIL 数据收集。使用 `--inference.type=sync|rtc` 选择推理后端：
+
+| 模式                     | 标志                   | 模型                |
+| ------------------------ | ---------------------- | --------------------- |
+| 标准（默认）       | _（不需要标志）_     | ACT、Diffusion Policy |
+| 实时分块（RTC） | `--inference.type=rtc` | Pi0、Pi0.5、SmolVLA   |
+
+---
+
+## 分步指南
+
+### 步骤 1：预训练基础策略
+
+首先，在你的演示数据集上训练一个策略：
+
+```bash
+python src/lerobot/scripts/lerobot_train.py \
+    --dataset.repo_id=your-username/demo-dataset \
+    --policy.type=pi0 \
+    --output_dir=outputs/pretrain \
+    --batch_size=32 \
+    --steps=50000
+```
+
+### 步骤 2：收集 HIL 数据
+
+**标准推理（ACT、Diffusion Policy）：**
+
+```bash
+lerobot-rollout --strategy.type=dagger \
+    --robot.type=bi_openarm_follower \
+    --robot.left_arm_config.port=can1 \
+    --robot.left_arm_config.side=left \
+    --robot.right_arm_config.port=can0 \
+    --robot.right_arm_config.side=right \
+    --robot.cameras='{left_wrist: {type: opencv, index_or_path: "/dev/video0", width: 1280, height: 720, fps: 30}, right_wrist: {type: opencv, index_or_path: "/dev/video4", width: 1280, height: 720, fps: 30}, base: {type: opencv, index_or_path: "/dev/video2", width: 640, height: 480, fps: 30}}' \
+    --teleop.type=openarm_mini \
+    --teleop.port_left=/dev/ttyACM0 \
+    --teleop.port_right=/dev/ttyACM1 \
+    --policy.path=outputs/pretrain/checkpoints/last/pretrained_model \
+    --dataset.repo_id=your-username/rollout_hil_dataset \
+    --dataset.single_task="Fold the T-shirt properly" \
+    --dataset.fps=30 \
+    --strategy.num_episodes=50 \
+    --interpolation_multiplier=2
+```
+
+**对大型模型使用 RTC（Pi0、Pi0.5、SmolVLA）：**
+
+对于具有高推理延迟的模型，启用 RTC 以实现平滑执行：
+
+```bash
+lerobot-rollout --strategy.type=dagger \
+    --inference.type=rtc \
+    --inference.rtc.execution_horizon=20 \
+    --inference.rtc.max_guidance_weight=5.0 \
+    --inference.rtc.prefix_attention_schedule=LINEAR \
+    --robot.type=bi_openarm_follower \
+    --robot.left_arm_config.port=can1 \
+    --robot.left_arm_config.side=left \
+    --robot.right_arm_config.port=can0 \
+    --robot.right_arm_config.side=right \
+    --robot.cameras='{left_wrist: {type: opencv, index_or_path: "/dev/video0", width: 1280, height: 720, fps: 30}, right_wrist: {type: opencv, index_or_path: "/dev/video4", width: 1280, height: 720, fps: 30}, base: {type: opencv, index_or_path: "/dev/video2", width: 640, height: 480, fps: 30}}' \
+    --teleop.type=openarm_mini \
+    --teleop.port_left=/dev/ttyACM0 \
+    --teleop.port_right=/dev/ttyACM1 \
+    --policy.path=outputs/pretrain/checkpoints/last/pretrained_model \
+    --dataset.repo_id=your-username/rollout_hil_rtc_dataset \
+    --dataset.single_task="Fold the T-shirt properly" \
+    --dataset.fps=30 \
+    --strategy.num_episodes=50 \
+    --interpolation_multiplier=3
+```
+
+**控制（概念性）：**
+
+交互模型是：
+
+- **暂停输入**：暂停自主策略执行
+- **接管输入**：将控制权转移给人类操作员并记录干预数据
+- **返回策略输入**：将控制权交还给策略并继续同一片段
+- **片段控制输入**：根据需要保存/重新记录/停止/重置
+
+确切的键/踏板绑定可能因脚本和硬件集成而异。使用每个脚本打印的控制作为你的设置上具体映射的真实来源。
+
+**HIL 协议：**
+
+1. 观察策略自主运行（遥操作空闲/自由）
+2. 当你看到即将失败时，触发**暂停输入**
+   - 策略停止
+   - 遥操作器移动以匹配机器人位置（启用扭矩）
+   - 暂停期间不记录帧
+3. 触发**接管输入**以接管控制
+   - 遥操作器扭矩禁用，可自由移动
+   - **恢复**：遥操作机器人回到良好状态
+   - **纠正**：纠正行为
+   - 所有动作都被记录
+4. 触发**返回策略输入**
+   - 策略从当前状态恢复自主执行
+   - 你可以随时再次干预（重复步骤 2-4）
+5. 当任务完成时结束并保存片段（或达到片段时间限制）
+6. **重置**：遥操作移动到机器人位置，你可以将机器人移动到起始位置
+7. 开始下一个片段
+
+**脚踏板设置（Linux）：**
+
+如果使用 USB 脚踏板（PCsensor FootSwitch），确保访问权限：
+
+```bash
+sudo setfacl -m u:$USER:rw /dev/input/by-id/usb-PCsensor_FootSwitch-event-kbd
+```
+
+### 步骤 3：微调策略
+
+在**组合**数据集（`demo-dataset` + `hil-dataset` 合并在一起）上微调：
+
+```bash
+python src/lerobot/scripts/lerobot_train.py \
+    --dataset.repo_id=your-username/hil-dataset \
+    --policy.type=pi0 \
+    --policy.pretrained_path=outputs/pretrain/checkpoints/last/pretrained_model \
+    --output_dir=outputs/hil_finetune \
+    --steps=20000
+```
+
+然后部署微调后的策略，并从步骤 2 重复以针对其剩余的失败模式。
+
+---
+
+## 有效 HIL 收集的技巧
+
+### 何时干预
+
+在以下情况下干预：
+
+- 机器人即将犯不可逆转的错误
+- 机器人犹豫或表现出不确定的行为
+- 机器人偏离预期轨迹
+
+### 恢复：遥操作回到良好状态
+
+在恢复期间，遥操作机器人回到以下状态：
+
+- 机器人处于熟悉的、分布内的配置
+- 当前子任务仍然可以完成
+- 恢复轨迹本身是有信息的训练数据
+
+### 纠正的质量
+
+在纠正期间：
+
+- 提供**自信、干净**的轨迹
+- 完全完成当前子任务
+- 不要过度纠正或添加不必要的动作
+
+---
+
+## 相关工作
+
+这种 HIL 数据收集方法建立在交互式模仿学习的思想之上：
+
+- **DAgger**（Ross 等人，2011）引入了核心思想：不仅在专家演示上训练，而是在_学习者_访问的状态上查询专家的纠正。这通过迭代收集在策略数据来打破标准行为克隆的累积错误循环。
+
+- **HG-DAgger**（Kelly 等人，2019）使这对机器人学来说变得实用：人类专家监控机器人，仅在需要时干预，而不是标记每个状态。自主和人类控制之间的门控正是这里脚本中使用的暂停 → 接管 → 返回策略循环。
+
+- **RaC**（Hu 等人，2025）通过明确将干预分解为**恢复**（遥操作回到良好状态）和**纠正**（从那里演示正确的行为）来将此循环扩展到长期任务。这种分解是 `lerobot-rollout` 中 DAgger 策略遵循的协议。
+
+- **π0.6/RECAP**（Physical Intelligence，2025）在 VLA 模型的规模上应用相同的迭代收集和微调循环，表明即使是大型预训练策略也能从针对其自身失败模式的有针对性的人类纠正中大大受益。π0.6 使用 RECAP 训练。
+
+```bibtex
+@article{ross2011dagger,
+  title={A Reduction of Imitation Learning and Structured Prediction to No-Regret Online Learning},
+  author={Ross, Stéphane and Gordon, Geoffrey and Bagnell, Drew},
+  journal={Proceedings of the Fourteenth International Conference on Artificial Intelligence and Statistics},
+  year={2011}
+}
+
+@article{kelly2019hgdagger,
+  title={HG-DAgger: Interactive Imitation Learning with Human Experts},
+  author={Kelly, Michael and Sidrane, Chelsea and Driggs-Campbell, Katherine and Kochenderfer, Mykel J},
+  journal={arXiv preprint arXiv:1810.02890},
+  year={2019}
+}
+
+@article{hu2025rac,
+  title={RaC: Robot Learning for Long-Horizon Tasks by Scaling Recovery and Correction},
+  author={Hu, Zheyuan and Wu, Robyn and Enock, Naveen and Li, Jasmine and Kadakia, Riya and Erickson, Zackory and Kumar, Aviral},
+  journal={arXiv preprint arXiv:2509.07953},
+  year={2025}
+}
+
+@article{pi2025recap,
+  title={π0.6: a VLA That Learns From Experience},
+  author={Physical Intelligence},
+  year={2025}
+}
+```
