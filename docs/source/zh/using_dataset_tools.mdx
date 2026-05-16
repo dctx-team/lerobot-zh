@@ -1,0 +1,231 @@
+# 使用数据集工具
+
+本指南涵盖 LeRobot 中可用于修改和编辑现有数据集的数据集工具实用程序。
+
+## 概述
+
+LeRobot 提供了几个用于操作数据集的实用程序：
+
+1. **删除回合** - 从数据集中删除特定回合
+2. **拆分数据集** - 将数据集分成多个较小的数据集
+3. **合并数据集** - 将多个数据集合并为一个。数据集必须具有相同的特征，回合按 `repo_ids` 中指定的顺序连接
+4. **添加特征** - 向数据集添加新特征
+5. **删除特征** - 从数据集中删除特征
+6. **转换为视频** - 将基于图像的数据集转换为视频格式以实现高效存储
+7. **显示数据集信息** - 显示数据集信息摘要，例如回合数等。
+
+核心实现在 `lerobot.datasets.dataset_tools` 中。
+详细说明如何使用工具 API 的示例脚本可在 `examples/dataset/use_dataset_tools.py` 中找到。
+
+## 命令行工具：lerobot-edit-dataset
+
+`lerobot-edit-dataset` 是用于编辑数据集的命令行脚本。它可用于删除回合、拆分数据集、合并数据集、添加特征、删除特征以及将图像数据集转换为视频格式。
+
+运行 `lerobot-edit-dataset --help` 以获取有关每个操作配置的更多信息。
+
+### 使用示例
+
+#### 删除回合
+
+从数据集中删除特定回合。这对于过滤掉不需要的数据很有用。
+
+```bash
+# 删除回合 0、2 和 5（修改原始数据集）
+lerobot-edit-dataset \
+    --repo_id lerobot/pusht \
+    --operation.type delete_episodes \
+    --operation.episode_indices "[0, 2, 5]"
+
+# 删除回合并保存到新数据集（保留原始数据集）
+lerobot-edit-dataset \
+    --repo_id lerobot/pusht \
+    --new_repo_id lerobot/pusht_after_deletion \
+    --operation.type delete_episodes \
+    --operation.episode_indices "[0, 2, 5]"
+```
+
+#### 拆分数据集
+
+将数据集分成多个子集。
+
+```bash
+# 按比例拆分（例如 80% 训练，20% 测试，20% 验证）
+lerobot-edit-dataset \
+    --repo_id lerobot/pusht \
+    --operation.type split \
+    --operation.splits '{"train": 0.8, "test": 0.2, "val": 0.2}'
+
+# 按特定回合索引拆分
+lerobot-edit-dataset \
+    --repo_id lerobot/pusht \
+    --operation.type split \
+    --operation.splits '{"task1": [0, 1, 2, 3], "task2": [4, 5]}'
+```
+
+拆分名称没有约束，可以由用户确定。生成的数据集保存在附加了拆分名称的 repo id 下，例如 `lerobot/pusht_train`、`lerobot/pusht_task1`、`lerobot/pusht_task2`。
+
+#### 合并数据集
+
+将多个数据集合并为一个数据集。
+
+```bash
+# 将训练和验证拆分合并回一个数据集
+lerobot-edit-dataset \
+    --repo_id lerobot/pusht_merged \
+    --operation.type merge \
+    --operation.repo_ids "['lerobot/pusht_train', 'lerobot/pusht_val']"
+```
+
+#### 删除特征
+
+从数据集中删除特征。
+
+```bash
+# 删除相机特征
+lerobot-edit-dataset \
+    --repo_id lerobot/pusht \
+    --operation.type remove_feature \
+    --operation.feature_names "['observation.images.top']"
+```
+
+#### 转换为视频
+
+将基于图像的数据集转换为视频格式，创建一个新的 LeRobotDataset，其中图像存储为视频。这对于减少存储需求和提高数据加载性能很有用。新数据集将具有与原始数据集完全相同的结构，但图像以适当的 LeRobot 格式编码为 MP4 视频。
+
+```bash
+# 仅本地：保存到自定义输出目录（不推送到 Hub）
+lerobot-edit-dataset \
+    --repo_id lerobot/pusht_image \
+    --operation.type convert_image_to_video \
+    --operation.output_dir /path/to/output/pusht_video
+
+# 使用新 repo_id 保存（本地存储）
+lerobot-edit-dataset \
+    --repo_id lerobot/pusht_image \
+    --new_repo_id lerobot/pusht_video \
+    --operation.type convert_image_to_video
+
+# 转换并推送到 Hugging Face Hub
+lerobot-edit-dataset \
+    --repo_id lerobot/pusht_image \
+    --new_repo_id lerobot/pusht_video \
+    --operation.type convert_image_to_video \
+    --push_to_hub true
+
+# 使用自定义视频编解码器和质量设置进行转换
+lerobot-edit-dataset \
+    --repo_id lerobot/pusht_image \
+    --operation.type convert_image_to_video \
+    --operation.output_dir outputs/pusht_video \
+    --operation.camera_encoder.vcodec libsvtav1 \
+    --operation.camera_encoder.pix_fmt yuv420p \
+    --operation.camera_encoder.g 2 \
+    --operation.camera_encoder.crf 30
+
+# 仅转换特定回合
+lerobot-edit-dataset \
+    --repo_id lerobot/pusht_image \
+    --operation.type convert_image_to_video \
+    --operation.output_dir outputs/pusht_video \
+    --operation.episode_indices "[0, 1, 2, 5, 10]"
+
+# 使用多个工作线程进行并行处理
+lerobot-edit-dataset \
+    --repo_id lerobot/pusht_image \
+    --operation.type convert_image_to_video \
+    --operation.output_dir outputs/pusht_video \
+    --operation.num_workers 8
+
+# 对于内存受限的系统，用户现在可以指定限制：
+lerobot-edit-dataset \
+    --repo_id lerobot/pusht_image \
+    --operation.type convert_to_video \
+    --operation.max_episodes_per_batch 50 \
+    --operation.max_frames_per_batch 10000
+```
+
+**参数：**
+
+- `output_dir`：自定义输出目录（可选 - 默认使用 `new_repo_id` 或 `{repo_id}_video`）
+- `camera_encoder`：视频编码器设置 — 所有子字段可通过 `--operation.camera_encoder.<field>` 访问。有关更多详细信息，请参阅[视频编码参数](./video_encoding_parameters)。
+- `episode_indices`：要转换的特定回合列表（默认：所有回合）
+- `num_workers`：用于处理的并行工作线程数（默认：4）
+
+**注意：** 生成的数据集将是一个适当的 LeRobotDataset，所有相机都编码为 `videos/` 目录中的视频，parquet 文件仅包含元数据（没有原始图像数据）。保留所有回合、统计信息和任务。
+
+### 显示数据集信息
+
+显示数据集信息，例如回合数、帧数、文件大小等。
+不会对数据集进行任何更改
+
+```bash
+
+# 显示数据集信息而不显示特征详细信息
+lerobot-edit-dataset \
+    --repo_id lerobot/pusht_image \
+    --operation.type info \
+
+# 显示数据集信息及特征详细信息
+lerobot-edit-dataset \
+    --repo_id lerobot/pusht_image \
+    --operation.type info \
+    --operation.show_features true
+
+```
+
+**参数：**
+
+- `parameters`：控制是否显示带有特征详细信息的数据集信息的标志。（默认=false）
+
+### 推送到 Hub
+
+将 `--push_to_hub true` 标志添加到任何命令以自动将生成的数据集上传到 Hugging Face Hub：
+
+```bash
+lerobot-edit-dataset \
+    --repo_id lerobot/pusht \
+    --new_repo_id lerobot/pusht_after_deletion \
+    --operation.type delete_episodes \
+    --operation.episode_indices "[0, 2, 5]" \
+    --push_to_hub true
+```
+
+还有一个用于向数据集添加特征的工具，该工具尚未在 `lerobot-edit-dataset` 中涵盖。
+
+# 数据集可视化
+
+## 在线可视化
+
+当您使用 `lerobot` 记录数据集时，除非您另有说明，否则它会自动上传到 Hugging Face Hub。要在线查看数据集，请使用我们的 **LeRobot 数据集可视化工具**，可在以下位置获得：
+https://huggingface.co/spaces/lerobot/visualize_dataset
+
+## 本地可视化
+
+您还可以使用我们的命令行工具在本地可视化数据集中的回合。
+
+**从 Hugging Face Hub：**
+
+```bash
+lerobot-dataset-viz \
+    --repo-id lerobot/pusht \
+    --episode-index 0
+```
+
+**从本地文件夹：**
+添加 `--root` 选项并设置 `--mode local`。例如，要在 `./my_local_data_dir/lerobot/pusht` 中搜索：
+
+```bash
+lerobot-dataset-viz \
+    --repo-id lerobot/pusht \
+    --root ./my_local_data_dir \
+    --mode local \
+    --episode-index 0
+```
+
+执行后，该工具会打开 `rerun.io` 并显示所选回合的相机流、机器人状态和动作。
+
+对于高级用法——包括可视化存储在远程服务器上的数据集——运行：
+
+```bash
+lerobot-dataset-viz --help
+```
