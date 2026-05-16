@@ -1,0 +1,191 @@
+# 实时分块（RTC）
+
+实时分块（RTC）是一种推理时方法，允许大型基于流匹配的机器人策略（如 [Pi0](./pi0)、[Pi0.5](./pi05) 和 [SmolVLA](./smolvla)）在具有高推理延迟的情况下产生平滑、连续和响应式的运动。
+
+这些策略生成未来动作的分块（例如，一次 50 步），而不是单个动作。
+由于模型很大，生成每个分块所需的时间比机器人执行它所需的时间更长。
+天真地执行分块会导致诸如暂停、不稳定的过渡或每当下一个分块到达较晚或与先前执行的动作不一致时策略突然改变等问题。
+
+RTC 通过在机器人继续执行当前分块时异步生成下一个分块，并通过引导新分块使其与已执行的前一个分块的部分平滑对齐来解决这个问题。
+
+## RTC 工作原理（简化版）
+
+RTC 让机器人在移动时提前思考。当机器人正在执行一个动作分块时，RTC 提前开始创建下一个分块。
+但由于机器人在新分块准备好时已经移动了一点，RTC 必须确保新分块仍然与机器人当前正在做的事情平滑对齐。
+
+为此，RTC 将新分块的开头视为修复或"填补空白"问题：
+它轻轻调整新分块的第一部分，使其与机器人正在进行的运动自然融合。结果是没有暂停，没有突然跳跃。
+
+从技术角度来说，RTC 向流匹配去噪过程添加了一个引导项，强制新分块的重叠时间步保持接近前一个分块的已执行部分，通常使用软过渡掩码。
+
+## 快速开始
+
+### 安装
+
+RTC 内置于 LeRobot 中。只需安装您需要的策略依赖项：
+
+```bash
+# 对于 Pi0 或 Pi0.5
+pip install -e ".[pi]"
+
+# 对于 SmolVLA
+pip install -e ".[smolvla]"
+```
+
+### 在 Pi0 中使用 RTC
+
+您可以使用 `lerobot-rollout --strategy.type=base --inference.type=rtc` 在真实机器人上部署 RTC。
+下面的代码片段提供了一个简化的伪示例，说明 RTC 如何在您的管道中与 Pi0 一起运行：
+
+```python
+from lerobot.policies.pi0 import PI0Policy, PI0Config
+from lerobot.configs import RTCAttentionSchedule
+from lerobot.policies.rtc import RTCConfig, ActionQueue
+
+# 加载启用 RTC 的 Pi0
+policy_cfg = PI0Config()
+
+# 启用 RTC
+policy_cfg.rtc_config = RTCConfig(
+    enabled=True,
+    execution_horizon=10,  # 与前一个分块混合的步数
+    max_guidance_weight=10.0,  # 强制一致性的强度
+    prefix_attention_schedule=RTCAttentionSchedule.EXP,  # 指数混合
+)
+
+# 加载策略
+policy = PI0Policy.from_pretrained("lerobot/pi0_base", policy_cfg=policy_cfg, device="cuda")
+
+# 现在使用带有 RTC 参数的 predict_action_chunk
+inference_delay = 4  # 推理延迟的步数，此值应根据策略的推理延迟计算
+
+# 初始化动作队列
+action_queue = ActionQueue(policy_cfg.rtc_config)
+
+# 在单独的线程中使用以下函数启动
+def get_actions():
+  while True:
+    if should_get_actions:
+
+      prev_actions = action_queue.get_left_over()
+      obs = get_robot_observations(robot)
+
+      # 使用 RTC 生成动作
+      actions = policy.predict_action_chunk(
+          obs,
+          inference_delay=inference_delay,
+          prev_chunk_left_over=prev_actions,
+      )
+
+      action_queue.merge(
+          actions, actions, inference_delay
+      )
+
+for step in range(num_steps):
+    action = action_queue.get()
+
+    # 执行前 N 个动作
+    execute_actions(action)
+```
+
+## 关键参数
+
+`RTCConfig` 有以下参数可供调整：
+
+**`execution_horizon`**：与前一个分块保持一致性的时间步数。值越高意味着过渡越平滑，但可能响应性越低。
+
+典型值：8-12 步
+
+```python
+RTCConfig(execution_horizon=10)
+```
+
+**`max_guidance_weight`**：强制与前一个分块保持一致性的强度。这是一个超参数，可以调整以平衡过渡的平滑性和策略的响应性。对于 10 步流匹配（SmolVLA、Pi0、Pi0.5），值 10.0 是最佳值。
+
+**`prefix_attention_schedule`**：如何在重叠区域加权一致性。
+
+- `LINEAR`：从 inference_delay 到 execution_horizon 的线性衰减
+- `EXP`：指数衰减（推荐入门使用）
+- `ONES`：整个 execution_horizon 的完全权重
+- `ZEROS`：二进制（直到 inference_delay 的完全权重，然后为零）
+
+**`inference_delay`**：您的系统具有的推理延迟时间步数。这传递给 `predict_action_chunk()` 而不是配置，因为它可能在运行时变化。
+
+## 离线测试 RTC
+
+在真实机器人上运行之前，使用数据集样本测试 RTC 以可视化其工作原理：
+
+```bash
+python examples/rtc/eval_dataset.py \
+    --policy.path=lerobot/pi0_libero_finetuned \
+    --dataset.repo_id=HuggingFaceVLA/libero \
+    --rtc.execution_horizon=10 \
+    --rtc.max_guidance_weight=10.0 \
+    --device=cuda
+```
+
+该脚本生成去噪过程的可视化，比较标准生成（左）和 RTC（右）。在 RTC 图中，您可以看到前几步（蓝色/紫色线）如何被引导以匹配红色真实轨迹（前一个分块的尾部），确保分块之间的平滑过渡。
+
+<p align="center">
+  <img
+    src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/flow_matching.png"
+    alt="有无 RTC 的去噪步骤"
+    width="100%"
+  />
+</p>
+
+## 在真实机器人上测试 RTC
+
+```bash
+lerobot-rollout \
+    --strategy.type=base \
+    --policy.path=${HF_USERNAME}/policy_repo_id \
+    --inference.type=rtc \
+    --inference.rtc.execution_horizon=10 \
+    --inference.rtc.max_guidance_weight=10.0 \
+    --robot.type=so100_follower \
+    --robot.port=/dev/tty.usbmodem58FA0834591 \
+    --robot.cameras="{ gripper: {type: opencv, index_or_path: 1, width: 640, height: 480, fps: 30}, front: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
+    --task="Move green small object into the purple platform" \
+    --duration=120 \
+    --device=cuda
+```
+
+## 与 LeRobot 中的异步推理的区别
+
+RTC 和[异步推理](./async)都改善了实时机器人控制，但它们解决不同的问题。
+
+| 方面       | 异步推理                                   | RTC                                  |
+| ---------- | ------------------------------------------ | ------------------------------------ |
+| **问题**   | 等待推理时的空闲帧                         | 动作分块之间的不连续性               |
+| **解决方案** | 将预测与执行解耦                           | 引导新分块从前一个分块平滑继续       |
+| **好处**   | 无等待，连续动作                           | 平滑过渡，自然运动                   |
+| **最佳使用** | 异步推理最适合具有高推理延迟的大型模型 | 基于流匹配的策略                     |
+
+**一起使用两者**以获得最大的平滑性和响应性！
+
+## 高级：调试跟踪
+
+RTC 包含内置的调试跟踪，帮助您了解推理期间发生的事情：
+
+```python
+# 启用调试跟踪
+policy_cfg.rtc_config.debug = True
+policy_cfg.rtc_config.debug_maxlen = 100
+
+# 推理后，访问调试数据
+debug_data = policy.rtc_processor.get_debug_data()
+
+# 可视化去噪步骤、修正等
+from lerobot.policies.rtc.debug_visualizer import RTCDebugVisualizer
+visualizer = RTCDebugVisualizer()
+# ... 创建图表
+```
+
+有关离线 RTC 可视化的完整示例，请参见 `examples/rtc/eval_dataset.py`。
+
+## 参考资料
+
+- [Smooth-As-Butter Robot Policies](https://alexander-soare.github.io/robotics/2025/08/05/smooth-as-butter-robot-policies.html) - 出色的技术解释和真实机器人结果
+- [Physical Intelligence - Real-Time Chunking](https://www.physicalintelligence.company/research/real_time_chunking) - 原始论文和研究
+- [Kinetix RTC Implementation](https://github.com/Physical-Intelligence/real-time-chunking-kinetix) - Physical Intelligence 的参考实现

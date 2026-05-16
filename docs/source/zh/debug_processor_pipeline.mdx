@@ -1,0 +1,297 @@
+# 调试处理器管道
+
+处理器管道可能很复杂，尤其是在链接多个转换步骤时。
+与简单的函数调用不同，管道缺乏自然的可观测性，你无法轻松看到每个步骤之间发生了什么或哪里出了问题。
+本指南提供了专门设计用于解决这些挑战的调试工具和技术，帮助你理解数据在管道中的流动。
+
+我们将探索三种互补的调试方法：用于运行时监控的**钩子（hooks）**、用于详细检查的**逐步调试**以及用于捕获结构不匹配的**特征验证**。每种方法都有不同的用途，它们共同提供了对管道行为的完整可见性。
+
+## 理解钩子
+
+钩子是在管道执行期间特定时刻被调用的函数。
+它们提供了一种在不更改管道代码的情况下检查、监控或修改数据的方法。
+可以将它们视为管道的"事件监听器"。
+
+### 什么是钩子？
+
+钩子是一个回调函数，在管道执行期间的特定时刻自动调用。
+这个概念来自事件驱动编程，想象你可以"钩入"管道的执行流程来观察或响应正在发生的事情。
+
+可以将钩子想象成在管道中插入检查点。每次管道到达这些检查点之一时，它会短暂暂停以调用你的钩子函数，让你有机会检查当前状态、记录信息和验证数据。
+
+钩子只是一个接受两个参数的函数：
+
+- `step_idx: int` - 当前处理步骤的索引（0、1、2 等）
+- `transition: EnvTransition` - 管道中该点的数据转换
+
+钩子的美妙之处在于它们的非侵入性：你可以添加监控、验证或调试逻辑，而无需更改管道代码的任何一行。管道保持干净并专注于其核心逻辑，而钩子处理日志记录、监控和调试等横切关注点。
+
+### Before 与 After 钩子
+
+管道支持两种类型的钩子：
+
+- **Before 钩子**（`register_before_step_hook`）- 在每个步骤执行之前调用
+- **After 钩子**（`register_after_step_hook`）- 在每个步骤完成之后调用
+
+```python
+def before_hook(step_idx: int, transition: EnvTransition):
+    """在步骤处理转换之前调用。"""
+    print(f"即将执行步骤 {step_idx}")
+    # 用途：日志记录、验证、设置
+
+def after_hook(step_idx: int, transition: EnvTransition):
+    """在步骤处理转换之后调用。"""
+    print(f"完成步骤 {step_idx}")
+    # 用途：监控结果、清理、调试
+
+processor.register_before_step_hook(before_hook)
+processor.register_after_step_hook(after_hook)
+```
+
+### 实现 NaN 检测钩子
+
+这是一个检测 NaN 值的钩子的实际示例：
+
+```python
+def check_nans(step_idx: int, transition: EnvTransition):
+    """检查观测中的 NaN 值。"""
+    obs = transition.get(TransitionKey.OBSERVATION)
+    if obs:
+        for key, value in obs.items():
+            if isinstance(value, torch.Tensor) and torch.isnan(value).any():
+                print(f"在步骤 {step_idx} 的 {key} 中检测到 NaN")
+
+# 注册钩子以在每个步骤后运行
+processor.register_after_step_hook(check_nans)
+
+# 处理你的数据 - 钩子将自动调用
+output = processor(input_data)
+
+# 调试完成后移除钩子
+processor.unregister_after_step_hook(check_nans)
+```
+
+### 钩子的内部工作原理
+
+理解内部机制有助于你更有效地使用钩子。管道维护两个独立的列表：一个用于 before-step 钩子，另一个用于 after-step 钩子。当你注册一个钩子时，它只是被追加到相应的列表中。
+
+在执行期间，管道遵循严格的顺序：对于每个处理步骤，它首先按注册顺序调用所有 before-hooks，然后执行实际的步骤转换，最后按注册顺序调用所有 after-hooks。这在每个步骤周围创建了一个可预测的三明治式结构。
+
+关键见解是钩子不会改变核心管道逻辑——它们纯粹是附加的。管道的 `_forward` 方法编排钩子和处理步骤之间的这种舞蹈，确保你的调试或监控代码在正确的时刻运行，而不会干扰主数据流。
+
+这是管道如何执行钩子的简化视图：
+
+```python
+class DataProcessorPipeline:
+    def __init__(self):
+        self.steps = [...]
+        self.before_step_hooks = []  # Before 钩子列表
+        self.after_step_hooks = []   # After 钩子列表
+
+    def _forward(self, transition):
+        """处理转换通过所有步骤的内部方法。"""
+        for step_idx, processor_step in enumerate(self.steps):
+            # 1. 调用所有 BEFORE 钩子
+            for hook in self.before_step_hooks:
+                hook(step_idx, transition)
+
+            # 2. 执行实际的处理步骤
+            transition = processor_step(transition)
+
+            # 3. 调用所有 AFTER 钩子
+            for hook in self.after_step_hooks:
+                hook(step_idx, transition)
+
+        return transition
+
+    def register_before_step_hook(self, hook_fn):
+        self.before_step_hooks.append(hook_fn)
+
+    def register_after_step_hook(self, hook_fn):
+        self.after_step_hooks.append(hook_fn)
+```
+
+### 执行流程
+
+执行流程如下所示：
+
+```
+输入 → Before 钩子 → 步骤 0 → After 钩子 → Before 钩子 → 步骤 1 → After 钩子 → ... → 输出
+```
+
+例如，使用 3 个步骤和两种钩子类型：
+
+```python
+def timing_before(step_idx, transition):
+    print(f"⏱️  开始步骤 {step_idx}")
+
+def validation_after(step_idx, transition):
+    print(f"✅ 完成步骤 {step_idx}")
+
+processor.register_before_step_hook(timing_before)
+processor.register_after_step_hook(validation_after)
+
+# 这将输出：
+# ⏱️  开始步骤 0
+# ✅ 完成步骤 0
+# ⏱️  开始步骤 1
+# ✅ 完成步骤 1
+# ⏱️  开始步骤 2
+# ✅ 完成步骤 2
+```
+
+### 多个钩子
+
+你可以注册同一类型的多个钩子 - 它们按注册顺序执行：
+
+```python
+def log_shapes(step_idx: int, transition: EnvTransition):
+    obs = transition.get(TransitionKey.OBSERVATION)
+    if obs:
+        print(f"步骤 {step_idx} 观测形状：")
+        for key, value in obs.items():
+            if isinstance(value, torch.Tensor):
+                print(f"  {key}: {value.shape}")
+
+processor.register_after_step_hook(check_nans)      # 首先执行
+processor.register_after_step_hook(log_shapes)     # 其次执行
+
+# 两个钩子都将在每个步骤后按注册顺序调用
+output = processor(input_data)
+```
+
+虽然钩子非常适合在正常管道执行期间监控特定问题（如 NaN 检测）或收集指标，但有时你需要更深入地挖掘。当你想准确了解每个步骤发生了什么或调试复杂的转换逻辑时，逐步调试提供了你需要的详细检查。
+
+## 逐步调试
+
+逐步调试就像为你的管道提供慢动作回放。你不是看着数据从输入到输出的快速模糊转换，而是可以暂停并检查每个单独步骤后发生的事情。
+
+当你试图理解复杂的管道、调试意外行为或验证每个转换是否按预期工作时，这种方法特别有价值。与钩子不同，钩子非常适合自动监控，逐步调试为你提供了对检查过程的手动、交互式控制。
+
+`step_through()` 方法是一个生成器，在每个处理步骤后产生转换状态，允许你检查中间结果。可以将其视为在数据流经管道时创建一系列快照——每个快照都显示在应用了一个转换后数据的确切样子。
+
+### 逐步调试的工作原理
+
+`step_through()` 方法从根本上改变了管道的执行方式。它不是按顺序运行所有步骤并只返回最终结果，而是将管道转换为产生中间结果的迭代器。
+
+内部发生的情况如下：该方法首先将你的输入数据转换为管道的内部转换格式，然后产生这个初始状态。接下来，它应用第一个处理步骤并产生结果。然后它将第二个步骤应用于该结果并再次产生，依此类推。每个 `yield` 都为你提供了该点转换的完整快照。
+
+这种生成器模式很强大，因为它是惰性的——管道只在你请求时才计算下一步。这意味着你可以在任何时候停止，彻底检查当前状态，并决定是否继续。你不必运行整个管道只是为了调试一个有问题的步骤。
+
+`step_through()` 不是运行整个管道并只看到最终结果，而是在每个步骤后暂停并给你中间转换：
+
+```python
+# 这创建了一个产生中间状态的生成器
+for i, intermediate_result in enumerate(processor.step_through(input_data)):
+    print(f"=== 步骤 {i} 之后 ===")
+
+    # 检查此阶段的观测
+    obs = intermediate_result.get(TransitionKey.OBSERVATION)
+    if obs:
+        for key, value in obs.items():
+            if isinstance(value, torch.Tensor):
+                print(f"{key}: shape={value.shape}, dtype={value.dtype}")
+```
+
+### 使用断点进行交互式调试
+
+你可以在逐步循环中添加断点以进行交互式调试：
+
+```python
+# 使用调试逐步执行管道
+for i, intermediate in enumerate(processor.step_through(data)):
+    print(f"步骤 {i}: {processor.steps[i].__class__.__name__}")
+
+    # 设置断点以检查当前状态
+    breakpoint()  # 调试器将在此处暂停
+
+    # 你现在可以在调试器中检查 'intermediate'：
+    # - 检查张量形状和值
+    # - 验证预期的转换
+    # - 查找意外的更改
+```
+
+在调试器会话期间，你可以：
+
+- 检查 `intermediate[TransitionKey.OBSERVATION]` 以查看观测数据
+- 检查 `intermediate[TransitionKey.ACTION]` 以查看动作转换
+- 检查转换的任何部分以了解每个步骤的作用
+
+逐步调试非常适合理解_数据_转换，但数据的_结构_呢？虽然钩子和逐步调试帮助你调试运行时行为，但你还需要确保你的管道以下游组件期望的格式生成数据。这就是特征契约验证的用武之地。
+
+## 验证特征契约
+
+特征契约定义了管道期望作为输入和产生作为输出的数据结构。
+验证这些契约有助于及早发现不匹配。
+
+### 理解特征契约
+
+每个处理器步骤都有一个 `transform_features()` 方法，描述它如何改变数据结构：
+
+```python
+# 从管道获取预期的输出特征
+initial_features = {
+    PipelineFeatureType.OBSERVATION: {
+        "observation.state": PolicyFeature(type=FeatureType.STATE, shape=(7,)),
+        "observation.image": PolicyFeature(type=FeatureType.IMAGE, shape=(3, 224, 224))
+    },
+    PipelineFeatureType.ACTION: {
+        "action": PolicyFeature(type=FeatureType.ACTION, shape=(4,))
+    }
+}
+
+# 检查管道将输出什么
+output_features = processor.transform_features(initial_features)
+
+print("输入特征：")
+for feature_type, features in initial_features.items():
+    print(f"  {feature_type}:")
+    for key, feature in features.items():
+        print(f"    {key}: {feature.type.value}, shape={feature.shape}")
+
+print("\n输出特征：")
+for feature_type, features in output_features.items():
+    print(f"  {feature_type}:")
+    for key, feature in features.items():
+        print(f"    {key}: {feature.type.value}, shape={feature.shape}")
+```
+
+### 验证预期特征
+
+检查你的管道是否产生你期望的特征：
+
+```python
+# 定义你期望管道产生的特征
+expected_keys = ["observation.state", "observation.image", "action"]
+
+print("验证特征契约...")
+for expected_key in expected_keys:
+    found = False
+    for feature_type, features in output_features.items():
+        if expected_key in features:
+            feature = features[expected_key]
+            print(f"✅ {expected_key}: {feature.type.value}, shape={feature.shape}")
+            found = True
+            break
+
+    if not found:
+        print(f"❌ 缺少预期特征：{expected_key}")
+```
+
+这种验证有助于确保你的管道能够正确地与期望特定数据结构的下游组件一起工作。
+
+## 总结
+
+现在你了解了三种调试方法，你可以系统地解决任何管道问题：
+
+1. **钩子** - 用于运行时监控和验证，无需修改管道代码
+2. **逐步调试** - 用于检查中间状态和理解转换
+3. **特征验证** - 用于确保满足数据结构契约
+
+**何时使用每种方法：**
+
+- 当你需要了解管道的作用或发生意外情况时，从**逐步调试**开始
+- 在开发和生产期间添加**钩子**以进行持续监控，自动捕获问题
+- 在部署前使用**特征验证**以确保管道与下游组件一起工作
+
+这三个工具共同为你提供了复杂管道自然缺乏的完整可观测性。有了钩子监视问题、逐步调试帮助你理解行为以及特征验证确保兼容性，你将能够自信而高效地调试任何管道。

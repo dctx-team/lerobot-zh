@@ -1,0 +1,188 @@
+# RoboCasa365
+
+[RoboCasa365](https://robocasa.ai) 是一个大规模仿真框架，用于训练和基准测试日常厨房任务中的**通用机器人**。它在 2,500 个厨房环境中提供 365 个不同的操作任务、3,200+ 个物体资源和 600+ 小时的人类演示数据，使用 PandaOmron 12-DOF 移动机械臂（全向底座上的 Franka 机械臂）。
+
+- 论文：[RoboCasa: Large-Scale Simulation of Everyday Tasks for Generalist Robots](https://arxiv.org/abs/2406.02523)
+- GitHub：[robocasa/robocasa](https://github.com/robocasa/robocasa)
+- 项目网站：[robocasa.ai](https://robocasa.ai)
+- 预训练策略：[`lerobot/smolvla_robocasa`](https://huggingface.co/lerobot/smolvla_robocasa)
+- 单任务数据集（CloseFridge）：[`pepijn223/robocasa_CloseFridge`](https://huggingface.co/datasets/pepijn223/robocasa_CloseFridge)
+
+<img
+  src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/robocasa-banner.webp"
+  alt="RoboCasa365 基准测试概览"
+  width="85%"
+/>
+
+## 可用任务
+
+RoboCasa365 将其 365 个任务组织成两个系列和三个上游基准测试组，LeRobot 将其作为一流的 `--env.task` 快捷方式公开：
+
+| 系列      | 任务数 | 描述                                                         |
+| --------- | ------ | ------------------------------------------------------------ |
+| Atomic    | ~65    | 单技能任务：拾取放置、门/抽屉操作、电器控制                  |
+| Composite | ~300   | 跨 60+ 类别的多步任务：烹饪、清洁、整理等                    |
+
+**原子任务示例：** `CloseFridge`、`OpenDrawer`、`OpenCabinet`、`TurnOnMicrowave`、`TurnOffStove`、`NavigateKitchen`、`PickPlaceCounterToStove`。
+
+**复合任务类别：** 烘焙、煮沸、冲泡、切碎、清理桌子、解冻食物、装载洗碗机、泡茶、微波食物、洗碗等。
+
+`--env.task` 接受三种形式：
+
+- 单个任务名称（`CloseFridge`）
+- 逗号分隔列表（`CloseFridge,OpenBlenderLid,PickPlaceCoffee`）
+- 基准测试组快捷方式 — `atomic_seen`、`composite_seen`、`composite_unseen`、`pretrain50`、`pretrain100`、`pretrain200`、`pretrain300` — 自动扩展到上游任务列表并自动设置数据集 `split`（`target` 或 `pretrain`）。
+
+## 安装
+
+RoboCasa 及其依赖 `robosuite` 未在 PyPI 上发布，RoboCasa 自己的 `setup.py` 硬编码了 `lerobot==0.3.3`，这与此仓库的 `lerobot` 冲突。因此 LeRobot **不**公开 `robocasa` extra — 将这两个包作为可编辑克隆手动安装（在 `robocasa` 上使用 `--no-deps` 以跳过其隐藏的 `lerobot` 固定）：
+
+```bash
+# 按照标准 LeRobot 安装说明后。
+
+git clone https://github.com/robocasa/robocasa.git ~/robocasa
+git clone https://github.com/ARISE-Initiative/robosuite.git ~/robosuite
+pip install -e ~/robocasa --no-deps
+pip install -e ~/robosuite
+
+# Robocasa 的运行时依赖（其 setup.py 会拉取的那些，减去
+# 错误的 lerobot 固定）。
+pip install numpy numba scipy mujoco pygame Pillow opencv-python \
+            pyyaml pynput tqdm termcolor imageio h5py lxml hidapi \
+            tianshou gymnasium
+
+python -m robocasa.scripts.setup_macros
+# 轻量级资源（lightwheel 物体网格 + 纹理）。足以
+# 开箱即用的默认环境。
+python -m robocasa.scripts.download_kitchen_assets \
+  --type tex tex_generative fixtures_lw objs_lw
+# 可选：完整的 objaverse/aigen 注册表（~30GB）以获得更丰富的物体
+# 多样性。在评估时通过 --env.obj_registries 启用（见下文）。
+# python -m robocasa.scripts.download_kitchen_assets --type objs_objaverse
+```
+
+<Tip>
+RoboCasa 需要 MuJoCo。在训练或评估之前设置渲染后端：
+
+```bash
+export MUJOCO_GL=egl  # 用于无头服务器（HPC、云）
+```
+
+</Tip>
+
+### 物体注册表
+
+默认情况下，环境仅从 `lightwheel` 注册表（`--type objs_lw` 提供的内容）采样物体，这避免了当 objaverse / aigen 包不在磁盘上时出现 `Probabilities contain NaN` 崩溃。如果您已下载完整的资源集，请在运行时启用完整注册表：
+
+```bash
+--env.obj_registries='[objaverse,lightwheel]'
+```
+
+## 评估
+
+以下所有评估片段都镜像 CI 命令（参见 `.github/workflows/benchmark_tests.yml`）。`--rename_map` 参数将 RoboCasa 的原生相机键（`robot0_agentview_left` / `robot0_eye_in_hand` / `robot0_agentview_right`）映射到发布的 `smolvla_robocasa` 策略训练时使用的三相机（`camera1` / `camera2` / `camera3`）输入布局。
+
+### 单任务评估（推荐用于快速迭代）
+
+```bash
+lerobot-eval \
+  --policy.path=lerobot/smolvla_robocasa \
+  --env.type=robocasa \
+  --env.task=CloseFridge \
+  --eval.batch_size=1 \
+  --eval.n_episodes=20 \
+  --eval.use_async_envs=false \
+  --policy.device=cuda \
+  '--rename_map={"observation.images.robot0_agentview_left": "observation.images.camera1", "observation.images.robot0_eye_in_hand": "observation.images.camera2", "observation.images.robot0_agentview_right": "observation.images.camera3"}'
+```
+
+### 多任务评估
+
+传递逗号分隔的任务列表：
+
+```bash
+lerobot-eval \
+  --policy.path=lerobot/smolvla_robocasa \
+  --env.type=robocasa \
+  --env.task=CloseFridge,OpenCabinet,OpenDrawer,TurnOnMicrowave,TurnOffStove \
+  --eval.batch_size=1 \
+  --eval.n_episodes=20 \
+  --eval.use_async_envs=false \
+  --policy.device=cuda \
+  '--rename_map={"observation.images.robot0_agentview_left": "observation.images.camera1", "observation.images.robot0_eye_in_hand": "observation.images.camera2", "observation.images.robot0_agentview_right": "observation.images.camera3"}'
+```
+
+### 基准测试组评估
+
+运行整个上游组（例如所有 18 个 `atomic_seen` 任务，`split=target`）：
+
+```bash
+lerobot-eval \
+  --policy.path=lerobot/smolvla_robocasa \
+  --env.type=robocasa \
+  --env.task=atomic_seen \
+  --eval.batch_size=1 \
+  --eval.n_episodes=20 \
+  --eval.use_async_envs=false \
+  --policy.device=cuda \
+  '--rename_map={"observation.images.robot0_agentview_left": "observation.images.camera1", "observation.images.robot0_eye_in_hand": "observation.images.camera2", "observation.images.robot0_agentview_right": "observation.images.camera3"}'
+```
+
+### 推荐评估回合数
+
+**每个任务 20 个回合**用于可重现的基准测试。与发布结果中使用的协议匹配。
+
+## 策略输入和输出
+
+**观测**（保留原始 RoboCasa 相机名称）：
+
+- `observation.state` — 16 维本体感觉状态（底座位置、底座四元数、相对末端执行器位置、相对末端执行器四元数、夹爪 qpos）
+- `observation.images.robot0_agentview_left` — 左智能体视图，256×256 HWC uint8
+- `observation.images.robot0_eye_in_hand` — 腕部相机视图，256×256 HWC uint8
+- `observation.images.robot0_agentview_right` — 右智能体视图，256×256 HWC uint8
+
+**动作：**
+
+- `Box(-1, 1, shape=(12,))` 中的连续控制 — 底座运动（4D）+ 控制模式（1D）+ 末端执行器位置（3D）+ 末端执行器旋转（3D）+ 夹爪（1D）。
+
+## 训练
+
+### 单任务示例
+
+Hub 上有一个即用型单任务数据集：
+[`pepijn223/robocasa_CloseFridge`](https://huggingface.co/datasets/pepijn223/robocasa_CloseFridge)。
+
+在 `CloseFridge` 上微调 SmolVLA 基础模型：
+
+```bash
+lerobot-train \
+  --policy.type=smolvla \
+  --policy.repo_id=${HF_USER}/smolvla_robocasa_CloseFridge \
+  --policy.load_vlm_weights=true \
+  --policy.push_to_hub=true \
+  --dataset.repo_id=pepijn223/robocasa_CloseFridge \
+  --env.type=robocasa \
+  --env.task=CloseFridge \
+  --output_dir=./outputs/smolvla_robocasa_CloseFridge \
+  --steps=100000 \
+  --batch_size=4 \
+  --eval_freq=5000 \
+  --eval.batch_size=1 \
+  --eval.n_episodes=5 \
+  --save_freq=10000
+```
+
+评估生成的检查点：
+
+```bash
+lerobot-eval \
+  --policy.path=${HF_USER}/smolvla_robocasa_CloseFridge \
+  --env.type=robocasa \
+  --env.task=CloseFridge \
+  --eval.batch_size=1 \
+  --eval.n_episodes=20
+```
+
+## 重现发布结果
+
+发布的检查点 [`lerobot/smolvla_robocasa`](https://huggingface.co/lerobot/smolvla_robocasa) 使用[评估](#评估)部分中的命令进行评估。CI 在每个触及基准测试的 PR 上运行 10 个原子任务的冒烟评估（每个一个回合），选择不需要 objaverse 资源包的以固定装置为中心的任务。

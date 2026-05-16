@@ -1,0 +1,80 @@
+# WALL-OSS
+
+WALL-OSS 是一个用于具身智能的开源基础模型，由 [XSquare Robot](https://x2robot.com/en/research/68bc2cde8497d7f238dde690) 团队于 2025 年提出。LeRobot 的实现改编自他们的开源 [WallX](https://github.com/X-Square-Robot/wall-x) 仓库。
+
+X Square Robot 的 WALL-OSS 现已集成到 Hugging Face 的 LeRobot 生态系统中。这是 LeRobot 和 X Square Robot 团队之间令人兴奋的合作项目。您现在可以直接通过 LeRobot 对 WALL-OSS 进行后训练、评估和部署。通过这一集成，我们旨在让开源机器人社区更容易定制和部署 WALL-OSS 基础模型。阅读和探索 WALL-OSS [论文](https://arxiv.org/pdf/2509.11766)和[代码](https://github.com/X-Square-Robot/wall-x)。
+
+## 模型概述
+
+WALL-OSS 团队正在构建具身基础模型，以捕获和压缩世界上最有价值的数据：物理交互的连续、高保真流。通过在模型的决策和身体的实际体验之间创建直接的反馈循环，实现了真正可泛化智能的涌现——这种智能不仅理解世界如何运作，还知道如何在其中有效行动。
+
+<img
+  src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/walloss-lerobot-paper.png"
+  alt="WALL-OSS 概述"
+  width="85%"
+/>
+
+从技术上讲，WALL-OSS 引入了一种紧密耦合的多模态架构（紧密耦合的 MoE 结构），集成了离散和连续动作建模策略。通过两阶段训练流程（启发 → 整合），模型逐步统一语义推理和高频动作生成。其核心创新包括：
+
+- **具身感知增强的多模态预训练**：在统一的视觉-语言-动作数据上进行大规模训练，以增强空间、因果和操作理解。
+- **统一跨层级思维链（Uni-CoT）**：一个单一的可微框架，统一了高层指令推理、子任务分解和细粒度动作合成，形成从"理解"到"执行"的连续链。
+- **混合专家（MoE）动作头**：根据任务阶段动态激活专家，在离散或连续空间中建模动作，以保持稳定的 VLM 先验。
+- **两阶段训练范式**：
+  - **启发阶段**：注入离散动作先验以增强空间理解和语义-动作对齐。
+  - **整合阶段**：使用流匹配实现高频连续控制。
+
+## 安装要求
+
+1. 按照我们的[安装指南](./installation)安装 LeRobot。
+2. 通过运行以下命令安装 WallX 依赖项：
+
+   ```bash
+   pip install -e ".[wallx]"
+   ```
+
+## 使用方法
+
+要在 LeRobot 中使用 WallX，请将策略类型指定为：
+
+```python
+policy.type=wall_x
+```
+
+## 训练
+
+对于 WallX 的训练，您可以使用标准的 LeRobot 训练脚本和适当的配置：
+
+```bash
+lerobot-train \
+    --dataset.repo_id=your_dataset \
+    --policy.type=wall_x \
+    --output_dir=./outputs/wallx_training \
+    --job_name=wallx_training \
+    --policy.repo_id=your_repo_id \
+    --policy.pretrained_name_or_path=x-square-robot/wall-oss-flow \
+    --policy.prediction_mode=diffusion \
+    --policy.attn_implementation=eager \
+    --steps=3000 \
+    --policy.device=cuda \
+    --batch_size=32
+```
+
+### 训练参数
+
+| 参数                           | 描述                                                                                                                                   |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `--dataset.repo_id`            | 训练数据集的 Hugging Face Hub 仓库 ID（例如，`lerobot/aloha_sim_insertion_human`）                                                     |
+| `--policy.type`                | 指定使用 WallX 策略架构                                                                                                                |
+| `--output_dir`                 | 保存训练检查点和日志的本地目录                                                                                                         |
+| `--job_name`                   | 此训练运行的名称标识符（用于日志记录/跟踪）                                                                                            |
+| `--policy.repo_id`             | 训练模型将被推送到的 Hugging Face Hub 仓库 ID                                                                                          |
+| `--policy.pretrained_path`     | 用于初始化的预训练 WallX 权重路径（官方 WALL-OSS 检查点）                                                                             |
+| `--policy.prediction_mode`     | 动作预测策略：`diffusion` 或 `fast` - `diffusion` 使用迭代去噪进行动作生成，`fast` 使用下一个 token 预测                              |
+| `--policy.attn_implementation` | 注意力实现后端 - `eager` 使用标准 PyTorch 注意力（替代方案包括 `flash_attention_2` 或 `sdpa`）                                         |
+| `--steps`                      | 要运行的训练步数总数                                                                                                                   |
+| `--policy.device`              | 训练设备（`cuda` 用于 GPU，`cpu` 用于 CPU）                                                                                           |
+| `--batch_size`                 | 每个训练批次的样本数                                                                                                                   |
+
+## 许可证
+
+该模型遵循 **Apache 2.0 许可证**，与原始 [WallX 仓库](https://github.com/X-Square-Robot/wall-x)一致。
