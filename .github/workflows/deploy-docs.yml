@@ -39,11 +39,11 @@ jobs:
 
       - name: Build English documentation
         run: |
-          doc-builder build lerobot docs/source/en --build_dir docs/_build/en --repo_name lerobot
+          doc-builder build lerobot docs/source/en --build_dir docs/_build/en --repo_name lerobot --html
 
       - name: Build Chinese documentation
         run: |
-          doc-builder build lerobot docs/source/zh --build_dir docs/_build/zh --repo_name lerobot
+          doc-builder build lerobot docs/source/zh --build_dir docs/_build/zh --repo_name lerobot --html
 
       - name: Create index redirect
         run: |
@@ -76,7 +76,7 @@ jobs:
           EOF3
 
       - name: Debug build output
-        run: find docs/_build -maxdepth 5 | head -50
+        run: find docs/_build -maxdepth 6 -name "*.html" | head -20
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
