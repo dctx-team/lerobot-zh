@@ -57,12 +57,12 @@ jobs:
             <script>
               const userLang = navigator.language || navigator.userLanguage;
               const isZh = userLang.toLowerCase().startsWith('zh');
-              window.location.href = isZh ? './zh/' : './en/';
+              window.location.href = isZh ? './zh/lerobot/v0.5.2/en/' : './en/lerobot/v0.5.2/en/';
             </script>
           </head>
           <body>
             <p>Redirecting...</p>
-            <p><a href="./en/">English</a> | <a href="./zh/">中文</a></p>
+            <p><a href="./en/lerobot/v0.5.2/en/">English</a> | <a href="./zh/lerobot/v0.5.2/en/">中文</a></p>
           </body>
           </html>
           EOF
