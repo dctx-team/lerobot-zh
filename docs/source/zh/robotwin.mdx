@@ -11,37 +11,40 @@ RoboTwin 2.0 是一个基于 SAPIEN 物理引擎构建的**大规模双臂操作
 
 ## 概览
 
-| 属性         | 值                                                   |
-| ------------ | ---------------------------------------------------- |
-| 任务         | 50 个双臂操作任务                                    |
-| 机器人       | Aloha-AgileX 双臂（14 DOF，每臂 7 个）               |
-| 动作空间     | 14 维关节空间，`[-1, 1]` 中的连续                    |
-| 相机         | `head_camera`、`left_camera`、`right_camera`         |
-| 模拟器       | SAPIEN（不是 MuJoCo）                                |
-| 评估协议     | 每个任务 100 个回合，50 个 demo_clean 演示           |
-| 评估设置     | **Easy**（`demo_clean`）和 **Hard**（`demo_randomized`） |
+| 属性     | 值                                                       |
+| -------- | -------------------------------------------------------- |
+| 任务     | 50 个双臂操作任务                                        |
+| 机器人   | Aloha-AgileX 双臂（14 DOF，每臂 7 个）                   |
+| 动作空间 | 14 维关节空间，`[-1, 1]` 中的连续                        |
+| 相机     | `head_camera`、`left_camera`、`right_camera`             |
+| 模拟器   | SAPIEN（不是 MuJoCo）                                    |
+| 评估协议 | 每个任务 100 个回合，50 个 demo_clean 演示               |
+| 评估设置 | **Easy**（`demo_clean`）和 **Hard**（`demo_randomized`） |
 
 ## 可用任务
 
 RoboTwin 2.0 在其上游 `envs/` 目录中提供 50 个双臂操作任务。规范列表是 `src/lerobot/envs/robotwin.py` 中的 `ROBOTWIN_TASKS` 元组，从上游仓库逐字镜像。示例任务：
 
-| 任务                     | CLI 名称                 | 类别           |
-| ------------------------ | ------------------------ | -------------- |
-| Beat block with hammer   | `beat_block_hammer`      | 工具使用       |
-| Click bell / alarm clock | `click_bell`             | 精确按压       |
-| Stack blocks (2 / 3)     | `stack_blocks_two/three` | 堆叠           |
-| Stack bowls (2 / 3)      | `stack_bowls_two/three`  | 堆叠           |
-| Handover block / mic     | `handover_block`         | 双臂协调       |
-| Lift pot                 | `lift_pot`               | 双臂提升       |
-| Shake bottle             | `shake_bottle`           | 连续运动       |
-| Turn switch              | `turn_switch`            | 铰接物体       |
-| Stamp seal               | `stamp_seal`             | 精确放置       |
-| Scan object              | `scan_object`            | 移动操作       |
+| 任务                     | CLI 名称                 | 类别     |
+| ------------------------ | ------------------------ | -------- |
+| Beat block with hammer   | `beat_block_hammer`      | 工具使用 |
+| Click bell / alarm clock | `click_bell`             | 精确按压 |
+| Stack blocks (2 / 3)     | `stack_blocks_two/three` | 堆叠     |
+| Stack bowls (2 / 3)      | `stack_bowls_two/three`  | 堆叠     |
+| Handover block / mic     | `handover_block`         | 双臂协调 |
+| Lift pot                 | `lift_pot`               | 双臂提升 |
+| Shake bottle             | `shake_bottle`           | 连续运动 |
+| Turn switch              | `turn_switch`            | 铰接物体 |
+| Stamp seal               | `stamp_seal`             | 精确放置 |
+| Scan object              | `scan_object`            | 移动操作 |
 
 将逗号分隔的列表传递给 `--env.task` 以在单次评估扫描中运行多个任务。
 
 <Tip warning={true}>
-  `open_laptop` 目前在上游已损坏（其 `check_success()` 使用 `self.arm_tag`，它仅在脚本专家 `play_once()` 路径内设置，因此在正常策略评估期间不可用）。在上游错误修复之前避免使用它，或修补任务以在 `load_actors()` 中默认 `self.arm_tag = "left"`。
+  `open_laptop` 目前在上游已损坏（其 `check_success()` 使用
+  `self.arm_tag`，它仅在脚本专家 `play_once()`
+  路径内设置，因此在正常策略评估期间不可用）。在上游错误修复之前避免使用它，或修补任务以在
+  `load_actors()` 中默认 `self.arm_tag = "left"`。
 </Tip>
 
 ## 数据集
@@ -167,18 +170,19 @@ lerobot-eval \
 ```
 
 <Tip>
-  由于上游 `self.arm_tag` 错误（参见**可用任务**部分），上面故意省略了 `open_laptop`。一旦上游修复落地，请重新添加它。
+  由于上游 `self.arm_tag` 错误（参见**可用任务**部分），上面故意省略了
+  `open_laptop`。一旦上游修复落地，请重新添加它。
 </Tip>
 
 ## 相机配置
 
 默认情况下，包括所有三个相机：
 
-| 相机键         | 描述                   |
-| -------------- | ---------------------- |
-| `head_camera`  | 躯干安装的俯视图       |
-| `left_camera`  | 左臂腕部安装相机       |
-| `right_camera` | 右臂腕部安装相机       |
+| 相机键         | 描述             |
+| -------------- | ---------------- |
+| `head_camera`  | 躯干安装的俯视图 |
+| `left_camera`  | 左臂腕部安装相机 |
+| `right_camera` | 右臂腕部安装相机 |
 
 要使用相机子集，请覆盖 `--env.camera_names`：
 

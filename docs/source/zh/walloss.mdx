@@ -61,19 +61,19 @@ lerobot-train \
 
 ### 训练参数
 
-| 参数                           | 描述                                                                                                                                   |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `--dataset.repo_id`            | 训练数据集的 Hugging Face Hub 仓库 ID（例如，`lerobot/aloha_sim_insertion_human`）                                                     |
-| `--policy.type`                | 指定使用 WallX 策略架构                                                                                                                |
-| `--output_dir`                 | 保存训练检查点和日志的本地目录                                                                                                         |
-| `--job_name`                   | 此训练运行的名称标识符（用于日志记录/跟踪）                                                                                            |
-| `--policy.repo_id`             | 训练模型将被推送到的 Hugging Face Hub 仓库 ID                                                                                          |
-| `--policy.pretrained_path`     | 用于初始化的预训练 WallX 权重路径（官方 WALL-OSS 检查点）                                                                             |
-| `--policy.prediction_mode`     | 动作预测策略：`diffusion` 或 `fast` - `diffusion` 使用迭代去噪进行动作生成，`fast` 使用下一个 token 预测                              |
-| `--policy.attn_implementation` | 注意力实现后端 - `eager` 使用标准 PyTorch 注意力（替代方案包括 `flash_attention_2` 或 `sdpa`）                                         |
-| `--steps`                      | 要运行的训练步数总数                                                                                                                   |
-| `--policy.device`              | 训练设备（`cuda` 用于 GPU，`cpu` 用于 CPU）                                                                                           |
-| `--batch_size`                 | 每个训练批次的样本数                                                                                                                   |
+| 参数                           | 描述                                                                                                     |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `--dataset.repo_id`            | 训练数据集的 Hugging Face Hub 仓库 ID（例如，`lerobot/aloha_sim_insertion_human`）                       |
+| `--policy.type`                | 指定使用 WallX 策略架构                                                                                  |
+| `--output_dir`                 | 保存训练检查点和日志的本地目录                                                                           |
+| `--job_name`                   | 此训练运行的名称标识符（用于日志记录/跟踪）                                                              |
+| `--policy.repo_id`             | 训练模型将被推送到的 Hugging Face Hub 仓库 ID                                                            |
+| `--policy.pretrained_path`     | 用于初始化的预训练 WallX 权重路径（官方 WALL-OSS 检查点）                                                |
+| `--policy.prediction_mode`     | 动作预测策略：`diffusion` 或 `fast` - `diffusion` 使用迭代去噪进行动作生成，`fast` 使用下一个 token 预测 |
+| `--policy.attn_implementation` | 注意力实现后端 - `eager` 使用标准 PyTorch 注意力（替代方案包括 `flash_attention_2` 或 `sdpa`）           |
+| `--steps`                      | 要运行的训练步数总数                                                                                     |
+| `--policy.device`              | 训练设备（`cuda` 用于 GPU，`cpu` 用于 CPU）                                                              |
+| `--batch_size`                 | 每个训练批次的样本数                                                                                     |
 
 ## 许可证
 

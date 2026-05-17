@@ -93,20 +93,20 @@ lerobot-train \
 
 ### 关键训练参数
 
-| 参数                              | 默认值                       | 描述                                                             |
-| -------------------------------------- | ----------------------------- | ----------------------------------------------------------------------- |
-| `policy.vlm_base`                      | `Qwen/Qwen2.5-VL-3B-Instruct` | 用于初始化新策略的 Qwen2.5-VL 检查点                   |
-| `policy.dtype`                         | `auto`                        | 主干 dtype 请求：`auto`、`bfloat16` 或 `float32`                |
-| `policy.attn_implementation`           | `None`                        | 可选的 Qwen 注意力后端，例如 `sdpa`                         |
-| `policy.gradient_checkpointing`        | `false`                       | 在训练期间减少内存使用                                    |
-| `policy.chunk_size`                    | `8`                           | 每个块预测的未来动作数                            |
-| `policy.n_action_steps`                | `8`                           | 从采样块中消耗的动作数                         |
-| `policy.num_denoise_steps`             | `10`                          | 采样期间使用的流匹配去噪步数            |
-| `policy.max_state_dim`                 | `32`                          | 状态填充维度                                                 |
-| `policy.max_action_dim`                | `32`                          | 动作填充维度                                                |
-| `policy.force_fp32_autocast`           | `true`                        | 即使主干使用混合精度，也将流头保持在 fp32 中 |
-| `policy.supervise_padding_action_dims` | `true`                        | 控制是否监督填充的动作维度                |
-| `policy.supervise_padding_actions`     | `true`                        | 控制是否监督填充的未来动作行               |
+| 参数                                   | 默认值                        | 描述                                             |
+| -------------------------------------- | ----------------------------- | ------------------------------------------------ |
+| `policy.vlm_base`                      | `Qwen/Qwen2.5-VL-3B-Instruct` | 用于初始化新策略的 Qwen2.5-VL 检查点             |
+| `policy.dtype`                         | `auto`                        | 主干 dtype 请求：`auto`、`bfloat16` 或 `float32` |
+| `policy.attn_implementation`           | `None`                        | 可选的 Qwen 注意力后端，例如 `sdpa`              |
+| `policy.gradient_checkpointing`        | `false`                       | 在训练期间减少内存使用                           |
+| `policy.chunk_size`                    | `8`                           | 每个块预测的未来动作数                           |
+| `policy.n_action_steps`                | `8`                           | 从采样块中消耗的动作数                           |
+| `policy.num_denoise_steps`             | `10`                          | 采样期间使用的流匹配去噪步数                     |
+| `policy.max_state_dim`                 | `32`                          | 状态填充维度                                     |
+| `policy.max_action_dim`                | `32`                          | 动作填充维度                                     |
+| `policy.force_fp32_autocast`           | `true`                        | 即使主干使用混合精度，也将流头保持在 fp32 中     |
+| `policy.supervise_padding_action_dims` | `true`                        | 控制是否监督填充的动作维度                       |
+| `policy.supervise_padding_actions`     | `true`                        | 控制是否监督填充的未来动作行                     |
 
 ## 评估
 

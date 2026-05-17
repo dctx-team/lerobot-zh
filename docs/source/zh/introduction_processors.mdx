@@ -112,13 +112,13 @@ policy_processor = PolicyProcessorPipeline[dict[str, Any], dict[str, Any]](
 
 关键区别在于它们处理的数据结构：
 
-| 方面          | RobotProcessorPipeline                       | PolicyProcessorPipeline                  |
-| --------------- | -------------------------------------------- | ---------------------------------------- |
-| **输入**       | `dict[str, Any]` - 单个机器人值   | `dict[str, Any]` - 批处理张量       |
-| **输出**      | `dict[str, Any]` - 单个机器人命令 | `torch.Tensor` - 策略预测      |
-| **用例**    | 实时机器人控制                      | 模型训练/推理                 |
-| **数据格式** | 未批处理，异构                     | 批处理，同构                     |
-| **示例**    | `{"joint_1": 0.5}`                           | `{"observation.state": tensor([[0.5]])}` |
+| 方面         | RobotProcessorPipeline            | PolicyProcessorPipeline                  |
+| ------------ | --------------------------------- | ---------------------------------------- |
+| **输入**     | `dict[str, Any]` - 单个机器人值   | `dict[str, Any]` - 批处理张量            |
+| **输出**     | `dict[str, Any]` - 单个机器人命令 | `torch.Tensor` - 策略预测                |
+| **用例**     | 实时机器人控制                    | 模型训练/推理                            |
+| **数据格式** | 未批处理，异构                    | 批处理，同构                             |
+| **示例**     | `{"joint_1": 0.5}`                | `{"observation.state": tensor([[0.5]])}` |
 
 **使用 `RobotProcessorPipeline`** 用于机器人硬件接口：
 
@@ -154,17 +154,17 @@ policy_action: torch.Tensor = torch.tensor([[0.2, 0.1, 0.8]])  # 模型输出张
 
 LeRobot 在 `lerobot.processor.converters` 中提供转换器函数来桥接不同的数据格式。这些函数处理机器人硬件数据结构、策略模型格式和流经处理器管道的内部 `EnvTransition` 表示之间的关键转换。
 
-| 类别                       | 函数                      | 描述                     |
-| ------------------------------ | ----------------------------- | ------------------------------- |
-| **机器人硬件转换器**  | `robot_action_to_transition`  | 机器人字典 → EnvTransition      |
-|                                | `observation_to_transition`   | 机器人观测 → EnvTransition       |
-|                                | `transition_to_robot_action`  | EnvTransition → 机器人字典      |
-| **策略/训练转换器** | `batch_to_transition`         | 批处理字典 → EnvTransition      |
-|                                | `transition_to_batch`         | EnvTransition → 批处理字典      |
-|                                | `policy_action_to_transition` | 策略张量 → EnvTransition   |
-|                                | `transition_to_policy_action` | EnvTransition → 策略张量   |
-| **实用程序**                  | `create_transition`           | 使用默认值构建转换 |
-|                                | `identity_transition`         | 直通转换器          |
+| 类别                 | 函数                          | 描述                       |
+| -------------------- | ----------------------------- | -------------------------- |
+| **机器人硬件转换器** | `robot_action_to_transition`  | 机器人字典 → EnvTransition |
+|                      | `observation_to_transition`   | 机器人观测 → EnvTransition |
+|                      | `transition_to_robot_action`  | EnvTransition → 机器人字典 |
+| **策略/训练转换器**  | `batch_to_transition`         | 批处理字典 → EnvTransition |
+|                      | `transition_to_batch`         | EnvTransition → 批处理字典 |
+|                      | `policy_action_to_transition` | 策略张量 → EnvTransition   |
+|                      | `transition_to_policy_action` | EnvTransition → 策略张量   |
+| **实用程序**         | `create_transition`           | 使用默认值构建转换         |
+|                      | `identity_transition`         | 直通转换器                 |
 
 关键见解是**机器人硬件转换器**处理单个值和字典，而**策略/训练转换器**处理批处理张量和模型输出。转换器函数自动处理结构差异，因此您的处理器步骤可以专注于核心转换，而无需担心数据格式兼容性。
 

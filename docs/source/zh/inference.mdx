@@ -39,10 +39,10 @@ lerobot-rollout \
     --duration=60
 ```
 
-| 标志             | 描述                                            |
-| ---------------- | ------------------------------------------------------ |
-| `--duration`     | 运行时间（秒）（0 = 无限）                     |
-| `--task`         | 传递给策略的任务描述                  |
+| 标志             | 描述                                   |
+| ---------------- | -------------------------------------- |
+| `--duration`     | 运行时间（秒）（0 = 无限）             |
+| `--task`         | 传递给策略的任务描述                   |
 | `--display_data` | 将观测/动作流式传输到 Rerun 进行可视化 |
 
 ### Sentry（`--strategy.type=sentry`）
@@ -64,12 +64,12 @@ lerobot-rollout \
     --duration=3600
 ```
 
-| 标志                                   | 描述                                                 |
-| -------------------------------------- | ----------------------------------------------------------- |
-| `--strategy.upload_every_n_episodes`   | 每 N 个回合推送到 Hub（默认：5）                   |
+| 标志                                   | 描述                                     |
+| -------------------------------------- | ---------------------------------------- |
+| `--strategy.upload_every_n_episodes`   | 每 N 个回合推送到 Hub（默认：5）         |
 | `--strategy.target_video_file_size_mb` | 回合轮换的目标视频文件大小（默认：自动） |
-| `--dataset.repo_id`                    | **必需。** 记录数据集的 Hub 仓库       |
-| `--dataset.push_to_hub`                | 是否在拆卸时推送到 Hub（默认：true）          |
+| `--dataset.repo_id`                    | **必需。** 记录数据集的 Hub 仓库         |
+| `--dataset.push_to_hub`                | 是否在拆卸时推送到 Hub（默认：true）     |
 
 ### Highlight（`--strategy.type=highlight`）
 
@@ -90,18 +90,18 @@ lerobot-rollout \
 
 **键盘控制：**
 
-| 键                | 动作                                                   |
-| ------------------ | -------------------------------------------------------- |
+| 键            | 动作                                   |
+| ------------- | -------------------------------------- |
 | `s`（可配置） | 开始记录（刷新缓冲区）/ 停止并保存回合 |
-| `h`（可配置） | 将数据集推送到 Hub                                      |
-| `ESC`              | 停止会话                                         |
+| `h`（可配置） | 将数据集推送到 Hub                     |
+| `ESC`         | 停止会话                               |
 
-| 标志                                   | 描述                                    |
-| -------------------------------------- | ---------------------------------------------- |
-| `--strategy.ring_buffer_seconds`       | 缓冲遥测的持续时间（默认：30）   |
+| 标志                                   | 描述                               |
+| -------------------------------------- | ---------------------------------- |
+| `--strategy.ring_buffer_seconds`       | 缓冲遥测的持续时间（默认：30）     |
 | `--strategy.ring_buffer_max_memory_mb` | 环形缓冲区的内存上限（默认：2048） |
-| `--strategy.save_key`                  | 切换记录的键（默认：`s`）         |
-| `--strategy.push_key`                  | 推送到 Hub 的键（默认：`h`)              |
+| `--strategy.save_key`                  | 切换记录的键（默认：`s`）          |
+| `--strategy.push_key`                  | 推送到 Hub 的键（默认：`h`)        |
 
 ### DAgger（`--strategy.type=dagger`）
 
@@ -140,20 +140,20 @@ lerobot-rollout \
 
 **键盘控制**（默认输入设备）：
 
-| 键     | 动作                                      |
-| ------- | ------------------------------------------- |
-| `Space` | 暂停/恢复策略执行             |
-| `Tab`   | 开始/停止人工纠正               |
+| 键      | 动作                             |
+| ------- | -------------------------------- |
+| `Space` | 暂停/恢复策略执行                |
+| `Tab`   | 开始/停止人工纠正                |
 | `Enter` | 将数据集推送到 Hub（仅纠正模式） |
-| `ESC`   | 停止会话                            |
+| `ESC`   | 停止会话                         |
 
 也支持通过 `--strategy.input_device=pedal` 进行脚踏板输入。使用 `--strategy.pedal.*` 标志配置踏板代码。
 
-| 标志                                 | 描述                                             |
-| ------------------------------------ | ------------------------------------------------------- |
-| `--strategy.num_episodes`            | 要记录的纠正回合数（默认：10）   |
-| `--strategy.record_autonomous`       | 也记录自主帧（默认：false）           |
-| `--strategy.upload_every_n_episodes` | 每 N 个回合推送到 Hub（默认：5）               |
+| 标志                                 | 描述                                              |
+| ------------------------------------ | ------------------------------------------------- |
+| `--strategy.num_episodes`            | 要记录的纠正回合数（默认：10）                    |
+| `--strategy.record_autonomous`       | 也记录自主帧（默认：false）                       |
+| `--strategy.upload_every_n_episodes` | 每 N 个回合推送到 Hub（默认：5）                  |
 | `--strategy.input_device`            | 输入设备：`keyboard` 或 `pedal`（默认：keyboard） |
 | `--teleop.type`                      | **必需。** 远程操作器类型                         |
 
@@ -190,12 +190,12 @@ lerobot-rollout \
     --device=cuda
 ```
 
-| 标志                                        | 描述                                                    |
-| ------------------------------------------- | -------------------------------------------------------------- |
-| `--inference.rtc.execution_horizon`         | 与前一个块混合的步数（默认：因策略而异） |
-| `--inference.rtc.max_guidance_weight`       | 一致性执行强度（默认：因策略而异）   |
-| `--inference.rtc.prefix_attention_schedule` | 混合计划：`LINEAR`、`EXP`、`ONES`、`ZEROS`               |
-| `--inference.queue_threshold`               | 背压前的最大队列大小（默认：30）               |
+| 标志                                        | 描述                                       |
+| ------------------------------------------- | ------------------------------------------ |
+| `--inference.rtc.execution_horizon`         | 与前一个块混合的步数（默认：因策略而异）   |
+| `--inference.rtc.max_guidance_weight`       | 一致性执行强度（默认：因策略而异）         |
+| `--inference.rtc.prefix_attention_schedule` | 混合计划：`LINEAR`、`EXP`、`ONES`、`ZEROS` |
+| `--inference.queue_threshold`               | 背压前的最大队列大小（默认：30）           |
 
 有关调整 RTC 参数的详细信息，请参阅[实时分块](./rtc)指南。
 
@@ -203,22 +203,22 @@ lerobot-rollout \
 
 ## 常用标志
 
-| 标志                              | 描述                                                       | 默认 |
-| --------------------------------- | ----------------------------------------------------------------- | ------- |
-| `--policy.path`                   | **必需。** HF Hub 模型 ID 或本地检查点路径            | --      |
-| `--robot.type`                    | **必需。** 机器人类型（例如 `so100_follower`、`koch_follower`） | --      |
-| `--robot.port`                    | 机器人的串行端口                                         | --      |
-| `--robot.cameras`                 | 相机配置（JSON 字典）                                  | --      |
-| `--fps`                           | 控制循环频率                                            | 30      |
-| `--duration`                      | 运行时间（秒）（0 = 无限）                                | 0       |
-| `--device`                        | Torch 设备（`cpu`、`cuda`、`mps`）                               | auto    |
-| `--task`                          | 任务描述（未提供数据集时使用）               | --      |
-| `--display_data`                  | 将遥测流式传输到 Rerun 可视化                           | false   |
-| `--display_ip` / `--display_port` | 远程 Rerun 服务器地址                                       | --      |
-| `--interpolation_multiplier`      | 动作插值因子                                       | 1       |
-| `--use_torch_compile`             | 为推理启用 `torch.compile`                              | false   |
-| `--resume`                        | 恢复之前的记录会话                               | false   |
-| `--play_sounds`                   | 事件的语音合成                                        | true    |
+| 标志                              | 描述                                                            | 默认  |
+| --------------------------------- | --------------------------------------------------------------- | ----- |
+| `--policy.path`                   | **必需。** HF Hub 模型 ID 或本地检查点路径                      | --    |
+| `--robot.type`                    | **必需。** 机器人类型（例如 `so100_follower`、`koch_follower`） | --    |
+| `--robot.port`                    | 机器人的串行端口                                                | --    |
+| `--robot.cameras`                 | 相机配置（JSON 字典）                                           | --    |
+| `--fps`                           | 控制循环频率                                                    | 30    |
+| `--duration`                      | 运行时间（秒）（0 = 无限）                                      | 0     |
+| `--device`                        | Torch 设备（`cpu`、`cuda`、`mps`）                              | auto  |
+| `--task`                          | 任务描述（未提供数据集时使用）                                  | --    |
+| `--display_data`                  | 将遥测流式传输到 Rerun 可视化                                   | false |
+| `--display_ip` / `--display_port` | 远程 Rerun 服务器地址                                           | --    |
+| `--interpolation_multiplier`      | 动作插值因子                                                    | 1     |
+| `--use_torch_compile`             | 为推理启用 `torch.compile`                                      | false |
+| `--resume`                        | 恢复之前的记录会话                                              | false |
+| `--play_sounds`                   | 事件的语音合成                                                  | true  |
 
 ---
 

@@ -150,14 +150,14 @@ class MyPolicy(PreTrainedPolicy):
 
 训练/评估循环调用的方法：
 
-| 方法                                                            | 使用者           | 它做什么                                                                                                                                                                                                                         |
-| ----------------------------------------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `reset() -> None`                                                 | `lerobot-eval`    | 在每个回合开始时清除每个回合的状态。                                                                                                                                                                                                                |
-| `select_action(batch, **kwargs) -> Tensor`                        | `lerobot-eval`    | 返回下一个动作 `(B, action_dim)`。每步调用。                                                                                                                                                                                         |
-| `predict_action_chunk(batch, **kwargs) -> Tensor`                 | 策略本身 | 返回动作块 `(B, chunk_size, action_dim)`。目前在基类上是抽象的——如果您的策略不分块，则引发 `NotImplementedError`。                                               |
-| `forward(batch, reduction="mean") -> tuple[Tensor, dict \| None]` | `lerobot-train`   | 返回 `(loss, output_dict)`。如果您想支持每样本加权，请接受 `reduction="none"`。                                                                                                                                                                 |
-| `get_optim_params() -> dict`                                      | 优化器     | 对于简单策略返回 `self.parameters()`；对于[多优化器策略](https://github.com/huggingface/lerobot/blob/ecd38c50d7d15b4184cf42649ff1185ee2e11eeb/src/lerobot/policies/sac/modeling_sac.py#L61-L73)返回命名参数字典。 |
-| `update() -> None` _（可选）_                                   | `lerobot-train`   | 在每个优化器步骤之后调用_如果定义_。用于 EMA、目标网络、重放缓冲区（TDMPC 使用此功能）。                                                                                                                                           |
+| 方法                                                              | 使用者          | 它做什么                                                                                                                                                                                                          |
+| ----------------------------------------------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reset() -> None`                                                 | `lerobot-eval`  | 在每个回合开始时清除每个回合的状态。                                                                                                                                                                              |
+| `select_action(batch, **kwargs) -> Tensor`                        | `lerobot-eval`  | 返回下一个动作 `(B, action_dim)`。每步调用。                                                                                                                                                                      |
+| `predict_action_chunk(batch, **kwargs) -> Tensor`                 | 策略本身        | 返回动作块 `(B, chunk_size, action_dim)`。目前在基类上是抽象的——如果您的策略不分块，则引发 `NotImplementedError`。                                                                                                |
+| `forward(batch, reduction="mean") -> tuple[Tensor, dict \| None]` | `lerobot-train` | 返回 `(loss, output_dict)`。如果您想支持每样本加权，请接受 `reduction="none"`。                                                                                                                                   |
+| `get_optim_params() -> dict`                                      | 优化器          | 对于简单策略返回 `self.parameters()`；对于[多优化器策略](https://github.com/huggingface/lerobot/blob/ecd38c50d7d15b4184cf42649ff1185ee2e11eeb/src/lerobot/policies/sac/modeling_sac.py#L61-L73)返回命名参数字典。 |
+| `update() -> None` _（可选）_                                     | `lerobot-train` | 在每个优化器步骤之后调用*如果定义*。用于 EMA、目标网络、重放缓冲区（TDMPC 使用此功能）。                                                                                                                          |
 
 批次是由 [`lerobot.utils.constants`](https://github.com/huggingface/lerobot/blob/main/src/lerobot/utils/constants.py) 中的常量键控的扁平字典：`OBS_STATE`（`observation.state.<motor>`）、`OBS_IMAGES`（`observation.images.<camera>`）、`OBS_LANGUAGE`、`ACTION` 等。重用常量——不要发明新前缀。
 
@@ -346,13 +346,13 @@ class DiffusionPolicy(PreTrainedPolicy):
 
 在 LIBERO 上使用 `lerobot/<policy>_libero` 评估：
 
-| Suite          | 成功率 | n_episodes |
-| -------------- | -----------: | ---------: |
-| libero_spatial |        87.5% |         50 |
-| libero_object  |        93.0% |         50 |
-| libero_goal    |        81.5% |         50 |
-| libero_10      |        62.0% |         50 |
-| **平均**    |    **81.0%** |        200 |
+| Suite          |    成功率 | n_episodes |
+| -------------- | --------: | ---------: |
+| libero_spatial |     87.5% |         50 |
+| libero_object  |     93.0% |         50 |
+| libero_goal    |     81.5% |         50 |
+| libero_10      |     62.0% |         50 |
+| **平均**       | **81.0%** |        200 |
 
 重现：`lerobot-eval --policy.path=lerobot/<policy>_libero --env.type=libero --env.task=libero_spatial --eval.n_episodes=50`（1× A100 40 GB）。
 ```

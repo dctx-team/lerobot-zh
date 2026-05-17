@@ -101,11 +101,11 @@ lerobot-train \
   --dataset.repo_id=lerobot/aloha_mobile_cabinet
 ```
 
-| 类别                   | 模型                                                                                                                                                                                                                  |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **模仿学习**     | [ACT](./docs/source/policy_act_README.md)、[Diffusion](./docs/source/policy_diffusion_README.md)、[VQ-BeT](./docs/source/policy_vqbet_README.md)、[Multitask DiT Policy](./docs/source/policy_multi_task_dit_README.md) |
-| **强化学习** | [HIL-SERL](./docs/source/hilserl.mdx)、[TDMPC](./docs/source/policy_tdmpc_README.md) 和 QC-FQL（即将推出）                                                                                                             |
-| **VLA 模型**            | [Pi0Fast](./docs/source/pi0fast.mdx)、[Pi0.5](./docs/source/pi05.mdx)、[GR00T N1.5](./docs/source/policy_groot_README.md)、[SmolVLA](./docs/source/policy_smolvla_README.md)、[XVLA](./docs/source/xvla.mdx)            |
+| 类别         | 模型                                                                                                                                                                                                                    |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **模仿学习** | [ACT](./docs/source/policy_act_README.md)、[Diffusion](./docs/source/policy_diffusion_README.md)、[VQ-BeT](./docs/source/policy_vqbet_README.md)、[Multitask DiT Policy](./docs/source/policy_multi_task_dit_README.md) |
+| **强化学习** | [HIL-SERL](./docs/source/hilserl.mdx)、[TDMPC](./docs/source/policy_tdmpc_README.md) 和 QC-FQL（即将推出）                                                                                                              |
+| **VLA 模型** | [Pi0Fast](./docs/source/pi0fast.mdx)、[Pi0.5](./docs/source/pi05.mdx)、[GR00T N1.5](./docs/source/policy_groot_README.md)、[SmolVLA](./docs/source/policy_smolvla_README.md)、[XVLA](./docs/source/xvla.mdx)            |
 
 与硬件类似，您可以轻松实现自己的策略并利用 LeRobot 的数据收集、训练和可视化工具，并将您的模型分享到 HF Hub。
 

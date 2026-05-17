@@ -76,10 +76,10 @@ pip install numpy==1.26.0 # Isaac Sim 5.1 依赖 numpy==1.26.0，这将在下一
 
 以下训练好的策略可用：
 
-| 策略                        | 架构     | 任务          | 链接                                                                     |
-| :-------------------------- | :------- | :------------ | :----------------------------------------------------------------------- |
-| pi05-arena-gr1-microwave    | PI0.5    | GR1 微波炉    | [HuggingFace](https://huggingface.co/nvidia/pi05-arena-gr1-microwave)    |
-| smolvla-arena-gr1-microwave | SmolVLA  | GR1 微波炉    | [HuggingFace](https://huggingface.co/nvidia/smolvla-arena-gr1-microwave) |
+| 策略                        | 架构    | 任务       | 链接                                                                     |
+| :-------------------------- | :------ | :--------- | :----------------------------------------------------------------------- |
+| pi05-arena-gr1-microwave    | PI0.5   | GR1 微波炉 | [HuggingFace](https://huggingface.co/nvidia/pi05-arena-gr1-microwave)    |
+| smolvla-arena-gr1-microwave | SmolVLA | GR1 微波炉 | [HuggingFace](https://huggingface.co/nvidia/smolvla-arena-gr1-microwave) |
 
 ### 评估 SmolVLA
 
@@ -139,9 +139,7 @@ TORCH_COMPILE_DISABLE=1 TORCHINDUCTOR_DISABLE=1 lerobot-eval \
     --eval.batch_size=1
 ```
 
-<Tip>
-  要更改并行环境的数量，使用 ```--eval.batch_size``` 标志。
-</Tip>
+<Tip>要更改并行环境的数量，使用 ```--eval.batch_size``` 标志。</Tip>
 
 ### 预期结果
 
@@ -196,10 +194,10 @@ outputs/eval/2026-01-02/14-38-01_isaaclab_arena_smolvla/videos/gr1_microwave_0/e
 
 HuggingFace Hub 上提供了 IsaacLab Arena 示例数据集供实验：
 
-| 数据集                                                                                                    | 描述                   | 帧数   |
-| :-------------------------------------------------------------------------------------------------------- | :--------------------- | :----- |
-| [Arena-GR1-Manipulation-Task](https://huggingface.co/datasets/nvidia/Arena-GR1-Manipulation-Task-v3)      | GR1 微波炉操作         | ~4K    |
-| [Arena-G1-Loco-Manipulation-Task](https://huggingface.co/datasets/nvidia/Arena-G1-Loco-Manipulation-Task) | G1 移动操作            | ~4K    |
+| 数据集                                                                                                    | 描述           | 帧数 |
+| :-------------------------------------------------------------------------------------------------------- | :------------- | :--- |
+| [Arena-GR1-Manipulation-Task](https://huggingface.co/datasets/nvidia/Arena-GR1-Manipulation-Task-v3)      | GR1 微波炉操作 | ~4K  |
+| [Arena-G1-Loco-Manipulation-Task](https://huggingface.co/datasets/nvidia/Arena-G1-Loco-Manipulation-Task) | G1 移动操作    | ~4K  |
 
 ## 环境配置
 
@@ -315,7 +313,9 @@ git clone https://huggingface.co/nvidia/isaaclab-arena-envs
 [上传](./envhub#step-3-upload-to-the-hub)您修改后的仓库到 HuggingFace EnvHub。
 
 <Tip>
-  您的 IsaacLab Arena 环境代码在评估期间必须在本地可用。用户可以单独克隆您的环境仓库，或者您可以直接在 EnvHub 仓库中捆绑环境代码和资产。
+  您的 IsaacLab Arena
+  环境代码在评估期间必须在本地可用。用户可以单独克隆您的环境仓库，或者您可以直接在
+  EnvHub 仓库中捆绑环境代码和资产。
 </Tip>
 
 然后，在评估时使用您的新环境：
@@ -407,12 +407,12 @@ pip install -e .
 
 LW-BenchHub 数据集在 HuggingFace Hub 上可用：
 
-| 数据集                                                                                                    | 描述                    | 任务  | 帧数   |
-| :-------------------------------------------------------------------------------------------------------- | :---------------------- | :---- | :----- |
-| [Lightwheel-Tasks-X7S](https://huggingface.co/datasets/LightwheelAI/Lightwheel-Tasks-X7S)                 | X7S LIBERO 和 RoboCasa  | 117   | ~10.3M |
-| [Lightwheel-Tasks-Double-Piper](https://huggingface.co/datasets/LightwheelAI/Lightwheel-Tasks-Double-Piper)   | Double-Piper LIBERO     | 130   | ~6.0M  |
-| [Lightwheel-Tasks-G1-Controller](https://huggingface.co/datasets/LightwheelAI/Lightwheel-Tasks-G1-Controller) | G1-Controller LIBERO    | 62    | ~2.7M  |
-| [Lightwheel-Tasks-G1-WBC](https://huggingface.co/datasets/LightwheelAI/Lightwheel-Tasks-G1-WBC)               | G1-WBC RoboCasa         | 32    | ~1.5M  |
+| 数据集                                                                                                        | 描述                   | 任务 | 帧数   |
+| :------------------------------------------------------------------------------------------------------------ | :--------------------- | :--- | :----- |
+| [Lightwheel-Tasks-X7S](https://huggingface.co/datasets/LightwheelAI/Lightwheel-Tasks-X7S)                     | X7S LIBERO 和 RoboCasa | 117  | ~10.3M |
+| [Lightwheel-Tasks-Double-Piper](https://huggingface.co/datasets/LightwheelAI/Lightwheel-Tasks-Double-Piper)   | Double-Piper LIBERO    | 130  | ~6.0M  |
+| [Lightwheel-Tasks-G1-Controller](https://huggingface.co/datasets/LightwheelAI/Lightwheel-Tasks-G1-Controller) | G1-Controller LIBERO   | 62   | ~2.7M  |
+| [Lightwheel-Tasks-G1-WBC](https://huggingface.co/datasets/LightwheelAI/Lightwheel-Tasks-G1-WBC)               | G1-WBC RoboCasa        | 32   | ~1.5M  |
 
 有关训练策略，请参阅[训练策略](#training-policies)部分。
 

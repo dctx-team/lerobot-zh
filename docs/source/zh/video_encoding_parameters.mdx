@@ -7,8 +7,10 @@
 您可以使用 `--dataset.camera_encoder.<field>` 从 CLI 设置这些参数（例如使用 `lerobot-record` 或 `lerobot-rollout`）。相同的块适用于该运行中的每个摄像头视频流。
 
 <Tip>
-  视频存储必须打开才能使 `camera_encoder` 产生任何效果——
-  在 Python API 中为 `use_videos=True`，或在 CLI 上为 `--dataset.video=true`（记录默认值）。关闭视频后，输入保持为图像，`camera_encoder` 被忽略。
+  视频存储必须打开才能使 `camera_encoder` 产生任何效果—— 在 Python API 中为
+  `use_videos=True`，或在 CLI 上为
+  `--dataset.video=true`（记录默认值）。关闭视频后，输入保持为图像，`camera_encoder`
+  被忽略。
 </Tip>
 
 有关**何时**写入帧与编码（流式与回合后）、队列和其他顶级 `--dataset.*` 开关的详细信息，请参见[流式视频编码](./streaming_video_encoding)。有关编码参数比较和实验，请参见 [video-benchmark Space](https://huggingface.co/spaces/lerobot/video-benchmark)。
@@ -50,16 +52,16 @@ lerobot-record \
 
 以下所有标志在 CLI 上都以 `--dataset.camera_encoder.` 为前缀。
 
-| 参数            | 类型             | 默认值        | 描述                                                                                                                                                                                   |
-| --------------- | ---------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `vcodec`        | `str`            | `"libsvtav1"` | 视频编解码器名称。`"auto"` 从固定的偏好列表中选择第一个可用的硬件编码器，回退到 `libsvtav1`。                                                                                         |
-| `pix_fmt`       | `str`            | `"yuv420p"`   | 输出像素格式。必须由您的 FFmpeg 构建中选择的编解码器支持。                                                                                                                            |
-| `g`             | `int`            | `2`           | GOP 大小——每 `g` 帧一个关键帧。作为 FFmpeg 选项 `g` 发出。                                                                                                                            |
-| `crf`           | `int` 或 `float` | `30`          | 抽象质量值，按编解码器映射（见下面的[映射](#mapping-videoencoderconfig--ffmpeg-options)）。较低 → 较高质量/较大输出，其中映射是单调的。                                               |
-| `preset`        | `int` 或 `str`   | `12` \*       | 编码器速度预设；含义取决于编解码器。<br/>\* 当未设置且 `vcodec=libsvtav1` 时，LeRobot 默认为 `12`。                                                                                   |
-| `fast_decode`   | `int`            | `0`           | `libsvtav1`：`0–2`，通过 `svtav1-params` 传递。<br/>`h264` / `hevc`（软件）：如果 `>0`，设置 `tune=fastdecode`。<br/>其他编解码器：通常未使用。                                      |
-| `video_backend` | `str`            | `"pyav"`      | 目前仅为视频编码实现了 `"pyav"`。                                                                                                                                                      |
-| `extra_options` | `dict`           | `{}`          | 在上述结构化字段之后合并的额外 FFmpeg 或编解码器特定选项。不能覆盖这些字段已设置的键。                                                                                                 |
+| 参数            | 类型             | 默认值        | 描述                                                                                                                                            |
+| --------------- | ---------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vcodec`        | `str`            | `"libsvtav1"` | 视频编解码器名称。`"auto"` 从固定的偏好列表中选择第一个可用的硬件编码器，回退到 `libsvtav1`。                                                   |
+| `pix_fmt`       | `str`            | `"yuv420p"`   | 输出像素格式。必须由您的 FFmpeg 构建中选择的编解码器支持。                                                                                      |
+| `g`             | `int`            | `2`           | GOP 大小——每 `g` 帧一个关键帧。作为 FFmpeg 选项 `g` 发出。                                                                                      |
+| `crf`           | `int` 或 `float` | `30`          | 抽象质量值，按编解码器映射（见下面的[映射](#mapping-videoencoderconfig--ffmpeg-options)）。较低 → 较高质量/较大输出，其中映射是单调的。         |
+| `preset`        | `int` 或 `str`   | `12` \*       | 编码器速度预设；含义取决于编解码器。<br/>\* 当未设置且 `vcodec=libsvtav1` 时，LeRobot 默认为 `12`。                                             |
+| `fast_decode`   | `int`            | `0`           | `libsvtav1`：`0–2`，通过 `svtav1-params` 传递。<br/>`h264` / `hevc`（软件）：如果 `>0`，设置 `tune=fastdecode`。<br/>其他编解码器：通常未使用。 |
+| `video_backend` | `str`            | `"pyav"`      | 目前仅为视频编码实现了 `"pyav"`。                                                                                                               |
+| `extra_options` | `dict`           | `{}`          | 在上述结构化字段之后合并的额外 FFmpeg 或编解码器特定选项。不能覆盖这些字段已设置的键。                                                          |
 
 ---
 
@@ -99,7 +101,9 @@ lerobot-record \
 - **编码器派生**（取自 `VideoEncoderConfig`）：`video.g`、`video.crf`、`video.preset`、`video.fast_decode`、`video.video_backend`、`video.extra_options`。
 
 <Tip>
-  此块被填充**一次**，来自**第一个**回合。它假设数据集中的每个回合都使用相同的 `camera_encoder` 进行编码。不支持在记录过程中更改编码器设置——`info.json` 将仅反映用于第一个回合的参数。
+  此块被填充**一次**，来自**第一个**回合。它假设数据集中的每个回合都使用相同的
+  `camera_encoder` 进行编码。不支持在记录过程中更改编码器设置——`info.json`
+  将仅反映用于第一个回合的参数。
 </Tip>
 
 ---

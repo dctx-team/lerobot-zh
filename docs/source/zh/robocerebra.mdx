@@ -11,9 +11,9 @@
 
 RoboCerebra 重用 LIBERO 的模拟器，因此评估针对 LIBERO `libero_10` 长时域套件运行：
 
-| 套件      | CLI 名称    | 任务数 | 描述                                         |
-| --------- | ----------- | ------ | -------------------------------------------- |
-| LIBERO-10 | `libero_10` | 10     | 链接 3-6 个子目标的长时域厨房/客厅任务       |
+| 套件      | CLI 名称    | 任务数 | 描述                                   |
+| --------- | ----------- | ------ | -------------------------------------- |
+| LIBERO-10 | `libero_10` | 10     | 链接 3-6 个子目标的长时域厨房/客厅任务 |
 
 数据集中的每个 RoboCerebra 回合都被分割成多个带有自然语言指令的子任务，统一数据集将其作为独立的监督信号公开。
 
@@ -76,12 +76,12 @@ lerobot-eval \
 
 [`lerobot/robocerebra_unified`](https://huggingface.co/datasets/lerobot/robocerebra_unified) 的统一数据集公开两个 RGB 流和语言接地子任务注释：
 
-| 特征                             | 形状          | 描述             |
-| -------------------------------- | ------------- | ---------------- |
-| `observation.images.image`       | (256, 256, 3) | 第三人称视图     |
-| `observation.images.wrist_image` | (256, 256, 3) | 腕部安装相机     |
-| `observation.state`              | (8,)          | 关节位置 + 夹爪  |
-| `action`                         | (7,)          | EEF 增量 + 夹爪  |
+| 特征                             | 形状          | 描述            |
+| -------------------------------- | ------------- | --------------- |
+| `observation.images.image`       | (256, 256, 3) | 第三人称视图    |
+| `observation.images.wrist_image` | (256, 256, 3) | 腕部安装相机    |
+| `observation.state`              | (8,)          | 关节位置 + 夹爪 |
+| `action`                         | (7,)          | EEF 增量 + 夹爪 |
 
 在其上微调 SmolVLA 基础模型：
 

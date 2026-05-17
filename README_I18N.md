@@ -19,6 +19,7 @@ LeRobot 是一个基于 PyTorch 的真实世界机器人库，提供数据集、
 ### 🌐 语言切换
 
 文档支持自动语言检测和切换：
+
 - 访问在线文档时，系统会根据浏览器语言自动跳转到对应语言版本
 - 手动访问：
   - 英文: `https://your-username.github.io/lerobot-zh/en/`
@@ -55,6 +56,7 @@ doc-builder build lerobot docs/source/zh --build_dir ~/tmp/docs-zh
 我们欢迎社区贡献更多的中文翻译！
 
 **当前翻译进度**:
+
 - ✅ 核心文档: 7/82 (8.5%)
   - index.mdx - 文档主页
   - installation.mdx - 安装指南
@@ -72,6 +74,7 @@ doc-builder build lerobot docs/source/zh --build_dir ~/tmp/docs-zh
 4. 提交 Pull Request
 
 **翻译指南**:
+
 - 保持原文档的格式和结构
 - 代码示例和命令保持英文
 - 专业术语首次出现时可标注英文原文
@@ -97,6 +100,7 @@ docs/
 ### 🚀 部署
 
 文档通过 GitHub Actions 自动部署到 GitHub Pages：
+
 - 推送到 `main` 分支时自动触发构建
 - 构建完成后自动部署到 GitHub Pages
 - 支持中英文双语版本
@@ -122,6 +126,7 @@ This repository provides complete bilingual documentation in English and Chinese
 ### 🌐 Language Switching
 
 The documentation supports automatic language detection and switching:
+
 - When visiting the online documentation, the system automatically redirects to the corresponding language version based on browser language
 - Manual access:
   - English: `https://your-username.github.io/lerobot-zh/en/`
@@ -158,6 +163,7 @@ doc-builder build lerobot docs/source/zh --build_dir ~/tmp/docs-zh
 We welcome community contributions for more Chinese translations!
 
 **Current Translation Progress**:
+
 - ✅ Core Documentation: 7/82 (8.5%)
   - index.mdx - Documentation homepage
   - installation.mdx - Installation guide
@@ -175,6 +181,7 @@ We welcome community contributions for more Chinese translations!
 4. Submit a Pull Request
 
 **Translation Guidelines**:
+
 - Maintain the format and structure of the original document
 - Keep code examples and commands in English
 - Technical terms can be annotated with English originals on first appearance
@@ -200,6 +207,7 @@ docs/
 ### 🚀 Deployment
 
 Documentation is automatically deployed to GitHub Pages via GitHub Actions:
+
 - Automatically triggered on push to `main` branch
 - Automatically deployed to GitHub Pages after build completion
 - Supports bilingual versions in English and Chinese

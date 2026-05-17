@@ -41,7 +41,9 @@ env = make_env("lerobot/cartpole-env", trust_remote_code=True)
 ```
 
 <Tip warning={true}>
-  **安全提示**：从 Hub 加载环境会执行来自第三方仓库的 Python 代码。仅对您信任的仓库使用 `trust_remote_code=True`。我们强烈建议固定到特定的提交哈希以确保可重现性和安全性。
+  **安全提示**：从 Hub 加载环境会执行来自第三方仓库的 Python
+  代码。仅对您信任的仓库使用
+  `trust_remote_code=True`。我们强烈建议固定到特定的提交哈希以确保可重现性和安全性。
 </Tip>
 
 ## 仓库结构
@@ -251,12 +253,12 @@ envs_dict = make_env(
 
 hub URL 格式支持多种模式：
 
-| 模式                 | 描述                   | 示例                                   |
-| -------------------- | ---------------------- | -------------------------------------- |
-| `user/repo`          | 从主分支加载 `env.py`  | `make_env("lerobot/pusht-env")`        |
-| `user/repo@revision` | 从特定修订版加载       | `make_env("lerobot/pusht-env@main")`   |
-| `user/repo:path`     | 加载自定义文件         | `make_env("lerobot/envs:pusht.py")`    |
-| `user/repo@rev:path` | 修订版 + 自定义文件    | `make_env("lerobot/envs@v1:pusht.py")` |
+| 模式                 | 描述                  | 示例                                   |
+| -------------------- | --------------------- | -------------------------------------- |
+| `user/repo`          | 从主分支加载 `env.py` | `make_env("lerobot/pusht-env")`        |
+| `user/repo@revision` | 从特定修订版加载      | `make_env("lerobot/pusht-env@main")`   |
+| `user/repo:path`     | 加载自定义文件        | `make_env("lerobot/envs:pusht.py")`    |
+| `user/repo@rev:path` | 修订版 + 自定义文件   | `make_env("lerobot/envs@v1:pusht.py")` |
 
 ## 多任务环境
 
@@ -281,7 +283,8 @@ def make_env(n_envs: int = 1, use_async_envs: bool = False):
 ## 安全注意事项
 
 <Tip warning={true}>
-  **重要**：需要 `trust_remote_code=True` 标志才能执行来自 Hub 的环境代码。这是出于安全考虑的设计。
+  **重要**：需要 `trust_remote_code=True` 标志才能执行来自 Hub
+  的环境代码。这是出于安全考虑的设计。
 </Tip>
 
 从 Hub 加载环境时：

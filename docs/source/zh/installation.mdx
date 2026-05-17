@@ -173,20 +173,20 @@ _这仅安装核心 ML 依赖项。对于大多数工作流，您需要添加额
 **功能额外包：**
 LeRobot 提供**功能范围的额外包**，映射到常见工作流。如果您使用 `uv`，请在下面的命令中将 `pip install` 替换为 `uv pip install`。
 
-| 额外包     | 添加的内容                                  | 典型用例                            |
-| ---------- | ------------------------------------------- | ----------------------------------- |
-| `dataset`  | `datasets`, `av`, `torchcodec`, `jsonlines` | 加载和创建数据集                    |
-| `training` | `dataset` + `accelerate`, `wandb`           | 训练策略                            |
-| `hardware` | `pynput`, `pyserial`, `deepdiff`            | 连接到真实机器人                    |
-| `viz`      | `rerun-sdk`                                 | 录制/评估期间的可视化               |
+| 额外包     | 添加的内容                                  | 典型用例              |
+| ---------- | ------------------------------------------- | --------------------- |
+| `dataset`  | `datasets`, `av`, `torchcodec`, `jsonlines` | 加载和创建数据集      |
+| `training` | `dataset` + `accelerate`, `wandb`           | 训练策略              |
+| `hardware` | `pynput`, `pyserial`, `deepdiff`            | 连接到真实机器人      |
+| `viz`      | `rerun-sdk`                                 | 录制/评估期间的可视化 |
 
 **组合额外包**为常见的 CLI 脚本组合功能额外包：
 
-| 额外包         | 包含                           | 典型用例                                                    |
-| -------------- | ------------------------------ | ----------------------------------------------------------- |
-| `core_scripts` | `dataset` + `hardware` + `viz` | `lerobot-record`, `lerobot-replay`, `lerobot-calibrate`     |
-| `evaluation`   | `av`                           | `lerobot-eval`（根据需要添加策略 + 环境额外包）            |
-| `dataset_viz`  | `dataset` + `viz`              | `lerobot-dataset-viz`, `lerobot-imgtransform-viz`           |
+| 额外包         | 包含                           | 典型用例                                                |
+| -------------- | ------------------------------ | ------------------------------------------------------- |
+| `core_scripts` | `dataset` + `hardware` + `viz` | `lerobot-record`, `lerobot-replay`, `lerobot-calibrate` |
+| `evaluation`   | `av`                           | `lerobot-eval`（根据需要添加策略 + 环境额外包）         |
+| `dataset_viz`  | `dataset` + `viz`              | `lerobot-dataset-viz`, `lerobot-imgtransform-viz`       |
 
 ```bash
 pip install 'lerobot[core_scripts]'          # 录制、回放、校准

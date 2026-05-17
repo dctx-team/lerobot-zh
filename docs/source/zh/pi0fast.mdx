@@ -68,15 +68,15 @@ lerobot-train-tokenizer \
 
 ### 关键标记器参数
 
-| 参数              | 描述                                                                       | 默认值      |
-| ---------------------- | --------------------------------------------------------------------------------- | ------------ |
-| `--repo_id`            | LeRobot 数据集仓库 ID                                                     | 必需     |
-| `--action_horizon`     | 每个块中的未来动作数                                            | `10`         |
-| `--encoded_dims`       | 要编码的逗号分隔维度范围（例如，`"0:6,7:23"`）                   | `"0:6,7:23"` |
-| `--vocab_size`         | BPE 词汇表大小                                                               | `1024`       |
-| `--scale`              | 用于量化的 DCT 缩放因子                                               | `10.0`       |
+| 参数                   | 描述                                                                       | 默认值       |
+| ---------------------- | -------------------------------------------------------------------------- | ------------ |
+| `--repo_id`            | LeRobot 数据集仓库 ID                                                      | 必需         |
+| `--action_horizon`     | 每个块中的未来动作数                                                       | `10`         |
+| `--encoded_dims`       | 要编码的逗号分隔维度范围（例如，`"0:6,7:23"`）                             | `"0:6,7:23"` |
+| `--vocab_size`         | BPE 词汇表大小                                                             | `1024`       |
+| `--scale`              | 用于量化的 DCT 缩放因子                                                    | `10.0`       |
 | `--normalization_mode` | 归一化模式（`MEAN_STD`、`MIN_MAX`、`QUANTILES`、`QUANTILE10`、`IDENTITY`） | `QUANTILES`  |
-| `--sample_fraction`    | 每个回合采样的块的比例                                          | `0.1`        |
+| `--sample_fraction`    | 每个回合采样的块的比例                                                     | `0.1`        |
 
 ## 使用
 
@@ -109,15 +109,15 @@ lerobot-train \
 
 ### 关键训练参数
 
-| 参数                              | 描述                                        | 默认值                         |
-| -------------------------------------- | -------------------------------------------------- | ------------------------------- |
-| `--policy.gradient_checkpointing=true` | 在训练期间显著减少内存使用 | `false`                         |
+| 参数                                   | 描述                              | 默认值                          |
+| -------------------------------------- | --------------------------------- | ------------------------------- |
+| `--policy.gradient_checkpointing=true` | 在训练期间显著减少内存使用        | `false`                         |
 | `--policy.dtype=bfloat16`              | 使用混合精度训练以提高效率        | `float32`                       |
-| `--policy.chunk_size`                  | 要预测的动作步数（动作范围） | `50`                            |
+| `--policy.chunk_size`                  | 要预测的动作步数（动作范围）      | `50`                            |
 | `--policy.n_action_steps`              | 要执行的动作步数                  | `50`                            |
-| `--policy.max_action_tokens`           | 每个动作块的最大 FAST 令牌数     | `256`                           |
-| `--policy.action_tokenizer_name`       | 要使用的 FAST 标记器                              | `lerobot/fast-action-tokenizer` |
-| `--policy.compile_model=true`          | 启用 torch.compile 以加快训练速度           | `false`                         |
+| `--policy.max_action_tokens`           | 每个动作块的最大 FAST 令牌数      | `256`                           |
+| `--policy.action_tokenizer_name`       | 要使用的 FAST 标记器              | `lerobot/fast-action-tokenizer` |
+| `--policy.compile_model=true`          | 启用 torch.compile 以加快训练速度 | `false`                         |
 
 ## 推理
 
@@ -153,24 +153,24 @@ actions = policy.predict_action_chunk(batch)
 
 ## 配置选项
 
-| 参数            | 描述                                     | 默认值    |
-| -------------------- | ----------------------------------------------- | ---------- |
+| 参数                 | 描述                                     | 默认值     |
+| -------------------- | ---------------------------------------- | ---------- |
 | `paligemma_variant`  | VLM 主干变体（`gemma_300m`、`gemma_2b`） | `gemma_2b` |
-| `max_state_dim`      | 最大状态向量维度（填充）         | `32`       |
-| `max_action_dim`     | 最大动作向量维度（填充）        | `32`       |
-| `temperature`        | 采样温度（0.0 表示贪婪）           | `0.0`      |
-| `max_decoding_steps` | 最大解码步数                          | `256`      |
-| `use_kv_cache`       | 启用 KV 缓存以加快推理速度          | `true`     |
+| `max_state_dim`      | 最大状态向量维度（填充）                 | `32`       |
+| `max_action_dim`     | 最大动作向量维度（填充）                 | `32`       |
+| `temperature`        | 采样温度（0.0 表示贪婪）                 | `0.0`      |
+| `max_decoding_steps` | 最大解码步数                             | `256`      |
+| `use_kv_cache`       | 启用 KV 缓存以加快推理速度               | `true`     |
 
 ## 与 π₀ 的比较
 
-| 特性               | π₀                        | π₀-FAST                      |
-| --------------------- | ------------------------- | ---------------------------- |
+| 特性     | π₀             | π₀-FAST            |
+| -------- | -------------- | ------------------ |
 | 动作表示 | 流匹配（扩散） | 自回归令牌（FAST） |
-| 训练速度        | 1x                        | **快 5 倍**                |
-| 灵巧性             | 高                      | 高                         |
-| 推理方法      | 迭代去噪       | 自回归解码      |
-| KV 缓存            | 不适用                       | 支持                    |
+| 训练速度 | 1x             | **快 5 倍**        |
+| 灵巧性   | 高             | 高                 |
+| 推理方法 | 迭代去噪       | 自回归解码         |
+| KV 缓存  | 不适用         | 支持               |
 
 ## 重现 π₀Fast 结果
 
@@ -224,7 +224,7 @@ lerobot-eval \
 
 我们在 LIBERO 基准测试上获得以下结果：
 
-| 模型       | LIBERO Spatial | LIBERO Object | LIBERO Goal | LIBERO 10 | 平均  |
+| 模型        | LIBERO Spatial | LIBERO Object | LIBERO Goal | LIBERO 10 | 平均     |
 | ----------- | -------------- | ------------- | ----------- | --------- | -------- |
 | **π₀-fast** | 70.0           | 100.0         | 100.0       | 60.0      | **82.5** |
 

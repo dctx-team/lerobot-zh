@@ -11,6 +11,7 @@
 ## 已完成翻译的文档
 
 ### 核心文档 (7)
+
 - ✅ index.mdx - 文档主页
 - ✅ installation.mdx - 安装指南
 - ✅ hardware_guide.mdx - 硬件指南
@@ -20,6 +21,7 @@
 - ✅ smolvla.mdx - SmolVLA 策略
 
 ### 教程类 (8)
+
 - ✅ il_robots.mdx - 真实世界机器人的模仿学习
 - ✅ il_sim.mdx - 仿真中的模仿学习
 - ✅ bring_your_own_policies.mdx - 添加自定义策略
@@ -30,6 +32,7 @@
 - ✅ inference.mdx - 策略部署
 
 ### 机器人硬件 (10)
+
 - ✅ so100.mdx - SO-100 机器人
 - ✅ so101.mdx - SO-101 机器人
 - ✅ koch.mdx - Koch v1.1 机器人
@@ -42,6 +45,7 @@
 - ✅ omx.mdx - OMX 机器人
 
 ### 策略文档 (10)
+
 - ✅ pi0.mdx - π₀ 策略
 - ✅ pi05.mdx - π₀.₅ 策略
 - ✅ pi0fast.mdx - π₀-FAST 策略
@@ -54,6 +58,7 @@
 - ✅ rtc.mdx - 实时分块
 
 ### 环境/基准测试 (12)
+
 - ✅ libero.mdx - LIBERO 基准测试
 - ✅ libero_plus.mdx - LIBERO-plus 扩展
 - ✅ metaworld.mdx - Meta-World 基准测试
@@ -68,6 +73,7 @@
 - ✅ adding_benchmarks.mdx - 添加新基准测试
 
 ### 数据集相关 (5)
+
 - ✅ lerobot-dataset-v3.mdx - LeRobot Dataset v3
 - ✅ porting_datasets_v3.mdx - 迁移到数据集 v3
 - ✅ dataset_subtask.mdx - 数据集子任务
@@ -75,6 +81,7 @@
 - ✅ video_encoding_parameters.mdx - 视频编码参数
 
 ### 处理器相关 (5)
+
 - ✅ debug_processor_pipeline.mdx - 调试处理器流水线
 - ✅ implement_your_own_processor.mdx - 实现你自己的处理器
 - ✅ processors_robots_teleop.mdx - 处理器、机器人与遥操作
@@ -82,6 +89,7 @@
 - ✅ action_representations.mdx - 动作表示
 
 ### 高级主题 (10)
+
 - ✅ async.mdx - 异步推理
 - ✅ hilserl.mdx - HILSERL
 - ✅ hilserl_sim.mdx - HILSERL 仿真
@@ -94,6 +102,7 @@
 - ✅ backwardcomp.mdx - 向后兼容
 
 ### 其他 (15)
+
 - ✅ contributing.md - 贡献指南
 - ✅ feetech.mdx - 飞特舵机
 - ✅ damiao.mdx - 达妙电机
@@ -115,7 +124,7 @@
 1. **格式保持**: 保持原文档的 MDX 格式、代码块、链接等
 2. **代码不变**: 所有代码示例和命令保持英文
 3. **术语一致**: 专业术语保持一致性，参考已翻译文档
-4. **文件命名**: 与英文版文件名一致（不加 _zh 后缀）
+4. **文件命名**: 与英文版文件名一致（不加 \_zh 后缀）
 
 ## 提交记录
 

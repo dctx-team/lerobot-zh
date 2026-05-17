@@ -11,12 +11,12 @@
 
 ## 任务
 
-| 套件                          | 任务                                                         |
-| ----------------------------- | ------------------------------------------------------------ |
-| **Counting**（时间记忆）      | BinFill、PickXtimes、SwingXtimes、StopCube                   |
-| **Permanence**（空间记忆）    | VideoUnmask、VideoUnmaskSwap、ButtonUnmask、ButtonUnmaskSwap |
-| **Reference**（物体记忆）     | PickHighlight、VideoRepick、VideoPlaceButton、VideoPlaceOrder |
-| **Imitation**（程序记忆）     | MoveCube、InsertPeg、PatternLock、RouteStick                 |
+| 套件                       | 任务                                                          |
+| -------------------------- | ------------------------------------------------------------- |
+| **Counting**（时间记忆）   | BinFill、PickXtimes、SwingXtimes、StopCube                    |
+| **Permanence**（空间记忆） | VideoUnmask、VideoUnmaskSwap、ButtonUnmask、ButtonUnmaskSwap  |
+| **Reference**（物体记忆）  | PickHighlight、VideoRepick、VideoPlaceButton、VideoPlaceOrder |
+| **Imitation**（程序记忆）  | MoveCube、InsertPeg、PatternLock、RouteStick                  |
 
 ## 安装
 
@@ -76,13 +76,13 @@ lerobot-eval \
 
 ### `env.type=robomme` 的关键 CLI 选项
 
-| 选项                 | 默认值        | 描述                                           |
-| -------------------- | ------------- | ---------------------------------------------- |
-| `env.task`           | `PickXtimes`  | 上述 16 个任务名称中的任何一个（逗号分隔）     |
-| `env.dataset_split`  | `test`        | `train`、`val` 或 `test`                       |
-| `env.action_space`   | `joint_angle` | `joint_angle`（8-D）或 `ee_pose`（7-D）        |
-| `env.episode_length` | `300`         | 每个回合的最大步数                             |
-| `env.task_ids`       | `null`        | 要评估的回合索引列表（null = `[0]`）           |
+| 选项                 | 默认值        | 描述                                       |
+| -------------------- | ------------- | ------------------------------------------ |
+| `env.task`           | `PickXtimes`  | 上述 16 个任务名称中的任何一个（逗号分隔） |
+| `env.dataset_split`  | `test`        | `train`、`val` 或 `test`                   |
+| `env.action_space`   | `joint_angle` | `joint_angle`（8-D）或 `ee_pose`（7-D）    |
+| `env.episode_length` | `300`         | 每个回合的最大步数                         |
+| `env.task_ids`       | `null`        | 要评估的回合索引列表（null = `[0]`）       |
 
 ## 数据集
 
@@ -96,16 +96,16 @@ dataset = LeRobotDataset("lerobot/robomme")
 
 ### 数据集特征
 
-| 特征               | 形状          | 描述                     |
-| ------------------ | ------------- | ------------------------ |
-| `image`            | (256, 256, 3) | 前置相机 RGB             |
-| `wrist_image`      | (256, 256, 3) | 腕部相机 RGB             |
-| `actions`          | (8,)          | 关节角度 + 夹爪          |
-| `state`            | (8,)          | 关节位置 + 夹爪状态      |
-| `simple_subgoal`   | str           | 高级语言注释             |
-| `grounded_subgoal` | str           | 接地语言注释             |
-| `episode_index`    | int           | 回合 ID                  |
-| `frame_index`      | int           | 回合内的帧               |
+| 特征               | 形状          | 描述                |
+| ------------------ | ------------- | ------------------- |
+| `image`            | (256, 256, 3) | 前置相机 RGB        |
+| `wrist_image`      | (256, 256, 3) | 腕部相机 RGB        |
+| `actions`          | (8,)          | 关节角度 + 夹爪     |
+| `state`            | (8,)          | 关节位置 + 夹爪状态 |
+| `simple_subgoal`   | str           | 高级语言注释        |
+| `grounded_subgoal` | str           | 接地语言注释        |
+| `episode_index`    | int           | 回合 ID             |
+| `frame_index`      | int           | 回合内的帧          |
 
 ### 特征键对齐（训练）
 
@@ -115,10 +115,10 @@ dataset = LeRobotDataset("lerobot/robomme")
 
 ## 动作空间
 
-| 类型          | 维度 | 描述                                                  |
-| ------------- | ---- | ----------------------------------------------------- |
-| `joint_angle` | 8    | 7 个关节角度 + 1 个夹爪（−1 闭合，+1 打开，绝对值）   |
-| `ee_pose`     | 7    | xyz + roll/pitch/yaw + 夹爪                           |
+| 类型          | 维度 | 描述                                                |
+| ------------- | ---- | --------------------------------------------------- |
+| `joint_angle` | 8    | 7 个关节角度 + 1 个夹爪（−1 闭合，+1 打开，绝对值） |
+| `ee_pose`     | 7    | xyz + roll/pitch/yaw + 夹爪                         |
 
 通过 `--env.action_space=joint_angle`（默认）或 `--env.action_space=ee_pose` 设置。
 

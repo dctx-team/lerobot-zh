@@ -22,13 +22,17 @@ import torch
 
 from lerobot.configs.types import FeatureType, NormalizationMode, PolicyFeature
 from lerobot.policies.pi0.configuration_pi0 import PI0Config
-from lerobot.policies.pi0.processor_pi0 import Pi0NewLineProcessor, make_pi0_pre_post_processors
+from lerobot.policies.pi0.processor_pi0 import (
+    Pi0NewLineProcessor,
+    make_pi0_pre_post_processors,
+)
 from lerobot.processor import (
     AddBatchDimensionProcessorStep,
     DeviceProcessorStep,
     EnvTransition,
     NormalizerProcessorStep,
     ProcessorStep,
+    RelativeActionsProcessorStep,
     RenameObservationsProcessorStep,
     TransitionKey,
     UnnormalizerProcessorStep,
@@ -87,7 +91,10 @@ def test_make_pi0_processor_basic():
     config = create_default_config()
     stats = create_default_stats()
 
-    with patch("lerobot.policies.pi0.processor_pi0.TokenizerProcessorStep", MockTokenizerProcessorStep):
+    with patch(
+        "lerobot.policies.pi0.processor_pi0.TokenizerProcessorStep",
+        MockTokenizerProcessorStep,
+    ):
         preprocessor, postprocessor = make_pi0_pre_post_processors(
             config,
             stats,
@@ -98,13 +105,14 @@ def test_make_pi0_processor_basic():
     assert postprocessor.name == "policy_postprocessor"
 
     # Check steps in preprocessor
-    assert len(preprocessor.steps) == 6
+    assert len(preprocessor.steps) == 7
     assert isinstance(preprocessor.steps[0], RenameObservationsProcessorStep)
     assert isinstance(preprocessor.steps[1], AddBatchDimensionProcessorStep)
     assert isinstance(preprocessor.steps[2], Pi0NewLineProcessor)
     # Step 3 would be TokenizerProcessorStep but it's mocked
     assert isinstance(preprocessor.steps[4], DeviceProcessorStep)
-    assert isinstance(preprocessor.steps[5], NormalizerProcessorStep)
+    assert isinstance(preprocessor.steps[5], RelativeActionsProcessorStep)
+    assert isinstance(preprocessor.steps[6], NormalizerProcessorStep)
 
     # Check steps in postprocessor
     assert len(postprocessor.steps) == 2
@@ -189,7 +197,10 @@ def test_pi0_processor_cuda():
         def transform_features(self, features):
             return features
 
-    with patch("lerobot.policies.pi0.processor_pi0.TokenizerProcessorStep", MockTokenizerProcessorStep):
+    with patch(
+        "lerobot.policies.pi0.processor_pi0.TokenizerProcessorStep",
+        MockTokenizerProcessorStep,
+    ):
         preprocessor, postprocessor = make_pi0_pre_post_processors(
             config,
             stats,
@@ -201,7 +212,9 @@ def test_pi0_processor_cuda():
         OBS_IMAGE: torch.randn(3, 224, 224),
     }
     action = torch.randn(6)
-    transition = create_transition(observation, action, complementary_data={"task": "test task"})
+    transition = create_transition(
+        observation, action, complementary_data={"task": "test task"}
+    )
     batch = transition_to_batch(transition)
 
     # Process through preprocessor
@@ -243,7 +256,10 @@ def test_pi0_processor_accelerate_scenario():
         def transform_features(self, features):
             return features
 
-    with patch("lerobot.policies.pi0.processor_pi0.TokenizerProcessorStep", MockTokenizerProcessorStep):
+    with patch(
+        "lerobot.policies.pi0.processor_pi0.TokenizerProcessorStep",
+        MockTokenizerProcessorStep,
+    ):
         preprocessor, postprocessor = make_pi0_pre_post_processors(
             config,
             stats,
@@ -256,7 +272,9 @@ def test_pi0_processor_accelerate_scenario():
         OBS_IMAGE: torch.randn(1, 3, 224, 224).to(device),
     }
     action = torch.randn(1, 6).to(device)
-    transition = create_transition(observation, action, complementary_data={"task": ["test task"]})
+    transition = create_transition(
+        observation, action, complementary_data={"task": ["test task"]}
+    )
     batch = transition_to_batch(transition)
 
     # Process through preprocessor
@@ -298,7 +316,10 @@ def test_pi0_processor_multi_gpu():
         def transform_features(self, features):
             return features
 
-    with patch("lerobot.policies.pi0.processor_pi0.TokenizerProcessorStep", MockTokenizerProcessorStep):
+    with patch(
+        "lerobot.policies.pi0.processor_pi0.TokenizerProcessorStep",
+        MockTokenizerProcessorStep,
+    ):
         preprocessor, postprocessor = make_pi0_pre_post_processors(
             config,
             stats,
@@ -311,7 +332,9 @@ def test_pi0_processor_multi_gpu():
         OBS_IMAGE: torch.randn(1, 3, 224, 224).to(device),
     }
     action = torch.randn(1, 6).to(device)
-    transition = create_transition(observation, action, complementary_data={"task": ["test task"]})
+    transition = create_transition(
+        observation, action, complementary_data={"task": ["test task"]}
+    )
     batch = transition_to_batch(transition)
 
     # Process through preprocessor
@@ -328,7 +351,10 @@ def test_pi0_processor_without_stats():
     config = create_default_config()
 
     # Mock the tokenizer processor
-    with patch("lerobot.policies.pi0.processor_pi0.TokenizerProcessorStep", MockTokenizerProcessorStep):
+    with patch(
+        "lerobot.policies.pi0.processor_pi0.TokenizerProcessorStep",
+        MockTokenizerProcessorStep,
+    ):
         preprocessor, postprocessor = make_pi0_pre_post_processors(
             config,
             dataset_stats=None,
@@ -365,7 +391,10 @@ def test_pi0_processor_bfloat16_device_float32_normalizer():
     stats = create_default_stats()
     config.device = "cuda"
 
-    with patch("lerobot.policies.pi0.processor_pi0.TokenizerProcessorStep", MockTokenizerProcessorStep):
+    with patch(
+        "lerobot.policies.pi0.processor_pi0.TokenizerProcessorStep",
+        MockTokenizerProcessorStep,
+    ):
         preprocessor, _ = make_pi0_pre_post_processors(
             config,
             stats,
@@ -376,7 +405,9 @@ def test_pi0_processor_bfloat16_device_float32_normalizer():
     for step in preprocessor.steps:
         if isinstance(step, DeviceProcessorStep):
             # Device processor converts to bfloat16
-            modified_steps.append(DeviceProcessorStep(device=config.device, float_dtype="bfloat16"))
+            modified_steps.append(
+                DeviceProcessorStep(device=config.device, float_dtype="bfloat16")
+            )
         elif isinstance(step, NormalizerProcessorStep):
             # Normalizer stays configured as float32 (will auto-adapt to bfloat16)
             norm_step = step  # Now type checker knows this is NormalizerProcessorStep
@@ -413,7 +444,9 @@ def test_pi0_processor_bfloat16_device_float32_normalizer():
 
     # Verify: DeviceProcessor → bfloat16, NormalizerProcessor adapts → final output is bfloat16
     assert processed[OBS_STATE].dtype == torch.bfloat16
-    assert processed[OBS_IMAGE].dtype == torch.bfloat16  # IDENTITY normalization still gets dtype conversion
+    assert (
+        processed[OBS_IMAGE].dtype == torch.bfloat16
+    )  # IDENTITY normalization still gets dtype conversion
     assert processed[TransitionKey.ACTION.value].dtype == torch.bfloat16
 
     # Verify normalizer automatically adapted its internal state
