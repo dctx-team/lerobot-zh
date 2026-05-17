@@ -73,9 +73,7 @@ class SO101Leader(Teleoperator):
 
         self.bus.connect()
         if not self.is_calibrated and calibrate:
-            logger.info(
-                "电机中的校准值与校准文件不匹配或未找到校准文件"
-            )
+            logger.info("电机中的校准值与校准文件不匹配或未找到校准文件")
             self.calibrate()
 
         self.configure()
@@ -104,9 +102,7 @@ class SO101Leader(Teleoperator):
         input(f"将 {self} 移动到其运动范围的中间位置，然后按 ENTER....")
         homing_offsets = self.bus.set_half_turn_homings()
 
-        print(
-            "依次移动所有关节，使其通过各自的整个运动范围。\n正在记录位置。按 ENTER 键停止..."
-        )
+        print("依次移动所有关节，使其通过各自的整个运动范围。\n正在记录位置。按 ENTER 键停止...")
         range_mins, range_maxes = self.bus.record_ranges_of_motion()
 
         self.calibration = {}

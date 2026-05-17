@@ -9,6 +9,8 @@
 - sections:
   - local: il_robots
     title: 机器人模仿学习
+  - local: il_sim
+    title: 仿真中的模仿学习
   - local: bring_your_own_policies
     title: 添加策略
   - local: integrate_hardware

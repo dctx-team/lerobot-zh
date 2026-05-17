@@ -149,9 +149,7 @@ def init_keyboard_listener():
     events["stop_recording"] = False
 
     if is_headless():
-        logging.warning(
-            "检测到无头环境。屏幕摄像头显示和键盘输入将不可用。"
-        )
+        logging.warning("检测到无头环境。屏幕摄像头显示和键盘输入将不可用。")
         listener = None
         return listener, events
 
@@ -242,6 +240,4 @@ def sanity_check_dataset_robot_compatibility(
             mismatches.append(f"{field}: expected {present_value}, got {dataset_value}")
 
     if mismatches:
-        raise ValueError(
-            "数据集元数据兼容性检查失败，存在以下不匹配:\n" + "\n".join(mismatches)
-        )
+        raise ValueError("数据集元数据兼容性检查失败，存在以下不匹配:\n" + "\n".join(mismatches))

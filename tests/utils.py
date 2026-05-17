@@ -28,13 +28,9 @@ DEVICE = os.environ.get("LEROBOT_TEST_DEVICE", str(auto_select_torch_device()))
 
 # Camera indices used for connecting physical cameras
 OPENCV_CAMERA_INDEX = int(os.environ.get("LEROBOT_TEST_OPENCV_CAMERA_INDEX", 0))
-INTELREALSENSE_SERIAL_NUMBER = int(
-    os.environ.get("LEROBOT_TEST_INTELREALSENSE_SERIAL_NUMBER", 128422271614)
-)
+INTELREALSENSE_SERIAL_NUMBER = int(os.environ.get("LEROBOT_TEST_INTELREALSENSE_SERIAL_NUMBER", 128422271614))
 
-DYNAMIXEL_PORT = os.environ.get(
-    "LEROBOT_TEST_DYNAMIXEL_PORT", "/dev/tty.usbmodem575E0032081"
-)
+DYNAMIXEL_PORT = os.environ.get("LEROBOT_TEST_DYNAMIXEL_PORT", "/dev/tty.usbmodem575E0032081")
 DYNAMIXEL_MOTORS = {
     "shoulder_pan": [1, "xl430-w250"],
     "shoulder_lift": [2, "xl430-w250"],
@@ -44,9 +40,7 @@ DYNAMIXEL_MOTORS = {
     "gripper": [6, "xl330-m288"],
 }
 
-FEETECH_PORT = os.environ.get(
-    "LEROBOT_TEST_FEETECH_PORT", "/dev/tty.usbmodem585A0080971"
-)
+FEETECH_PORT = os.environ.get("LEROBOT_TEST_FEETECH_PORT", "/dev/tty.usbmodem585A0080971")
 FEETECH_MOTORS = {
     "shoulder_pan": [1, "sts3215"],
     "shoulder_lift": [2, "sts3215"],
@@ -161,13 +155,9 @@ def skip_if_package_arg_missing(func):
         if "required_packages" in arg_names:
             # Get the index of 'required_packages' and retrieve the value from args
             index = arg_names.index("required_packages")
-            required_packages = (
-                args[index] if len(args) > index else kwargs.get("required_packages")
-            )
+            required_packages = args[index] if len(args) > index else kwargs.get("required_packages")
         else:
-            raise ValueError(
-                "Function does not have 'required_packages' as an argument."
-            )
+            raise ValueError("Function does not have 'required_packages' as an argument.")
 
         if required_packages is None:
             return func(*args, **kwargs)

@@ -62,9 +62,7 @@ class EEReferenceAndDelta(RobotActionProcessorStep):
     kinematics: RobotKinematics
     end_effector_step_sizes: dict
     motor_names: list[str]
-    use_latched_reference: bool = (
-        True  # 如果为True，在启用时锁存参考；如果为False，始终使用当前位姿
-    )
+    use_latched_reference: bool = True  # 如果为True，在启用时锁存参考；如果为False，始终使用当前位姿
     use_ik_solution: bool = False
 
     reference_ee_pose: np.ndarray | None = field(default=None, init=False, repr=False)
@@ -213,9 +211,7 @@ class EEBoundsAndSafety(RobotActionProcessorStep):
         # TODO(Steven): ee.gripper_vel 不需要边界限制
 
         if None in (x, y, z, wx, wy, wz):
-            raise ValueError(
-                "缺少必需的末端执行器位姿组件：x, y, z, wx, wy, wz 必须全部存在于action中"
-            )
+            raise ValueError("缺少必需的末端执行器位姿组件：x, y, z, wx, wy, wz 必须全部存在于action中")
 
         pos = np.array([x, y, z], dtype=float)
         twist = np.array([wx, wy, wz], dtype=float)

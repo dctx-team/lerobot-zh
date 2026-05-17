@@ -94,9 +94,7 @@ class PI0FASTConfig(PreTrainedConfig):
                 f"{self.n_action_steps} 作为 `n_action_steps`，{self.chunk_size} 作为 `chunk_size`。"
             )
         if self.n_obs_steps != 1:
-            raise ValueError(
-                f"尚未处理多个观测步。得到 `nobs_steps={self.n_obs_steps}`"
-            )
+            raise ValueError(f"尚未处理多个观测步。得到 `nobs_steps={self.n_obs_steps}`")
 
     def validate_features(self) -> None:
         for i in range(self.empty_cameras):

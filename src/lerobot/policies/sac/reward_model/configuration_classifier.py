@@ -72,6 +72,4 @@ class RewardClassifierConfig(PreTrainedConfig):
         """验证特征配置。"""
         has_image = any(key.startswith(OBS_IMAGE) for key in self.input_features)
         if not has_image:
-            raise ValueError(
-                "您必须在输入特征中提供一个图像观测（键以 'observation.image' 开头）"
-            )
+            raise ValueError("您必须在输入特征中提供一个图像观测（键以 'observation.image' 开头）")

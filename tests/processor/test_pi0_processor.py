@@ -212,9 +212,7 @@ def test_pi0_processor_cuda():
         OBS_IMAGE: torch.randn(3, 224, 224),
     }
     action = torch.randn(6)
-    transition = create_transition(
-        observation, action, complementary_data={"task": "test task"}
-    )
+    transition = create_transition(observation, action, complementary_data={"task": "test task"})
     batch = transition_to_batch(transition)
 
     # Process through preprocessor
@@ -272,9 +270,7 @@ def test_pi0_processor_accelerate_scenario():
         OBS_IMAGE: torch.randn(1, 3, 224, 224).to(device),
     }
     action = torch.randn(1, 6).to(device)
-    transition = create_transition(
-        observation, action, complementary_data={"task": ["test task"]}
-    )
+    transition = create_transition(observation, action, complementary_data={"task": ["test task"]})
     batch = transition_to_batch(transition)
 
     # Process through preprocessor
@@ -332,9 +328,7 @@ def test_pi0_processor_multi_gpu():
         OBS_IMAGE: torch.randn(1, 3, 224, 224).to(device),
     }
     action = torch.randn(1, 6).to(device)
-    transition = create_transition(
-        observation, action, complementary_data={"task": ["test task"]}
-    )
+    transition = create_transition(observation, action, complementary_data={"task": ["test task"]})
     batch = transition_to_batch(transition)
 
     # Process through preprocessor
@@ -405,9 +399,7 @@ def test_pi0_processor_bfloat16_device_float32_normalizer():
     for step in preprocessor.steps:
         if isinstance(step, DeviceProcessorStep):
             # Device processor converts to bfloat16
-            modified_steps.append(
-                DeviceProcessorStep(device=config.device, float_dtype="bfloat16")
-            )
+            modified_steps.append(DeviceProcessorStep(device=config.device, float_dtype="bfloat16"))
         elif isinstance(step, NormalizerProcessorStep):
             # Normalizer stays configured as float32 (will auto-adapt to bfloat16)
             norm_step = step  # Now type checker knows this is NormalizerProcessorStep
@@ -444,9 +436,7 @@ def test_pi0_processor_bfloat16_device_float32_normalizer():
 
     # Verify: DeviceProcessor → bfloat16, NormalizerProcessor adapts → final output is bfloat16
     assert processed[OBS_STATE].dtype == torch.bfloat16
-    assert (
-        processed[OBS_IMAGE].dtype == torch.bfloat16
-    )  # IDENTITY normalization still gets dtype conversion
+    assert processed[OBS_IMAGE].dtype == torch.bfloat16  # IDENTITY normalization still gets dtype conversion
     assert processed[TransitionKey.ACTION.value].dtype == torch.bfloat16
 
     # Verify normalizer automatically adapted its internal state

@@ -158,9 +158,7 @@ class SO101Follower(Robot):
                 self.bus.write("D_Coefficient", motor, 32)
 
                 if motor == "gripper":
-                    self.bus.write(
-                        "Max_Torque_Limit", motor, 500
-                    )  # 最大扭矩限制的 50% 以避免烧坏
+                    self.bus.write("Max_Torque_Limit", motor, 500)  # 最大扭矩限制的 50% 以避免烧坏
                     self.bus.write("Protection_Current", motor, 250)  # 最大电流的 50% 以避免烧坏
                     self.bus.write("Overload_Torque", motor, 25)  # 过载时 25% 扭矩
 

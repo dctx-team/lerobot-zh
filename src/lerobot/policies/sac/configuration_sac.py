@@ -182,17 +182,13 @@ class SACConfig(PreTrainedConfig):
 
     # 网络配置
     # critic 网络架构的配置
-    critic_network_kwargs: CriticNetworkConfig = field(
-        default_factory=CriticNetworkConfig
-    )
+    critic_network_kwargs: CriticNetworkConfig = field(default_factory=CriticNetworkConfig)
     # actor 网络架构的配置
     actor_network_kwargs: ActorNetworkConfig = field(default_factory=ActorNetworkConfig)
     # 策略参数的配置
     policy_kwargs: PolicyConfig = field(default_factory=PolicyConfig)
     # 离散 critic 网络的配置
-    discrete_critic_network_kwargs: CriticNetworkConfig = field(
-        default_factory=CriticNetworkConfig
-    )
+    discrete_critic_network_kwargs: CriticNetworkConfig = field(default_factory=CriticNetworkConfig)
     # actor-learner 架构的配置
     actor_learner_config: ActorLearnerConfig = field(default_factory=ActorLearnerConfig)
     # 并发设置的配置（你可以为 actor 和 learner 使用线程或进程）

@@ -39,9 +39,7 @@ class BackwardCompatibilityError(CompatibilityError):
         if version.major == 2 and version.minor == 1:
             message = V30_MESSAGE.format(repo_id=repo_id, version=version)
         else:
-            raise NotImplementedError(
-                "请在 [Discord](https://discord.com/invite/s3KuuzsPFb) 上联系维护者。"
-            )
+            raise NotImplementedError("请在 [Discord](https://discord.com/invite/s3KuuzsPFb) 上联系维护者。")
         super().__init__(message)
 
 

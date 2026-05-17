@@ -72,9 +72,7 @@ class SO100Leader(Teleoperator):
 
         self.bus.connect()
         if not self.is_calibrated and calibrate:
-            logger.info(
-                "电机中的校准值与校准文件不匹配，或未找到校准文件"
-            )
+            logger.info("电机中的校准值与校准文件不匹配，或未找到校准文件")
             self.calibrate()
 
         self.configure()
