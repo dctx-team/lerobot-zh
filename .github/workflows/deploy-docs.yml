@@ -75,6 +75,9 @@ jobs:
           <!DOCTYPE html><html><head><meta charset="utf-8"><script>window.location.href='./lerobot/v0.5.2/en/';</script></head><body><a href="./lerobot/v0.5.2/en/">中文文档</a></body></html>
           EOF3
 
+      - name: Debug build output
+        run: find docs/_build -maxdepth 5 | head -50
+
       - name: Setup Pages
         uses: actions/configure-pages@v4
 
