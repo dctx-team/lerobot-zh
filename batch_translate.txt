@@ -1,0 +1,12 @@
+剩余需要翻译的文档：
+1. libero.mdx (181行) - LIBERO基准测试
+2. il_sim.mdx (220行) - 仿真中的模仿学习  
+3. action_representations.mdx (223行) - 动作表示
+4. streaming_video_encoding.mdx - 流式视频编码
+5. video_encoding_parameters.mdx - 视频编码参数
+6. hilserl.mdx - HIL-SERL真实机器人训练
+7. sarm.mdx - SARM阶段感知奖励建模
+8. multi_task_dit.mdx - 多任务DiT策略
+9. porting_datasets_v3.mdx - 移植大型数据集到v3.0
+
+已完成6个文档，还需完成9个文档。

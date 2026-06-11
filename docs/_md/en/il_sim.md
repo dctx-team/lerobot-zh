@@ -1,0 +1,212 @@
+# Imitation Learning in Simulation
+
+This tutorial explains how to train a neural network to control a robot through imitation learning in simulation.
+
+**You will learn:**
+
+1. How to record a dataset in simulation and visualize it using [gym-hil](https://github.com/huggingface/gym-hil).
+2. How to train a policy using your data.
+3. How to evaluate your policy in simulation and visualize the results.
+
+For the simulation environment, we use the same [repository](https://github.com/huggingface/gym-hil) as the Human-In-the-Loop (HIL) reinforcement learning algorithm.
+The environment is based on [MuJoCo](https://mujoco.org) and allows you to record datasets in LeRobotDataset format.
+Teleoperation is most convenient with a controller like the Logitech F710, but you can also use a keyboard if you prefer a challenge.
+
+## Installation
+
+First, install the `gym_hil` package inside your LeRobot environment by entering your LeRobot folder and running:
+
+```bash
+pip install -e ".[hilserl]"
+```
+
+## Teleoperate and Record a Dataset
+
+To use `gym_hil` with LeRobot, you need a configuration file. An example config can be found [here](https://huggingface.co/datasets/lerobot/config_examples/resolve/main/sim_il/env_config.json).
+
+To teleoperate and collect a dataset, modify the config file. Here is an example configuration for imitation learning data collection:
+
+```json
+{
+  "env": {
+    "type": "gym_manipulator",
+    "name": "gym_hil",
+    "task": "PandaPickCubeGamepad-v0",
+    "fps": 10
+  },
+  "dataset": {
+    "repo_id": "your_username/il_gym",
+    "root": null,
+    "task": "pick_cube",
+    "num_episodes_to_record": 30,
+    "replay_episode": null,
+    "push_to_hub": true
+  },
+  "mode": "record",
+  "device": "cuda"
+}
+```
+
+Key configuration points:
+
+- Set your `repo_id` in the `dataset` section: `"repo_id": "your_username/il_gym"`
+- Set `num_episodes_to_record: 30` to collect 30 demonstration episodes
+- Make sure `mode` is set to `"record"`
+- If you don't have an NVIDIA GPU, change `"device": "cuda"` to `"mps"` (for macOS) or `"cpu"`
+- To use a keyboard instead of a gamepad, change `"task"` to `"PandaPickCubeKeyboard-v0"`
+
+Then run this command to start:
+
+
+
+=== "Linux"
+    ```bash
+    python -m lerobot.rl.gym_manipulator --config_path path/to/env_config_gym_hil_il.json
+    ```
+
+=== "MacOS"
+    ```bash
+    mjpython -m lerobot.rl.gym_manipulator --config_path path/to/env_config_gym_hil_il.json
+    ```
+
+
+After rendering, you can teleoperate the robot with a gamepad or keyboard — see the control instructions below.
+
+Note that to teleoperate the robot, you must hold the "human takeover pause policy" button `RB` to enable control!
+
+**Gamepad Controls**
+
+<p align="center">
+  <img
+    src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/gamepad_guide.jpg?raw=true"
+    alt="Figure shows the control mappings on a Logitech gamepad."
+    title="Gamepad Control Mapping"
+    width="100%"
+  >
+</p>
+<p align="center">
+  <i>Gamepad button mappings for robot control and episode management</i>
+</p>
+
+**Keyboard Controls**
+
+For keyboard control, use `Space` to enable control and the following keys to move the robot:
+
+```bash
+  Arrow keys: move in the X-Y plane
+  Shift and Shift_R: move along the Z axis
+  Right Ctrl and Left Ctrl: open and close the gripper
+  ESC: quit
+```
+
+## Visualize the Dataset
+
+If you uploaded the dataset to the Hub, you can [visualize it online](https://huggingface.co/spaces/lerobot/visualize_dataset) by pasting your repo id.
+
+<p align="center">
+  <img
+    src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lerobot/dataset_visualizer_sim.png"
+    alt="Figure shows the dataset visualizer"
+    title="Dataset visualization"
+    width="100%"
+  >
+</p>
+<p align="center">
+  <i>Dataset visualizer</i>
+</p>
+
+## Train a Policy
+
+To train a policy to control your robot, use the [`lerobot-train`](https://github.com/huggingface/lerobot/blob/main/src/lerobot/scripts/train.py) script. Here is an example command:
+
+```bash
+lerobot-train \
+  --dataset.repo_id=${HF_USER}/il_gym \
+  --policy.type=act \
+  --output_dir=outputs/train/il_sim_test \
+  --job_name=il_sim_test \
+  --policy.device=cuda \
+  --wandb.enable=true
+```
+
+Let's explain this command:
+
+1. We provide the dataset via `--dataset.repo_id=${HF_USER}/il_gym`.
+2. We provide the policy via `policy.type=act`, which loads the config from [`configuration_act.py`](https://github.com/huggingface/lerobot/blob/main/src/lerobot/policies/act/configuration_act.py). Importantly, the policy automatically adapts to the number of motor states, motor actions, and cameras (e.g. `laptop` and `phone`) saved in your dataset.
+3. We provide `policy.device=cuda` for training on an Nvidia GPU, but you can use `policy.device=mps` for Apple Silicon.
+4. We provide `wandb.enable=true` to visualize training plots with [Weights and Biases](https://docs.wandb.ai/quickstart). This is optional; if you use it, make sure to log in first with `wandb login`.
+
+Training should take a few hours; 100k steps (the default) takes about 1 hour on an Nvidia A100. Checkpoints are saved to `outputs/train/il_sim_test/checkpoints`.
+
+#### Train with Colab
+
+If your local machine doesn't have a powerful GPU, you can train using Google Colab by following the [ACT training notebook](./notebooks.md#training-act).
+
+#### Upload Policy Checkpoint
+
+After training, upload the latest checkpoint with:
+
+```bash
+huggingface-cli upload ${HF_USER}/il_sim_test \
+  outputs/train/il_sim_test/checkpoints/last/pretrained_model
+```
+
+You can also upload intermediate checkpoints:
+
+```bash
+CKPT=010000
+huggingface-cli upload ${HF_USER}/il_sim_test${CKPT} \
+  outputs/train/il_sim_test/checkpoints/${CKPT}/pretrained_model
+```
+
+## Evaluate Your Policy in Simulation
+
+To evaluate your policy, use a configuration file. An example can be found [here](https://huggingface.co/datasets/lerobot/config_examples/resolve/main/sim_il/eval_config.json).
+
+Here is an example evaluation configuration:
+
+```json
+{
+  "env": {
+    "type": "gym_manipulator",
+    "name": "gym_hil",
+    "task": "PandaPickCubeGamepad-v0",
+    "fps": 10
+  },
+  "dataset": {
+    "repo_id": "your_username/il_sim_dataset",
+    "dataset_root": null,
+    "task": "pick_cube"
+  },
+  "pretrained_policy_name_or_path": "your_username/il_sim_model",
+  "device": "cuda"
+}
+```
+
+Make sure to replace:
+
+- `repo_id` with the dataset you used for training (e.g. `your_username/il_sim_dataset`)
+- `pretrained_policy_name_or_path` with your model ID (e.g. `your_username/il_sim_model`)
+
+Then run this command to visualize your trained policy:
+
+
+
+=== "Linux"
+    ```bash
+    python -m lerobot.rl.eval_policy --config_path=path/to/eval_config_gym_hil.json
+    ```
+
+=== "MacOS"
+    ```bash
+    mjpython -m lerobot.rl.eval_policy --config_path=path/to/eval_config_gym_hil.json
+    ```
+
+
+> [!WARNING]
+> While the main workflow for training ACT in simulation is straightforward, there is significant room to explore how to set up the task, define the initial state of the environment, and determine what data to collect during recording to learn the most effective policy. If your trained policy performs poorly, use our visualization tools to check the quality of the dataset it was trained on, as well as the action values and various hyperparameters related to ACT and simulation.
+
+Congratulations 🎉, you have completed this tutorial. If you want to continue using LeRobot in simulation, follow this [tutorial on simulation reinforcement learning with HIL-SERL](https://huggingface.co/docs/lerobot/hilserl_sim).
+
+> [!TIP]
+> If you have any questions or need help, reach out to us on [Discord](https://discord.com/invite/s3KuuzsPFb).

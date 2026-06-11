@@ -1,0 +1,106 @@
+site_name: LeRobot 中文文档
+site_url: https://dctx-team.github.io/lerobot-zh/zh/
+docs_dir: docs/_md/zh
+site_dir: docs/_build/zh
+theme:
+  name: material
+  language: zh
+  features:
+  - navigation.tabs
+  - navigation.sections
+  - navigation.top
+  - search.highlight
+  palette:
+    scheme: default
+    primary: indigo
+markdown_extensions:
+- admonition
+- pymdownx.superfences
+- pymdownx.tabbed:
+    alternate_style: true
+nav:
+- 开始使用:
+  - LeRobot: index.md
+  - 安装: installation.md
+  - 速查表: cheat-sheet.md
+- 教程:
+  - 机器人模仿学习: il_robots.md
+  - 仿真中的模仿学习: il_sim.md
+  - 添加策略: bring_your_own_policies.md
+  - 集成您的硬件: integrate_hardware.md
+  - 使用强化学习训练机器人: hilserl.md
+  - 在仿真中训练强化学习: hilserl_sim.md
+  - 多 GPU 训练: multi_gpu_training.md
+  - 人在环数据收集: hil_data_collection.md
+  - 使用 PEFT 训练（如 LoRA）: peft_training.md
+  - 使用重命名映射和空摄像头: rename_map.md
+- 计算与硬件:
+  - 计算硬件指南: hardware_guide.md
+  - PyTorch 加速器: torch_accelerators.md
+- 数据集:
+  - 使用 LeRobotDataset: lerobot-dataset-v3.md
+  - 移植大型数据集: porting_datasets_v3.md
+  - 使用数据集工具: using_dataset_tools.md
+  - 在数据集中使用子任务: dataset_subtask.md
+  - 视频编码参数: video_encoding_parameters.md
+  - 流式视频编码: streaming_video_encoding.md
+- 策略:
+  - ACT: act.md
+  - SmolVLA: smolvla.md
+  - π₀ (Pi0): pi0.md
+  - π₀-FAST (Pi0Fast): pi0fast.md
+  - π₀.₅ (Pi05): pi05.md
+  - EO-1: eo1.md
+  - NVIDIA GR00T N1.5: groot.md
+  - X-VLA: xvla.md
+  - 多任务 DiT 策略: multi_task_dit.md
+  - WALL-OSS: walloss.md
+- 奖励模型:
+  - SARM: sarm.md
+- 推理:
+  - 策略部署 (lerobot-rollout): inference.md
+  - 使用异步推理: async.md
+  - 实时分块 (RTC): rtc.md
+- 仿真:
+  - Hub 上的环境: envhub.md
+  - 在仿真中控制和训练机器人 (LeIsaac): envhub_leisaac.md
+- 基准测试:
+  - 添加新基准测试: adding_benchmarks.md
+  - LIBERO: libero.md
+  - LIBERO-plus: libero_plus.md
+  - Meta-World: metaworld.md
+  - RoboTwin 2.0: robotwin.md
+  - RoboCasa365: robocasa.md
+  - RoboCerebra: robocerebra.md
+  - RoboMME: robomme.md
+  - NVIDIA IsaacLab Arena 环境: envhub_isaaclab_arena.md
+  - VLABench: vlabench.md
+- 机器人处理器:
+  - 机器人处理器简介: introduction_processors.md
+  - 调试处理器管道: debug_processor_pipeline.md
+  - 实现您自己的处理器: implement_your_own_processor.md
+  - 机器人和遥操作器的处理器: processors_robots_teleop.md
+  - 环境处理器: env_processor.md
+  - 动作表示: action_representations.md
+- 机器人:
+  - SO-101: so101.md
+  - SO-100: so100.md
+  - Koch v1.1: koch.md
+  - LeKiwi: lekiwi.md
+  - Hope Jr: hope_jr.md
+  - Reachy 2: reachy2.md
+  - Unitree G1: unitree_g1.md
+  - Earth Rover Mini: earthrover_mini_plus.md
+  - OMX: omx.md
+  - OpenArm: openarm.md
+- 遥操作器:
+  - 手机: phone_teleop.md
+- 传感器:
+  - 摄像头: cameras.md
+- 资源:
+  - Notebooks: notebooks.md
+  - 更新 Feetech 固件: feetech.md
+  - Damiao 电机和 CAN 总线: damiao.md
+- 关于:
+  - 为 LeRobot 做贡献: contributing.md
+  - 向后兼容性: backwardcomp.md

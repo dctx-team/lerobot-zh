@@ -2,11 +2,28 @@
 
 ## 总体进度
 
-- **总文档数**: 82 个文件（.mdx + .md）
-- **已完成**: 82 个
+- **总文档数**: 93 个文件（.mdx + .md）
+- **已完成**: 93 个
 - **进度**: 100%
 - **剩余**: 0 个
-- **状态**: 全部文档已完成中英双语翻译
+- **状态**: 全部文档已完成中英双语翻译（含 v0.5.2 新增文档）
+
+## 本次更新（2026-06-11）
+
+同步 upstream huggingface/lerobot 至最新 main（v0.5.2），新增 11 个文档翻译：
+
+- ✅ lelab.mdx - LeLab 图形界面
+- ✅ language_and_recipes.mdx - 语言列与配方
+- ✅ tools.mdx - 工具调用
+- ✅ molmoact2.mdx - MolmoAct2 策略
+- ✅ vla_jepa.mdx - VLA-JEPA 策略
+- ✅ robometer.mdx - ROBOMETER 奖励模型
+- ✅ topreward.mdx - TOPReward 奖励模型
+- ✅ rebot_b601.mdx - reBot B601-DM 机器人
+- ✅ policy_molmoact2_README.md - MolmoAct2 策略说明
+- ✅ policy_vla_jepa_README.md - VLA-JEPA 策略说明
+
+同步代码：src/、tests/、pyproject.toml 等 200+ 文件更新至上游最新版本
 
 ## 已完成翻译的文档
 

@@ -1,0 +1,115 @@
+# 语言列与配方
+
+大多数 LeRobot 数据集每个片段只包含一个 `task` 字符串——对于短暂的单指令技能来说足够用，但不足以支持该领域正在迈向的长视野、多模态机器人策略（高层规划、记忆、插话、VQA、工具调用）。为了在不分叉数据集格式的情况下支持这些策略，LeRobot 为 `LeRobotDataset` 扩展了两个可选语言列，以及一个小型配方层，可在运行时将这些行转换为对话式训练样本。
+
+该设计清晰地分为三层：
+
+1. **数据集中的数据** — 语言标注与帧数据并排存储在 `data/chunk-*/file-*.parquet` 中，作为两个可选列（`language_persistent` 和 `language_events`）。没有这些列的数据集保持现有行为不变。
+2. **配方** — 一个 YAML 文件，声明要绑定哪些标注行，以及如何将它们布局为对话轮次（`role`、`content`、可选图片、可选工具调用）。配方是纯配置；无需 Python 代码即可添加新配方。
+3. **训练格式** — 在采样时，`RenderMessagesStep` 将配方与逐帧标注进行解析，并输出 HF 风格的 `messages`，以及供策略处理器消费的 LeRobot 专用附属数据（`message_streams`、`target_message_indices`）。
+
+本页依次介绍每一层。
+
+## 第一层 — 数据集中的语言列
+
+两个可选列与帧数据并排存放在 `data/chunk-*/file-*.parquet` 中：
+
+- `language_persistent`：在片段的每一帧中广播的行列表，用于保持活跃的状态，例如 `subtask`、`plan` 和 `memory`。
+- `language_events`：仅在事件发出的确切帧上存在的行列表，例如 `interjection`、`vqa` 和语音工具调用。
+
+两列共用相同的行结构（事件行省略 `timestamp`，因为所在帧已提供该信息）：
+
+```text
+role: string
+content: string | null
+style: string | null
+timestamp: float32        # 仅限持久行
+camera: string | null     # observation.images.* 特征键，仅限视角相关行
+tool_calls: list[Json] | null
+```
+
+`camera` 字段标记内容锚定于特定摄像头视角的行。视角相关风格（`vqa` 和 `trace`）的行**必须**将 `camera` 设置为对应的 `observation.images.*` 特征键。其他所有风格的行——包括 `motion`（以关节/笛卡尔坐标描述机器人坐标系下的基本运动）——**必须**将 `camera` 置为 `null`。流水线编写者和验证器通过 `validate_camera_field(style, camera)` 强制执行此规则。
+
+`meta/tasks.parquet` 仍然是任务的权威数据来源。特殊的 `${task}` 配方绑定始终读取该任务字符串，不依赖语言标注。
+
+### 架构
+
+语言栈本身有三个内部模块支撑第一层：
+
+1. `lerobot.datasets.language` 定义模式、风格注册表以及 `column_for_style`。
+2. `lerobot.datasets.language_render` 解析行并渲染消息。
+3. `RenderMessagesStep` 将数据集样本转换为 `messages`、`message_streams` 和 `target_message_indices`。
+
+`LeRobotDataset` 保持与配方无关。存在语言列时直接透传 `language_persistent` 和 `language_events`；未标注的数据集保持现有行为不变。
+
+## 第二层 — 配方结构
+
+配方是以 `TrainingRecipe` 和 `MessageTurn` 为支撑的 YAML 文件。它们声明要提取哪些标注行（通过 `bindings`），以及如何将其组合为对话轮次（`messages`）。
+
+```yaml
+messages:
+  - { role: user, content: "${task}", stream: high_level }
+  - { role: assistant, content: "${subtask}", stream: low_level, target: true }
+```
+
+配方还可以分支为加权**混合**子配方。在采样时，根据样本索引确定性地选择唯一一个分支，这样不同帧就能训练不同目标（例如记忆更新 vs. 低层执行 vs. VQA），无需任何 Python 代码连接。
+
+### 时序语义
+
+持久风格在发出后保持活跃，直到被替换：
+
+- `active_at(t, style=subtask)`
+- `nth_prev(style=memory, offset=1)`
+- `nth_next(style=subtask, offset=1)`
+
+事件风格仅存在于其确切的时间戳：
+
+- `emitted_at(t, style=interjection)`
+- `emitted_at(t, style=vqa, role=user, camera=observation.images.top)`
+- `emitted_at(t, role=assistant, tool_name=say)`
+
+精确事件匹配没有容差窗口，因此编写者必须用 parquet 数据中的帧时间戳为事件行打时间戳。
+
+### 视角相关解析
+
+对于视角相关风格（`vqa` 和 `trace`），解析器增加了与 `role=` 和 `tool_name=` 并列的 `camera=` 过滤器。拥有多个摄像头的数据集通常在同一时间戳为每个摄像头各发出一对（`vqa`, `user`）+（`vqa`, `assistant`）；若不加 `camera=`，这些解析器会看到两个匹配项并抛出歧义错误。配方通过各自的绑定加上匹配的图片块来消费每个摄像头，例如：
+
+```yaml
+ask_vqa_top:
+  bindings:
+    vqa_query: "emitted_at(t, style=vqa, role=user, camera=observation.images.top)"
+    vqa: "emitted_at(t, style=vqa, role=assistant, camera=observation.images.top)"
+  messages:
+    - role: user
+      stream: high_level
+      if_present: vqa_query
+      content:
+        - { type: image, feature: observation.images.top }
+        - { type: text, text: "${vqa_query}" }
+    - {
+        role: assistant,
+        content: "${vqa}",
+        stream: high_level,
+        target: true,
+        if_present: vqa,
+      }
+```
+
+数据集录制的每个摄像头都需要添加一个这样的子配方。
+
+## 第三层 — 训练格式
+
+渲染后的样本使用 HF 风格的对话消息加上 LeRobot 附属数据：
+
+```python
+sample["messages"]
+sample["message_streams"]
+sample["target_message_indices"]
+```
+
+渲染器不应用分词器的对话模板。策略处理器自行决定如何将消息序列化为其骨干网络所需的格式，这样同一个数据集就可以在 SmolVLA、Pi0.5 以及任何期望 OpenAI 风格对话消息的未来 VLM 上复用。
+
+## 优雅降级
+
+若两个语言列均缺失、为 `None` 或为空，`RenderMessagesStep` 将成为空操作。
+若在没有所需事件行的帧上选择了事件范围的分支，渲染返回 `None`，允许加载器重试其他样本。

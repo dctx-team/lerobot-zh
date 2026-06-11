@@ -9,6 +9,8 @@
 - sections:
   - local: il_robots
     title: 机器人模仿学习
+  - local: lelab
+    title: LeLab - LeRobot 图形界面
   - local: il_sim
     title: 仿真中的模仿学习
   - local: bring_your_own_policies
@@ -43,6 +45,10 @@
     title: 使用数据集工具
   - local: dataset_subtask
     title: 在数据集中使用子任务
+  - local: language_and_recipes
+    title: 语言列与配方
+  - local: tools
+    title: 工具调用
   - local: video_encoding_parameters
     title: 视频编码参数
   - local: streaming_video_encoding
@@ -59,6 +65,10 @@
     title: π₀-FAST (Pi0Fast)
   - local: pi05
     title: π₀.₅ (Pi05)
+  - local: molmoact2
+    title: MolmoAct2
+  - local: vla_jepa
+    title: VLA-JEPA
   - local: eo1
     title: EO-1
   - local: groot
@@ -73,6 +83,10 @@
 - sections:
   - local: sarm
     title: SARM
+  - local: robometer
+    title: ROBOMETER
+  - local: topreward
+    title: TOPReward
   title: "奖励模型"
 - sections:
   - local: inference
@@ -145,6 +159,8 @@
     title: OMX
   - local: openarm
     title: OpenArm
+  - local: rebot_b601
+    title: reBot B601-DM
   title: "机器人"
 - sections:
   - local: phone_teleop

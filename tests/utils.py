@@ -187,18 +187,3 @@ def skip_if_package_missing(package_name, import_name=None):
         return wrapper
 
     return decorator
-
-
-def require_package(package_name):
-    """Decorator that skips the test if the specified package is not installed."""
-
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            if not is_package_available(package_name):
-                pytest.skip(f"{package_name} not installed")
-            return func(*args, **kwargs)
-
-        return wrapper
-
-    return decorator

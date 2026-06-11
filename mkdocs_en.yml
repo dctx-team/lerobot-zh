@@ -1,0 +1,106 @@
+site_name: LeRobot Documentation
+site_url: https://dctx-team.github.io/lerobot-zh/en/
+docs_dir: docs/_md/en
+site_dir: docs/_build/en
+theme:
+  name: material
+  language: en
+  features:
+  - navigation.tabs
+  - navigation.sections
+  - navigation.top
+  - search.highlight
+  palette:
+    scheme: default
+    primary: indigo
+markdown_extensions:
+- admonition
+- pymdownx.superfences
+- pymdownx.tabbed:
+    alternate_style: true
+nav:
+- Get started:
+  - LeRobot: index.md
+  - Installation: installation.md
+  - Cheat sheet: cheat-sheet.md
+- Tutorials:
+  - Imitation Learning for Robots: il_robots.md
+  - Imitation Learning in Simulation: il_sim.md
+  - Adding a Policy: bring_your_own_policies.md
+  - Bring Your Own Hardware: integrate_hardware.md
+  - Train a Robot with RL: hilserl.md
+  - Train RL in Simulation: hilserl_sim.md
+  - Multi GPU training: multi_gpu_training.md
+  - Human In the Loop Data Collection: hil_data_collection.md
+  - Training with PEFT (e.g., LoRA): peft_training.md
+  - Using Rename Map and Empty Cameras: rename_map.md
+- Compute & Hardware:
+  - Compute Hardware Guide: hardware_guide.md
+  - PyTorch accelerators: torch_accelerators.md
+- Datasets:
+  - Using LeRobotDataset: lerobot-dataset-v3.md
+  - Porting Large Datasets: porting_datasets_v3.md
+  - Using the Dataset Tools: using_dataset_tools.md
+  - Using Subtasks in the Dataset: dataset_subtask.md
+  - Video encoding parameters: video_encoding_parameters.md
+  - Streaming Video Encoding: streaming_video_encoding.md
+- Policies:
+  - ACT: act.md
+  - SmolVLA: smolvla.md
+  - π₀ (Pi0): pi0.md
+  - π₀-FAST (Pi0Fast): pi0fast.md
+  - π₀.₅ (Pi05): pi05.md
+  - EO-1: eo1.md
+  - NVIDIA GR00T N1.5: groot.md
+  - X-VLA: xvla.md
+  - Multitask DiT Policy: multi_task_dit.md
+  - WALL-OSS: walloss.md
+- Reward Models:
+  - SARM: sarm.md
+- Inference:
+  - Policy Deployment (lerobot-rollout): inference.md
+  - Use Async Inference: async.md
+  - Real-Time Chunking (RTC): rtc.md
+- Simulation:
+  - Environments from the Hub: envhub.md
+  - Control & Train Robots in Sim (LeIsaac): envhub_leisaac.md
+- Benchmarks:
+  - Adding a New Benchmark: adding_benchmarks.md
+  - LIBERO: libero.md
+  - LIBERO-plus: libero_plus.md
+  - Meta-World: metaworld.md
+  - RoboTwin 2.0: robotwin.md
+  - RoboCasa365: robocasa.md
+  - RoboCerebra: robocerebra.md
+  - RoboMME: robomme.md
+  - NVIDIA IsaacLab Arena Environments: envhub_isaaclab_arena.md
+  - VLABench: vlabench.md
+- Robot Processors:
+  - Introduction to Robot Processors: introduction_processors.md
+  - Debug your processor pipeline: debug_processor_pipeline.md
+  - Implement your own processor: implement_your_own_processor.md
+  - Processors for Robots and Teleoperators: processors_robots_teleop.md
+  - Environment Processors: env_processor.md
+  - Action Representations: action_representations.md
+- Robots:
+  - SO-101: so101.md
+  - SO-100: so100.md
+  - Koch v1.1: koch.md
+  - LeKiwi: lekiwi.md
+  - Hope Jr: hope_jr.md
+  - Reachy 2: reachy2.md
+  - Unitree G1: unitree_g1.md
+  - Earth Rover Mini: earthrover_mini_plus.md
+  - OMX: omx.md
+  - OpenArm: openarm.md
+- Teleoperators:
+  - Phone: phone_teleop.md
+- Sensors:
+  - Cameras: cameras.md
+- Resources:
+  - Notebooks: notebooks.md
+  - Updating Feetech Firmware: feetech.md
+  - Damiao Motors and CAN Bus: damiao.md
+- About:
+  - Contribute to LeRobot: contributing.md
+  - Backward compatibility: backwardcomp.md

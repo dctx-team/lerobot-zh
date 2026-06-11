@@ -48,6 +48,7 @@ from lerobot.envs import close_envs, make_env, make_env_pre_post_processors
 from lerobot.optim.factory import make_optimizer_and_scheduler
 from lerobot.policies import PreTrainedPolicy, make_policy, make_pre_post_processors
 from lerobot.rewards import make_reward_pre_post_processors
+from lerobot.utils.collate import lerobot_collate_fn
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.logging_utils import AverageMeter, MetricsTracker
 from lerobot.utils.random_utils import set_seed
@@ -291,19 +292,8 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
 
     active_cfg = cfg.trainable_config
     processor_pretrained_path = active_cfg.pretrained_path
-    if (
-        getattr(active_cfg, "use_relative_actions", False)
-        and processor_pretrained_path is not None
-        and not cfg.resume
-    ):
-        logging.warning(
-            "use_relative_actions=true with pretrained processors can skip relative transforms if "
-            "the checkpoint processors do not define them. Building processors from current policy config."
-        )
-        processor_pretrained_path = None
 
     processor_kwargs = {}
-    postprocessor_kwargs = {}
     if (processor_pretrained_path and not cfg.resume) or not processor_pretrained_path:
         processor_kwargs["dataset_stats"] = dataset.meta.stats
 
@@ -311,24 +301,31 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
         processor_kwargs["dataset_meta"] = dataset.meta
 
     if not cfg.is_reward_model_training and processor_pretrained_path is not None:
-        processor_kwargs["preprocessor_overrides"] = {
+        preprocessor_overrides = {
             "device_processor": {"device": device.type},
             "normalizer_processor": {
                 "stats": dataset.meta.stats,
                 "features": {**policy.config.input_features, **policy.config.output_features},
                 "norm_map": policy.config.normalization_mapping,
             },
+            "rename_observations_processor": {"rename_map": cfg.rename_map},
         }
-        processor_kwargs["preprocessor_overrides"]["rename_observations_processor"] = {
-            "rename_map": cfg.rename_map
-        }
-        postprocessor_kwargs["postprocessor_overrides"] = {
+        postprocessor_overrides = {
             "unnormalizer_processor": {
                 "stats": dataset.meta.stats,
                 "features": policy.config.output_features,
                 "norm_map": policy.config.normalization_mapping,
             },
         }
+        if getattr(active_cfg, "use_relative_actions", False):
+            preprocessor_overrides["relative_actions_processor"] = {
+                "enabled": True,
+                "exclude_joints": getattr(active_cfg, "relative_exclude_joints", []),
+                "action_names": getattr(active_cfg, "action_feature_names", None),
+            }
+            postprocessor_overrides["absolute_actions_processor"] = {"enabled": True}
+        processor_kwargs["preprocessor_overrides"] = preprocessor_overrides
+        processor_kwargs["postprocessor_overrides"] = postprocessor_overrides
 
     if cfg.is_reward_model_training:
         preprocessor, postprocessor = make_reward_pre_post_processors(
@@ -340,7 +337,6 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
             policy_cfg=cfg.policy,
             pretrained_path=processor_pretrained_path,
             **processor_kwargs,
-            **postprocessor_kwargs,
         )
 
     if is_main_process:
@@ -401,6 +397,10 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
         shuffle = True
         sampler = None
 
+    # Only swap in the language-aware collate when the dataset actually
+    # declares language columns; otherwise stay on PyTorch's default
+    # collate so non-language training runs are unaffected.
+    collate_fn = lerobot_collate_fn if dataset.meta.has_language_columns else None
     dataloader = torch.utils.data.DataLoader(
         dataset,
         num_workers=cfg.num_workers,
@@ -409,6 +409,7 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
         sampler=sampler,
         pin_memory=device.type == "cuda",
         drop_last=False,
+        collate_fn=collate_fn,
         prefetch_factor=cfg.prefetch_factor if cfg.num_workers > 0 else None,
         persistent_workers=cfg.persistent_workers and cfg.num_workers > 0,
     )

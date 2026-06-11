@@ -1,0 +1,178 @@
+# reBot B601-DM
+
+[reBot B601-DM](https://wiki.seeedstudio.com/rebot_arm_b601_dm_lerobot/) 是 Seeed Studio 推出的一款开源低成本机器人手臂，专为具身 AI 和模仿学习设计。它包含一个**跟随臂**（`B601-DM`，由达妙 CAN 电机驱动的 6 自由度手臂加夹爪）和一个用于遥操作的**主控臂**（`StarArm102` / `reBot Arm 102`，由 FashionStar UART 智能舵机驱动）。
+
+本页涵盖单臂和双臂（双臂）配置的**标定**和**遥操作**。
+
+<div style="display: flex; align-items: center; gap: 10px;">
+  <img
+    src="https://files.seeedstudio.com/wiki/robotics/projects/lerobot/b601dm_zeroposition.jpg"
+    alt="reBot B601-DM follower arm at its zero position"
+    width="48%"
+  />
+  <img
+    src="https://files.seeedstudio.com/wiki/robotics/projects/lerobot/102_zeroposition.jpg"
+    alt="reBot Arm 102 leader arm at its zero position"
+    width="48%"
+  />
+</div>
+
+_左图：B601-DM 跟随臂在零位。右图：reBot Arm 102 主控臂在零位。图片由 [Seeed Studio](https://wiki.seeedstudio.com/rebot_arm_b601_dm_lerobot/) 提供。_
+
+## 安装 LeRobot 🤗
+
+按照[安装指南](./installation)操作，然后安装 reBot 支持：
+
+```bash
+pip install -e ".[rebot]"
+```
+
+这将引入 `motorbridge`（用于 B601-DM 跟随臂的 CAN 电机控制）和 `motorbridge-smart-servo`（用于 reBot Arm 102 主控臂的 FashionStar UART 舵机）。
+
+## 已注册的设备类型
+
+| 类型                     | 说明                                  |
+| ------------------------ | ------------------------------------- |
+| `rebot_b601_follower`    | 单臂 B601-DM 跟随机器人               |
+| `bi_rebot_b601_follower` | 双臂跟随机器人                        |
+| `rebot_102_leader`       | 单臂 reBot Arm 102 主控遥操作器       |
+| `bi_rebot_102_leader`    | 双臂主控遥操作器                      |
+
+双臂类型由两个单臂实例组合而成，每个手臂的观测/动作键使用 `left_` / `right_` 前缀进行命名空间区分。各臂的设置通过嵌套的 `left_arm_config.*` / `right_arm_config.*` 参数传入。
+
+## 查找 USB 端口
+
+对于每个设备，使用以下命令查找与其电机总线关联的 USB 端口：
+
+```bash
+lerobot-find-port
+```
+
+<Tip warning={true}>
+  在 Linux 上，请移除 `brltty`（`sudo apt remove brltty`），以防它占用主控臂的 USB 串口。你可能还需要授予串口设备访问权限：`sudo chmod 666 /dev/ttyACM* /dev/ttyUSB*`。
+</Tip>
+
+## 标定
+
+两个手臂均不存储持久的硬件标定数据：每次连接时，电机都会根据手臂实际所处的姿态重新归零。标定只是记录该零位姿态。出现提示时，**手动将手臂移至零位**（上图所示的默认收起姿态，夹爪完全闭合），然后按 <kbd>ENTER</kbd>。
+
+### 跟随臂（B601-DM）
+
+<hfoptions id="calibrate-follower">
+<hfoption id="Single arm">
+
+```bash
+lerobot-calibrate \
+    --robot.type=rebot_b601_follower \
+    --robot.port=/dev/ttyACM0 \
+    --robot.id=follower \
+    --robot.can_adapter=damiao
+```
+
+</hfoption>
+<hfoption id="Dual arm">
+
+连接双臂跟随机器人；标定先对左臂运行，然后对右臂运行。
+
+```bash
+lerobot-calibrate \
+    --robot.type=bi_rebot_b601_follower \
+    --robot.id=bi_follower \
+    --robot.left_arm_config.port=/dev/ttyACM0 \
+    --robot.left_arm_config.can_adapter=damiao \
+    --robot.right_arm_config.port=/dev/ttyACM1 \
+    --robot.right_arm_config.can_adapter=damiao
+```
+
+各臂的标定文件以 id 加 `_left` / `_right` 后缀保存。
+
+</hfoption>
+</hfoptions>
+
+### 主控臂（reBot Arm 102）
+
+<hfoptions id="calibrate-leader">
+<hfoption id="Single arm">
+
+```bash
+lerobot-calibrate \
+    --teleop.type=rebot_102_leader \
+    --teleop.port=/dev/ttyUSB0 \
+    --teleop.id=leader
+```
+
+</hfoption>
+<hfoption id="Dual arm">
+
+```bash
+lerobot-calibrate \
+    --teleop.type=bi_rebot_102_leader \
+    --teleop.id=bi_leader \
+    --teleop.left_arm_config.port=/dev/ttyUSB0 \
+    --teleop.right_arm_config.port=/dev/ttyUSB1
+```
+
+</hfoption>
+</hfoptions>
+
+## 遥操作
+
+两个手臂标定完成后，用主控臂驱动跟随臂。跟随臂通过达妙串口桥接器（`can_adapter=damiao`，默认值）或 SocketCAN 适配器（`can_adapter=socketcan`）与其 CAN 总线通信。SocketCAN 适配器的配置详情请参阅 [OpenArm 页面](./openarm)。
+
+<hfoptions id="teleoperate">
+<hfoption id="Single arm">
+
+```bash
+lerobot-teleoperate \
+    --robot.type=rebot_b601_follower \
+    --robot.port=/dev/ttyACM0 \
+    --robot.id=follower \
+    --robot.can_adapter=damiao \
+    --teleop.type=rebot_102_leader \
+    --teleop.port=/dev/ttyUSB0 \
+    --teleop.id=leader
+```
+
+</hfoption>
+<hfoption id="Dual arm">
+
+双臂主控器和跟随器复用各自的单臂类；每个手臂通过嵌套的 `left_arm_config.*` / `right_arm_config.*` 参数配置，因此双臂 reBot Arm 102 主控器可以驱动双臂 B601-DM 跟随器。
+
+```bash
+lerobot-teleoperate \
+    --robot.type=bi_rebot_b601_follower \
+    --robot.id=bi_follower \
+    --robot.left_arm_config.port=/dev/ttyACM0 \
+    --robot.left_arm_config.can_adapter=damiao \
+    --robot.right_arm_config.port=/dev/ttyACM1 \
+    --robot.right_arm_config.can_adapter=damiao \
+    --teleop.type=bi_rebot_102_leader \
+    --teleop.id=bi_leader \
+    --teleop.left_arm_config.port=/dev/ttyUSB0 \
+    --teleop.right_arm_config.port=/dev/ttyUSB1
+```
+
+</hfoption>
+</hfoptions>
+
+<Tip>
+  主控臂和跟随臂共用相同的关节名称（`shoulder_pan、shoulder_lift、elbow_flex、wrist_flex、wrist_yaw、wrist_roll、gripper`），因此主控臂的动作可直接映射到跟随臂。
+</Tip>
+
+若某个关节的运动方向反转，可在主控臂的 `joint_directions` 中翻转其符号（夹爪还携带一个缩放系数以拓宽其范围以匹配跟随臂）：
+
+```bash
+lerobot-teleoperate \
+    --robot.type=rebot_b601_follower \
+    --robot.port=/dev/ttyACM0 \
+    --robot.can_adapter=damiao \
+    --teleop.type=rebot_102_leader \
+    --teleop.port=/dev/ttyUSB0 \
+    --teleop.joint_directions='{"shoulder_pan":-1,"shoulder_lift":-1,"elbow_flex":1,"wrist_flex":1,"wrist_yaw":1,"wrist_roll":-1,"gripper":-6}'
+```
+
+## 录制数据集
+
+将 `lerobot-teleoperate` 替换为 `lerobot-record`（使用相同的 `--robot.*` / `--teleop.*` 参数，再加上 `--dataset.*`）即可录制用于训练的演示数据。完整流程请参阅[真实世界机器人的模仿学习](./il_robots)。
+
+关于硬件组装和接线，请参阅 [Seeed Studio reBot wiki](https://wiki.seeedstudio.com/rebot_arm_b601_dm_lerobot/)。
