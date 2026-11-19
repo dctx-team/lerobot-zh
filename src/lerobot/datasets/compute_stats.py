@@ -59,6 +59,12 @@ class RunningQuantileStats:
             batch: An array where all dimensions except the last are batch dimensions.
         """
         batch = batch.reshape(-1, batch.shape[-1])
+        # Promote integer and low-precision inputs before computing squared statistics.
+        # Without this, `batch**2` on a uint8 batch wraps modulo 256, the running
+        # mean of squares can fall below the squared mean, the variance goes
+        # negative, and `std` is clamped to 0. MEAN_STD normalization then divides
+        # by eps (1e-8) and blows images up to the 1e7 range.
+        batch = batch.astype(np.float64, copy=False)
         num_elements, vector_length = batch.shape
 
         if self._count == 0:
