@@ -62,9 +62,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Fail loudly instead of silently when the self-hosted GPU runner group is
+  # unavailable: every benchmark job below otherwise fails at startup in ~1s
+  # with 0 steps, which looks like a broken matrix rather than a missing runner.
+  preflight:
+    name: Check benchmark runner availability
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - id: check
+        env:
+          RUNNER_GROUP: ${{ vars.BENCHMARK_RUNNER_GROUP }}
+        run: |
+          if [ -n "$RUNNER_GROUP" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::BENCHMARK_RUNNER_GROUP is not set; skipping the GPU benchmark matrix."
+          fi
+
   # ── LIBERO ────────────────────────────────────────────────────────────────
   # Isolated image: lerobot[libero] only (hf-libero, dm-control, mujoco chain)
   libero-integration-test:
+    needs: preflight
+    if: needs.preflight.outputs.ready == 'true'
     name: Libero — build image + 1-episode eval
     runs-on:
       group: aws-g6-4xlarge-plus
@@ -223,6 +245,8 @@ jobs:
   # ── METAWORLD ─────────────────────────────────────────────────────────────
   # Isolated image: lerobot[metaworld] only (metaworld==3.0.0, mujoco>=3 chain)
   metaworld-integration-test:
+    needs: preflight
+    if: needs.preflight.outputs.ready == 'true'
     name: MetaWorld — build image + 1-episode eval
     runs-on:
       group: aws-g6-4xlarge-plus
@@ -323,6 +347,8 @@ jobs:
   # Build takes ~20 min on first run; subsequent runs hit the layer cache.
   # Requires an NVIDIA GPU runner with CUDA 12.1 drivers.
   robotwin-integration-test:
+    needs: preflight
+    if: needs.preflight.outputs.ready == 'true'
     name: RoboTwin 2.0 — build image + 1-episode eval
     runs-on:
       group: aws-g6-4xlarge-plus
@@ -432,6 +458,8 @@ jobs:
   # clones (no `lerobot[robocasa]` extra — robocasa's setup.py pins
   # `lerobot==0.3.3`, which would shadow this repo's lerobot).
   robocasa-integration-test:
+    needs: preflight
+    if: needs.preflight.outputs.ready == 'true'
     name: RoboCasa365 — build image + 1-episode eval
     runs-on:
       group: aws-g6-4xlarge-plus
@@ -533,6 +561,8 @@ jobs:
   # defaults (image/wrist_image). The image is layered on
   # huggingface/lerobot-gpu, which already ships [libero] as part of [all].
   robocerebra-integration-test:
+    needs: preflight
+    if: needs.preflight.outputs.ready == 'true'
     name: RoboCerebra — build image + 1-episode eval
     runs-on:
       group: aws-g6-4xlarge-plus
@@ -639,6 +669,8 @@ jobs:
   # Isolated image: mani-skill/SAPIEN/Vulkan chain with gymnasium and numpy
   # overrides (robomme can't be a pyproject extra due to numpy<2 pin).
   robomme-integration-test:
+    needs: preflight
+    if: needs.preflight.outputs.ready == 'true'
     name: RoboMME — build image + 1-episode eval
     runs-on:
       group: aws-g6-4xlarge-plus
@@ -744,6 +776,8 @@ jobs:
   # Isolated image: LIBERO-plus fork cloned into /home/user_lerobot on top of
   # huggingface/lerobot-gpu (see docker/Dockerfile.benchmark.libero_plus).
   libero-plus-integration-test:
+    needs: preflight
+    if: needs.preflight.outputs.ready == 'true'
     name: LIBERO-plus — build image + 1-episode eval
     runs-on:
       group: aws-g6-4xlarge-plus
@@ -851,6 +885,8 @@ jobs:
   # ── VLABENCH ─────────────────────────────────────────────────────────────
   # Isolated image: lerobot[vlabench] only (VLABench, mujoco==3.2.2, dm-control chain)
   vlabench-integration-test:
+    needs: preflight
+    if: needs.preflight.outputs.ready == 'true'
     name: VLABench — build image + 1-episode eval
     runs-on:
       group: aws-g6-4xlarge-plus
